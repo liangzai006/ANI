@@ -2,6 +2,61 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## ⚡ 新开发者 / 新 AI 实例：5 分钟快速上手
+
+> 如果你是刚打开这个项目的开发者（人类或 AI 工具），从这里开始。
+> **不需要读完整个 CLAUDE.md**，按以下步骤在 5 分钟内进入工作状态。
+
+### Step 1：验证环境（1 分钟）
+
+```bash
+cd repo
+make build && make test
+# 期望：83+ tests PASS，4 个服务二进制生成在 bin/
+```
+
+如果失败，先看 `repo/CURRENT-SPRINT.md` 的「环境启动」节。
+
+### Step 2：了解当前任务（2 分钟）
+
+打开 **`repo/CURRENT-SPRINT.md`** — 这是你最重要的工作文档：
+- 当前在做哪个冲刺
+- 今天该做什么（P0/P1 优先级）
+- 怎么验证完成
+
+### Step 3：理解核心架构（2 分钟）
+
+按顺序读这 3 个文件，够了：
+
+```
+1. pkg/ports/workload_runtime.go          ← 13个核心接口，理解整体边界
+2. pkg/adapters/runtime/instance_orchestrator.go  ← 编排链路实现
+3. api/openapi/v1.yaml（头部注释）        ← API 契约结构
+```
+
+### Step 4：知道什么不能做
+
+- 不直接调用 K8s/KubeVirt/MinIO/Milvus SDK → 通过 `pkg/ports/` 接口
+- 不先写代码再写文档 → API 契约（`api/openapi/v1.yaml`）先行
+- 不说"OpenAPI"（会与 OpenAI 混淆）→ 说"API 契约"
+- Services 层代码禁止 import `pkg/` 或 `services/ani-gateway/` → 只调 REST API
+
+### 关键文件地图
+
+```
+CLAUDE.md                           ← 你正在读的（完整约定）
+repo/CURRENT-SPRINT.md              ← 当前冲刺上手指南（最常用）
+ANI-02-产品功能设计.md              ← 产品功能全景
+ANI-06-开发计划.md                  ← 冲刺计划 + Phase 2 延期条目
+repo/pkg/ports/                     ← 所有能力接口定义
+repo/api/openapi/v1.yaml            ← Core API 契约
+repo/deploy/migrations/             ← 数据库 Schema（3 个 SQL）
+```
+
+---
+
 ## 项目背景
 
 广州常青云科技有限公司旗下战略级新产品 **KuberCloud ANI**（KuberCloud AI-Native Infrastructure，中文名：AI专有云）的规划文档集，当前产品定义版本 **V8**。

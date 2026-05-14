@@ -23,93 +23,350 @@
 
 ---
 
-## 二、月度里程碑（V8 重规划，2026-05-14 更新）
+## 二、双周冲刺计划（V8.1 重规划，2026-05-15 更新）
 
-**产品分层背景：** ANI 分为 ANI Core（基础设施平台）和 ANI Services（云服务层）。本开发计划优先保障 ANI Core v1.0.0 在 7 月底 API 冻结，为 Services 团队提供 2 个月并行开发窗口。
+> **规划原则：** 每个冲刺 2 周，有明确进入条件、交付清单、完工标准（验收命令）。
+> 任何开发者（人类或 AI）打开本节，应能在 5 分钟内知道当前冲刺在做什么、下一步是什么。
+> 当前冲刺详细上手指南见 → `repo/CURRENT-SPRINT.md`（每冲刺结束时更新）
+
+---
+
+### Phase 2 延期条目（已从 v1.0.0 范围移出）
+
+以下条目在当前版本中**不实现**，显式推迟到 2026-09-30 之后的 Phase 2 迭代，届时由"生意"驱动优先级：
+
+| 条目 | 理由 |
+|---|---|
+| **M1-BM-A**（裸金属 / Metal3 接入）| 无 Phase 1 Services P0 依赖；需物理机环境才能测试；独立 2-3 周工程量 |
+| **M1-K8S-A**（K8s 集群管理 / vCluster）| 无 Phase 1 Services P0 依赖；复杂度高；Phase 2 按需引入 |
+| **M1-DPU-A**（DPU 节点纳管）| 需专用 BlueField 硬件；Phase 2 |
+| **SDK-JAVA-A**（Java SDK）| 一天生成任务，Phase 2 按需生成；不阻塞 Services 团队 |
+| **M1-SVC-EP-A**（服务目录 / 内部 DNS）| PaaS 依赖；Phase 2 |
+| **M1-NOTIFY-A**（事件通知 API）| 非 Services P0 阻塞；Phase 2 |
+
+---
+
+### Sprint 计划总览
 
 ```
+           ANI Core 开发线                    ANI Services 开发线
+           ─────────────────────              ──────────────────────
+S1  05-15~05-31  操作语义 + Foundation
+S2  06-01~06-15  VM & Container 深度
+S3  06-16~06-30  Core API 面（网络/存储/向量）
+S4  07-01~07-15  API 冻结 + 三语言 SDK        ← 解锁日：07-15
+S5  07-16~07-31  后台控制器 + 加解密 + Sandbox  S_A  模型仓库 + 推理服务
+S6  08-01~08-15  平台支撑完整化               S_A  知识库 RAG
+S7  08-16~09-01  Installer + 集成测试          S_B  Console 核心页面
+S8  09-01~09-15  Console 集成 + BOSS          S_B  BOSS 基础版
+S9  09-16~09-25  RC 加固（只修 Bug）
+S10 09-26~09-30  v1.0.0 发布
 ─────────────────────────────────────────────────────────────────────
-ANI Core 开发线（本小组）
-─────────────────────────────────────────────────────────────────────
-
-2026-05~06  【M1-CORE】ANI Core 计算/网络/存储实例能力完整化
-             - M1-INSTANCE-T/U/V：实例操作语义 + VM + 容器/GPU 容器深度
-             - M1-HEALTH-A：/healthz + /readyz 端点（K8s probe，所有服务必须实现）
-             - M1-IDEM-A：幂等性令牌落地（migration 002 + WorkloadInstanceCreateRequest.IdempotencyKey）
-             - M1-RECONCILE-A：WorkloadReconcileController 实现（background loop，30s/5s 双速扫描）
-             - M1-WKID-A：Workload Identity P0（lifecycle-bound API Key，实例创建时自动生成 + 自动 revoke）
-             - M1-SANDBOX-A：Sandbox 实例接入（Kata QEMU RuntimeClass）
-             - M1-NETWORK-A：网络服务层 API（VPC/子网/安全组 CRUD）
-             - M1-STORAGE-A：存储服务层 API（块/对象/文件存储 CRUD）
-             - M1-VSTORE-A：向量存储 API（Milvus adapter 封装）
-             - M1-BM-A：裸金属实例（Metal3 基础接入，BM 库存 + OS 部署）
-             - M2.2-AUTH 收尾：OIDC 全流程稳定、API Key 完善
-
-2026-07     【M2-CORE-API】ANI Core API 契约冻结 + 四语言 SDK + CLI
-             - SPEC-SPLIT-A：将 v1.yaml 中的 Services 层路径迁移至 api/openapi/services/v1.yaml
-                             （/models、/inference-services、/knowledge-bases 移至 services spec）
-             - SPEC-CORE-A：补全所有 Core 基础设施路径到 api/openapi/v1.yaml（含 /api/v1 前缀）
-             - API 契约冻结（api/openapi/v1.yaml 覆盖全部 Core 资源）← 目标 2026-07-15
-             - SDK-GO-A：Go SDK（oapi-codegen 生成，github.com/kubercloud/ani-go）
-             - SDK-PY-A：Python SDK（openapi-generator 生成，pip install kubercloud-ani）
-             - SDK-TS-A：TypeScript API Client（openapi-typescript + openapi-fetch）← P0
-             - SDK-JAVA-A：Java SDK（openapi-generator + OkHttp3，com.kubercloud:ani-java）← 升至 P0
-             - CLI-A：ani CLI 覆盖 Core 所有资源核心命令
-             - MOCK-A：Mock Server 就绪（Prism 或 Microcks），Services 团队可开始开发
-             - DOC-API-A：API 参考文档（Swagger UI / Redoc）自动生成
-             注：四语言 SDK 全部从同一 spec 自动生成，不手写；Java SDK 面向中国企业集成场景（Spring Boot）
-
-2026-08     【M3-CORE-PLATFORM】ANI Core 平台支撑能力
-             - M1-ENCRYPT-A：国密加解密服务（SM4 密钥管理 + seal/unseal-token）
-             - M1-SECRETS-A：密钥管理 API + 实例绑定注入
-             - M1-REGISTRY-A：镜像仓库 API（Harbor 服务层封装）
-             - M1-METER-A：用量计量 API（实例用量 + Token 用量上报）
-             - M1-OBS-A：可观测性 API（PromQL 代理 + 基础告警规则）
-             - M1-SVC-EP-A：服务目录 API（内部 DNS 注册，CoreDNS 集成）
-             - M1-NOTIFY-A：事件通知 API（Webhook/Email 基础版）
-             - M1-K8S-A：K8s 集群管理 API（vCluster 生命周期 + 原生 API 代理）
-             - Core E2E 集成测试全链路回归
-
-2026-09     【M4-CORE-RELEASE】ANI Core v1.0.0-rc + 集成验收
-             - M1-DPU-A：DPU 库存 API 基础实现
-             - Installer：ani-installer 三种部署模式（裸机/VM/已有K8s），离线包
-             - 信创适配基线（预留 ARM64 构建，GPU 替换 adapter 验证）
-             - Core E2E 回归全通，安全审查
-             - v1.0.0-rc.N 发布候选，只修复阻断问题
-
-─────────────────────────────────────────────────────────────────────
-ANI Services 开发线（另一小组，7 月中旬启动）
-─────────────────────────────────────────────────────────────────────
-
-2026-07-15  Services 团队解锁：获得 Python SDK + Mock Server + API 文档
-
-2026-07~08  【SVC-P0-AI】Services P0 AI 能力
-             - SVC-MODEL-A：模型仓库（上传/版本/元数据/国密加解密/HuggingFace 导入）
-             - SVC-INFER-A：推理服务（部署端点/状态/日志/OpenAI 兼容 API）
-             - SVC-KB-A：知识库 RAG（文档上传/解析/向量化/问答/来源引用）
-
-2026-08~09  【SVC-P0-CONSOLE】Services P0 前端
-             - Console 主要实例类型页面接入真实 API
-             - IaaS 控制台（VPC/存储/负载均衡）
-             - 模型管理 + 推理部署页面
-             - 知识库管理页面
-             - BOSS 租户管理基础版
-
-─────────────────────────────────────────────────────────────────────
-2026-09-30   ✅ ANI Core v1.0.0 + ANI Services P0 发布
-─────────────────────────────────────────────────────────────────────
+09-30  ✅  ANI Core v1.0.0  +  ANI Services P0
 ```
+
+---
+
+### Sprint 1：2026-05-15 → 2026-05-31（当前冲刺）
+
+**主题：操作语义底座 + Foundation**
+
+**进入条件：** `make build && make test` 通过（已验证 ✅）
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **M1-INSTANCE-T** ⭐ | 横切操作语义：precheck/disabled-reason/operation_id/timeline/before-after spec diff | 高 | 5天 |
+| **M1-HEALTH-A** | 所有服务加 /healthz（liveness）和 /readyz（readiness） | 低 | 1天 |
+| **M1-IDEM-A** | 幂等性令牌 wire-up：CREATE/lifecycle 接口写入 DB，返回已有结果 | 中 | 3天 |
+| **M2.2-AUTH-FINAL** | OIDC Dex 接入生产 + API Key scope 验证 + 集成测试补齐 | 中 | 3天 |
+
+**完工标准：**
+```bash
+make test                        # 所有测试通过
+curl http://localhost:8080/healthz   # → {"status":"ok"}
+curl http://localhost:8080/readyz    # → {"status":"ok","checks":{...}}
+# POST /instances 返回 operation_id
+# 同 idempotency_key 二次 POST → 返回相同结果，不创建第二个实例
+```
+
+**本冲刺交付物：** `WorkloadOperation` 记录写入 DB、所有服务 health 端点、idempotency_key DB 去重
+
+**解锁：** Sprint 2 的 VM/Container 深度 + Sprint 4 的 operation timeline Console 展示
+
+---
+
+### Sprint 2：2026-06-01 → 2026-06-15
+
+**主题：VM & Container / GPU 容器生产深度**
+
+**进入条件：** Sprint 1 完工标准通过；`workload_instance_operations` 表已建
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **M1-INSTANCE-U** | VM 生产级操作：终止保护/VNC console/快照/磁盘绑定/SSH 连接信息 | 高 | 5天 |
+| **M1-INSTANCE-V** | Container 部署深度（副本/滚动更新/回滚/历史）；GPU 调度原因/利用率 | 高 | 5天 |
+
+**完工标准：**
+```bash
+make test
+# VM 实例可获取 VNC session URL
+# Container 实例可触发 rollback 到上一版本
+# GPU 容器状态包含 gpu_scheduling_reason 和 gpu_utilization
+```
+
+**解锁：** Console VM 详情页、Container 部署页面接真实 API
+
+---
+
+### Sprint 3：2026-06-16 → 2026-06-30
+
+**主题：Core API 面扩充（网络 + 存储 + 向量 + Workload Identity）**
+
+**进入条件：** Sprint 2 完工标准通过
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **M1-NETWORK-A** | VPC/子网/安全组/LB CRUD：真实 KubeOVN 子资源管理 | 中 | 4天 |
+| **M1-STORAGE-A** | 块存储(volumes) + 文件存储(filesystems) + 对象存储(objects) CRUD | 中 | 4天 |
+| **M1-VSTORE-A** | vector-stores 创建/删除/检索 API（Milvus adapter 已有，加 Gateway 路由）| 低 | 2天 |
+| **M1-WKID-A** | Workload Identity P0：实例创建时生成 lifecycle-bound API key + 实例删除时 revoke | 中 | 2天 |
+
+**完工标准：**
+```bash
+make test
+# POST /api/v1/networks/vpcs → 201 Created
+# POST /api/v1/volumes → 201 Created
+# POST /api/v1/vector-stores → 201；POST /{id}/search → 200
+# 新实例的 ANI_WORKLOAD_TOKEN 环境变量已注入 + 实例删除后自动 revoked
+```
+
+**解锁：** Sprint 4 的 API Spec 可以基于真实实现补全；Services 团队可测试 object/vector 接口
+
+---
+
+### Sprint 4：2026-07-01 → 2026-07-15 ⭐ API 冻结硬截止
+
+**主题：API 契约冻结 + 三语言 SDK + Mock Server**
+
+**进入条件：** Sprint 3 全部完工；v1.yaml 需扩充为全量 Core 路径
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **SPEC-CORE-A** | 将 Sprint 1-3 所有新路径补入 api/openapi/v1.yaml，含正确 schema + 分页 + idempotency | 中 | 3天 |
+| **SPEC-SPLIT-A** | /models /inference-services /knowledge-bases 移至 api/openapi/services/v1.yaml | 低 | 1天 |
+| **SDK-GO-A** | oapi-codegen 生成 Go SDK（sdks/ani-go/） | 低 | 1天 |
+| **SDK-PY-A** | openapi-generator 生成 Python SDK（sdks/ani-python/） | 低 | 1天 |
+| **SDK-TS-A** | openapi-typescript 生成 TypeScript Client（sdks/ani-typescript/） | 低 | 1天 |
+| **MOCK-A** | Prism Mock Server 基于 v1.yaml 启动，覆盖所有 Core 路径 | 低 | 1天 |
+| **DOC-API-A** | Swagger UI / Redoc 自动生成并部署 | 低 | 1天 |
+
+**完工标准（2026-07-15 前必须达成）：**
+```bash
+# v1.yaml 全量路径覆盖，无 TODO stub
+make gen-core-sdk        # 三个 SDK 目录生成完毕
+prism mock api/openapi/v1.yaml --port 4010   # 所有路径返回 200 mock
+# Services 团队用 ani-python SDK 调用 Mock Server 能获得正确响应类型
+```
+
+**本冲刺结束即宣告 Core API 冻结。之后 v1.yaml 只增不删（API 兼容性承诺）。**
+
+**解锁：** ANI Services 团队正式解锁，开始用 Python SDK + Mock Server 开发
+
+---
+
+### Sprint 5：2026-07-16 → 2026-07-31
+
+**主题：后台控制器 + 加解密 + Sandbox**
+
+**进入条件：** API 冻结完成；Services 团队已接入 Mock Server 自行推进
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **M1-RECONCILE-A** | WorkloadReconcileController 实现（30s/5s 双速后台 goroutine）| 高 | 5天 |
+| **M1-ENCRYPT-A** | SM4 密钥管理 + seal/unseal-token（Init Container 解密模型文件）| 中 | 3天 |
+| **M1-SECRETS-A** | Secret CRUD + 实例绑定（创建实例时注入 env var）| 中 | 3天 |
+| **M1-SANDBOX-A** | Kata Containers QEMU RuntimeClass 接入 + Sandbox 实例 create/exec | 高 | 5天 |
+
+**完工标准：**
+```bash
+make test
+# Reconcile Controller 可扫描 workload_instances 并更新状态，不依赖 API 调用
+# POST /api/v1/encryption/seal → 返回 unseal-token
+# POST /api/v1/instances {kind: "sandbox"} → 实例起来，exec 可运行命令
+```
+
+**解锁：** 模型文件加密工作流（Services 模型仓库依赖）；Agent Sandbox 运行时就绪
+
+---
+
+### Sprint 6：2026-08-01 → 2026-08-15
+
+**主题：Core 平台支撑服务 + Services P0 核心功能同步推进**
+
+**Core 任务（本小组）：**
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **M1-OBS-A** | PromQL 代理查询 + 基础告警规则 CRUD | 中 | 3天 |
+| **M1-METER-A** | 实例用量计量 + Token 用量上报接口 | 中 | 2天 |
+| **M1-REGISTRY-A** | Harbor API 封装（镜像推拉权限 + 安全扫描） | 中 | 2天 |
+| **Core E2E** | 全链路集成测试回归（Sprint 1-5 所有功能） | 中 | 3天 |
+
+**Services 任务（另一小组，从 07-15 起并行）：**
+
+| 批次 | 内容 | 说明 |
+|---|---|---|
+| **SVC-MODEL-A** | 模型仓库：上传/版本/元数据/国密加解密/HuggingFace 导入 | 依赖 Core objects + encryption API |
+| **SVC-INFER-A** | 推理服务：部署端点/状态/日志/OpenAI 兼容 `/v1/chat/completions` | 依赖 Core GPU container + instances API |
+
+**完工标准：**
+```bash
+# Core
+make test   # 全通，包含 E2E
+# Services（另一小组验证）
+# 模型文件上传 + 加密 → 成功
+# 推理端点部署 + 调用 /v1/chat/completions → 得到 LLM 回答
+```
+
+---
+
+### Sprint 7：2026-08-16 → 2026-09-01
+
+**主题：ani-installer + 知识库 RAG + Console Alpha**
+
+**Core 任务：**
+
+| 批次 | 内容 | 难度 | 预估 |
+|---|---|---|---|
+| **Installer-A** | ani-installer：裸机/VM/已有K8s 三种模式 + GPU 驱动安装 + 内部 CA | 高 | 5天 |
+| **Installer-B** | 离线安装包：镜像预拉取 + Helm Chart + 自动化脚本 | 中 | 3天 |
+| **信创基线** | ARM64 构建验证 + 国产 GPU adapter 测试 | 中 | 2天 |
+
+**Services 任务：**
+
+| 批次 | 内容 | 说明 |
+|---|---|---|
+| **SVC-KB-A** | 知识库 RAG：文档上传→解析→向量化→混合检索→问答→来源引用 | 依赖 Core vector-stores + objects API |
+| **SVC-CONSOLE-Alpha** | 实例列表/详情/操作页面接真实 Core API（替换 mock） | 大量前端工作 |
+
+**完工标准：**
+```bash
+# 在一台全新机器上运行 ani-installer
+# 15 分钟内完成安装，make test 在新环境跑通
+# 上传 5 个 PDF → 建立知识库 → 问答得到含来源引用的回答
+```
+
+---
+
+### Sprint 8：2026-09-01 → 2026-09-15
+
+**主题：Console 全量接真实 API + BOSS 基础版**
+
+**Services 任务：**
+
+| 批次 | 内容 |
+|---|---|
+| **SVC-CONSOLE-Full** | 模型管理页 + 推理部署页 + 知识库管理页全部接真实 API |
+| **BOSS-A** | BOSS 租户管理基础版（创建/配额/资源大盘）|
+| **CLI-A** | ani CLI 命令覆盖 Core 主要资源 |
+
+**Core 任务（收尾）：**
+
+| 批次 | 内容 |
+|---|---|
+| **Core 安全审查** | Trivy 扫描 + API 权限边界验证 + RLS 多租户测试 |
+| **性能基线** | API P99 < 200ms；推理首 Token < 2s（7B 模型 A100）|
+
+**完工标准：**
+```bash
+# Console 所有主要页面无 mock 数据
+# BOSS 管理员可创建租户 + 设置配额
+# 安全扫描无高危漏洞
+```
+
+---
+
+### Sprint 9：2026-09-16 → 2026-09-25
+
+**主题：v1.0.0-rc 加固（只允许修 Bug，不加新功能）**
+
+| 任务 | 说明 |
+|---|---|
+| v1.0.0-rc.1 发布 | 打 tag，制作 rc 构建 |
+| 全量 E2E 回归 | Core + Services + Installer 三线联合验收 |
+| Bug 修复 | 只修 P0（阻断交付）和 P1（严重功能缺陷）|
+| Release Notes | 中英文版本说明 + 已知问题列表 |
+
+**完工标准：**
+```bash
+git tag v1.0.0-rc.1
+make test   # 全通
+# 完整交付验收单检查通过（见下方）
+```
+
+---
+
+### Sprint 10：2026-09-26 → 2026-09-30
+
+**主题：v1.0.0 正式发布**
+
+```bash
+git tag v1.0.0
+# 离线安装包发布
+# 文档站发布
+# 第一个标杆客户环境部署验收
+```
+
+---
+
+### v1.0.0 交付验收单（9 月 30 日前必须全部打勾）
+
+```
+ANI Core：
+  [ ] make build && make test 通过（含 E2E）
+  [ ] /healthz + /readyz 所有服务可用
+  [ ] VM / 容器 / GPU 容器 全生命周期（含 operation_id + 时间线）
+  [ ] Sandbox 实例可 exec 命令
+  [ ] VPC / 子网 / 安全组 CRUD
+  [ ] 块存储 / 文件存储 / 对象存储 CRUD
+  [ ] 向量存储 API
+  [ ] 国密 SM4 加解密（seal/unseal）
+  [ ] Secrets API + 实例绑定注入
+  [ ] Workload Identity（lifecycle-bound token）
+  [ ] WorkloadReconcileController 后台运行
+  [ ] 镜像仓库 API（Harbor 封装）
+  [ ] 用量计量 API
+  [ ] 可观测性 API（PromQL 代理 + 告警）
+  [ ] Core API 契约 v1.yaml 完整 + 兼容承诺生效
+  [ ] Go SDK + Python SDK + TypeScript Client 发布
+  [ ] ani-installer（3 种部署模式）+ 离线包
+  [ ] 信创基线（ARM64 构建通过）
+
+ANI Services P0：
+  [ ] 模型仓库（上传/版本/加解密/HuggingFace 导入）
+  [ ] 推理服务（端点部署 / OpenAI 兼容 API / 日志指标）
+  [ ] 知识库（文档上传/解析/RAG 问答/来源引用）
+  [ ] Console 核心页面（实例/模型/推理/知识库）接真实 API
+  [ ] BOSS 基础版（租户管理/配额）
+
+产品验证：
+  [ ] 全新机器 30 分钟内完成离线安装
+  [ ] Qwen2.5-7B 推理响应 < 2s（首 Token，A100）
+  [ ] 知识库问答来源引用准确
+  [ ] 多租户隔离测试通过（租户 A 无法读取租户 B 数据）
+```
+
+---
 
 **版本里程碑：**
-- 2026-05 到 2026-08：使用 `v0.x.y` 或 `v1.0.0-alpha/beta.N` 标记内部构建和集成测试版本
-- 2026-09：进入 `v1.0.0-rc.N` 发布候选，只允许修复阻断交付的问题
-- 2026-09-30：目标发布 `v1.0.0`
-- 版本号只表达发布兼容性，不表达模块编号；模块进度仍以 `模块 1/2/3` 和 `M2.1-TASK-C` 批次记录为准
+- 2026-05 到 2026-08：`v0.x.y` 或 `v1.0.0-alpha/beta.N` 标记内部构建
+- 2026-09 Sprint 9：进入 `v1.0.0-rc.N`，只允许修复阻断交付的 Bug
+- 2026-09-30：发布 `v1.0.0`
 
-**关键时间节点：**
-- `2026-07-15`：Core API 契约冻结 ← **Services 团队的解锁日期，不可推迟**
-- `2026-09-15`：Core v1.0.0-rc，Services P0 API 联调完成
-- `2026-09-30`：双线交付
+**关键不可推迟节点：**
+- `2026-07-15`：Core API 契约冻结 ← Services 团队解锁，不可推迟
+- `2026-09-15`：Core + Services P0 功能完成，进入集成联调
+- `2026-09-30`：v1.0.0 交付
 
 ---
 
