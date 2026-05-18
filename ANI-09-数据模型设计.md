@@ -1,7 +1,8 @@
 # KuberCloud ANI · 数据模型设计
 
-> 版本 V1 | 广州常青云科技有限公司 | 内部产品规划文件  
-> 本文档是 Spec-First 开发的数据基础，OpenAPI Schema 和 gRPC Message 均从此派生
+> 版本 V1.1 | 广州常青云科技有限公司 | 内部产品规划文件
+> 本文档是 API 契约和 gRPC Message 的数据基础
+> 当前开发阶段以 `ANI-DOCS-INDEX.md`、`ANI-06-开发计划.md` Section 零和 `repo/CURRENT-SPRINT.md` 为准。
 
 ---
 
@@ -452,7 +453,9 @@ CREATE INDEX idx_outbox_unpublished ON outbox_events(created_at) WHERE NOT publi
    → 执行 compensating_action（如删除孤儿 DB 记录或重建 CRD）
 ```
 
-### 1.6 Region/AZ（多集群）
+### 1.6 Region/AZ（多集群，Phase 2 预留）
+
+> v1.0.0 不交付 Karmada 多集群。以下数据模型仅为 Phase 2 Region/AZ/Karmada 预留，不作为当前 Sprint 或 v1.0.0 阻塞项。
 
 ```sql
 -- Region
@@ -465,7 +468,7 @@ CREATE TABLE regions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 可用区（对应 Karmada 成员集群）
+-- 可用区（Phase 2：对应 Karmada 成员集群）
 CREATE TABLE availability_zones (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     region_id           UUID NOT NULL REFERENCES regions(id),

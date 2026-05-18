@@ -26,3 +26,14 @@ func TestOIDCGroupRoleMapperUsesExplicitMappings(t *testing.T) {
 		t.Fatalf("roles = %v, want %v", got, want)
 	}
 }
+
+func TestOIDCGroupRoleMapperNormalizesConfiguredRoles(t *testing.T) {
+	mapper := newOIDCGroupRoleMapper(`{
+		"CN=ANI-Admins": [" Tenant-Admin ", "AUDITOR", "root"]
+	}`)
+	got := mapper.Map([]string{"cn=ani-admins"})
+	want := []string{"auditor", "tenant-admin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("roles = %v, want %v", got, want)
+	}
+}

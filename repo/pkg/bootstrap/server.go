@@ -2,12 +2,16 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -19,6 +23,7 @@ type Config struct {
 	NATSURL     string
 	RedisURL    string
 	GRPCPort    int
+	HealthPort  int
 	ServiceName string
 
 	WorkloadProvider               string
@@ -62,18 +67,23 @@ func MustConnect(cfg Config) *Deps {
 	}
 
 	return &Deps{
-		DB:     db,
-		NATS:   nc,
-		JS:     js,
-		Redis:  rdb,
-		Ports:  ports,
-		Logger: logger,
+		DB:          db,
+		NATS:        nc,
+		JS:          js,
+		Redis:       rdb,
+		Ports:       ports,
+		Logger:      logger,
+		ServiceName: cfg.ServiceName,
+		HealthPort:  cfg.HealthPort,
 	}
 }
 
 func (c Config) withEnvironmentOverrides() Config {
 	if value := os.Getenv("WORKLOAD_PROVIDER"); value != "" {
 		c.WorkloadProvider = value
+	}
+	if value := os.Getenv("HEALTH_PORT"); value != "" {
+		c.HealthPort = parseInt(value, c.HealthPort)
 	}
 	if value := os.Getenv("WORKLOAD_PROVIDER_APPLY_ENABLED"); value != "" {
 		c.WorkloadProviderApplyEnabled = parseBool(value)
@@ -100,6 +110,14 @@ func (c Config) withEnvironmentOverrides() Config {
 		c.KubernetesProviderFieldManager = value
 	}
 	return c
+}
+
+func parseInt(value string, fallback int) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func parseBool(value string) bool {
@@ -131,6 +149,22 @@ func RunGRPC(port int, register func(*grpc.Server), deps *Deps) {
 	register(srv)
 	reflection.Register(srv) // enables grpcurl and grpc-gateway reflection
 
+	var probe *http.Server
+	if deps.HealthPort > 0 {
+		probe = &http.Server{
+			Addr:              fmt.Sprintf(":%d", deps.HealthPort),
+			Handler:           newProbeHandler(deps.ServiceName, dependencyProbeChecks(deps)),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			deps.Logger.Info("health probe server listening", "port", deps.HealthPort)
+			if err := probe.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				deps.Logger.Error("health probe serve error", "err", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	go func() {
 		deps.Logger.Info("gRPC server listening", "port", port)
 		if err := srv.Serve(lis); err != nil {
@@ -143,6 +177,13 @@ func RunGRPC(port int, register func(*grpc.Server), deps *Deps) {
 	<-ctx.Done()
 
 	deps.Logger.Info("shutting down gRPC server gracefully")
+	if probe != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := probe.Shutdown(shutdownCtx); err != nil {
+			deps.Logger.Error("health probe shutdown error", "err", err)
+		}
+	}
 	srv.GracefulStop()
 	deps.Logger.Info("gRPC server stopped")
 }

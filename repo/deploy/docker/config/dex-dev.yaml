@@ -1,0 +1,30 @@
+issuer: http://127.0.0.1:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: ani-console
+    name: ANI Console
+    secret: ani-console-secret
+    redirectURIs:
+      - http://127.0.0.1:3000/auth/callback
+      - http://localhost:3000/auth/callback
+      - http://127.0.0.1:8080/auth/callback
+      - http://localhost:8080/auth/callback
+      - https://console.example.test/callback
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: admin@ani.local
+    # password: ani-dev-password
+    hash: "$2a$10$wbTiEfZUu5O8uxm9JRXPyeqXKtC5VD0DY7igdDLV7Wyq4.MfZSara"
+    username: admin
+    userID: "11111111-1111-1111-1111-111111111111"

@@ -14,6 +14,13 @@ import (
 type AuthClient interface {
 	ValidateToken(ctx context.Context, token string) (*commonv1.TenantContext, error)
 	CheckPermission(ctx context.Context, req *authv1.CheckPermissionRequest) (*authv1.CheckPermissionResponse, error)
+	BeginOIDCLogin(ctx context.Context, req *authv1.BeginOIDCLoginRequest) (*authv1.BeginOIDCLoginResponse, error)
+	CompleteOIDCLogin(ctx context.Context, req *authv1.CompleteOIDCLoginRequest) (*authv1.TokenPair, error)
+	RefreshToken(ctx context.Context, refreshToken string) (*authv1.AccessToken, error)
+	RevokeToken(ctx context.Context, jti string) error
+	CreateAPIKey(ctx context.Context, req *authv1.CreateAPIKeyRequest) (*authv1.CreateAPIKeyResponse, error)
+	ListAPIKeys(ctx context.Context, req *authv1.ListAPIKeysRequest) (*authv1.ListAPIKeysResponse, error)
+	RevokeAPIKey(ctx context.Context, req *authv1.RevokeAPIKeyRequest) error
 }
 
 type grpcAuthClient struct {
@@ -47,4 +54,48 @@ func (c *grpcAuthClient) CheckPermission(ctx context.Context, req *authv1.CheckP
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	return c.client.CheckPermission(callCtx, req)
+}
+
+func (c *grpcAuthClient) BeginOIDCLogin(ctx context.Context, req *authv1.BeginOIDCLoginRequest) (*authv1.BeginOIDCLoginResponse, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.BeginOIDCLogin(callCtx, req)
+}
+
+func (c *grpcAuthClient) CompleteOIDCLogin(ctx context.Context, req *authv1.CompleteOIDCLoginRequest) (*authv1.TokenPair, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.CompleteOIDCLogin(callCtx, req)
+}
+
+func (c *grpcAuthClient) RefreshToken(ctx context.Context, refreshToken string) (*authv1.AccessToken, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.RefreshToken(callCtx, &authv1.RefreshTokenRequest{RefreshToken: refreshToken})
+}
+
+func (c *grpcAuthClient) RevokeToken(ctx context.Context, jti string) error {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	_, err := c.client.RevokeToken(callCtx, &authv1.RevokeTokenRequest{Jti: jti})
+	return err
+}
+
+func (c *grpcAuthClient) CreateAPIKey(ctx context.Context, req *authv1.CreateAPIKeyRequest) (*authv1.CreateAPIKeyResponse, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.CreateAPIKey(callCtx, req)
+}
+
+func (c *grpcAuthClient) ListAPIKeys(ctx context.Context, req *authv1.ListAPIKeysRequest) (*authv1.ListAPIKeysResponse, error) {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.client.ListAPIKeys(callCtx, req)
+}
+
+func (c *grpcAuthClient) RevokeAPIKey(ctx context.Context, req *authv1.RevokeAPIKeyRequest) error {
+	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	_, err := c.client.RevokeAPIKey(callCtx, req)
+	return err
 }

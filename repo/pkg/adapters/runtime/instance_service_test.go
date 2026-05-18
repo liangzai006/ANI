@@ -33,6 +33,114 @@ func TestLocalInstanceServiceCreatesContainerThroughOrchestrator(t *testing.T) {
 	}
 }
 
+func TestLocalInstanceServiceCreateRecordsOperationAndIdempotency(t *testing.T) {
+	orchestrator := &fakeInstanceOrchestrator{}
+	operations := NewLocalOperationStore(WithOperationStoreClock(func() time.Time {
+		return time.Unix(1000, 0)
+	}))
+	service := NewLocalInstanceServiceWithOptions(
+		orchestrator,
+		&fakeInstanceStore{},
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+	)
+	request := ports.WorkloadInstanceCreateRequest{
+		IdempotencyKey: "create-key-1",
+		Spec: ports.WorkloadSpec{
+			TenantID: "tenant-a",
+			Name:     "app-01",
+			Kind:     ports.WorkloadKindContainer,
+			Image:    "harbor/app:1",
+		},
+		UserID:          "user-a",
+		PermissionProof: "rbac:create:workload",
+		RequestedAt:     time.Unix(900, 0),
+	}
+
+	first, err := service.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	if first.OperationID == "" {
+		t.Fatalf("OperationID is empty")
+	}
+	second, err := service.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+	if second.OperationID != first.OperationID {
+		t.Fatalf("duplicate OperationID = %q, want %q", second.OperationID, first.OperationID)
+	}
+	if !second.IdempotentReplay {
+		t.Fatalf("duplicate IdempotentReplay = false, want true")
+	}
+	if orchestrator.creates != 1 {
+		t.Fatalf("creates = %d, want 1 after duplicate idempotency key", orchestrator.creates)
+	}
+	list, err := operations.ListOperations(context.Background(), ports.WorkloadOperationListRequest{
+		TenantID:   "tenant-a",
+		InstanceID: first.Ref.InstanceID,
+	})
+	if err != nil {
+		t.Fatalf("ListOperations error = %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("operations = %d, want 1", len(list.Items))
+	}
+	if list.Items[0].Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation status = %s, want succeeded", list.Items[0].Status)
+	}
+	if list.Items[0].InstanceID != first.Ref.InstanceID {
+		t.Fatalf("operation instance id = %q, want %q", list.Items[0].InstanceID, first.Ref.InstanceID)
+	}
+	if len(list.Items[0].Steps) == 0 {
+		t.Fatalf("operation steps are empty")
+	}
+}
+
+func TestLocalInstanceServiceCreateIdempotencyInProgressDoesNotRecreate(t *testing.T) {
+	operations := NewLocalOperationStore()
+	existing, _, err := operations.RecordOperation(context.Background(), ports.WorkloadOperationRecord{
+		TenantID:       "tenant-a",
+		InstanceID:     "pending:operation-a",
+		Operation:      ports.WorkloadLifecycleCreate,
+		Status:         ports.WorkloadOperationInProgress,
+		IdempotencyKey: "create-key-in-progress",
+		RequestedBy:    "user-a",
+	})
+	if err != nil {
+		t.Fatalf("RecordOperation error = %v", err)
+	}
+	orchestrator := &fakeInstanceOrchestrator{}
+	service := NewLocalInstanceServiceWithOptions(
+		orchestrator,
+		&fakeInstanceStore{},
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+	)
+
+	result, err := service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		IdempotencyKey: "create-key-in-progress",
+		Spec: ports.WorkloadSpec{
+			TenantID: "tenant-a",
+			Name:     "app-01",
+			Kind:     ports.WorkloadKindContainer,
+			Image:    "harbor/app:1",
+		},
+		UserID:          "user-a",
+		PermissionProof: "rbac:create:workload",
+	})
+	if err != nil {
+		t.Fatalf("Create duplicate in-progress error = %v", err)
+	}
+	if !result.IdempotentReplay || result.OperationID != existing.ID {
+		t.Fatalf("result replay=%v op=%q, want replay op %q", result.IdempotentReplay, result.OperationID, existing.ID)
+	}
+	if orchestrator.creates != 0 {
+		t.Fatalf("creates = %d, want 0 for in-progress idempotent replay", orchestrator.creates)
+	}
+}
+
 func TestLocalInstanceServiceRejectsUnsupportedCreateKind(t *testing.T) {
 	_, err := NewLocalInstanceService(&fakeInstanceOrchestrator{}, &fakeInstanceStore{}, NewLocalInstanceOpsGuard()).Create(context.Background(), ports.WorkloadInstanceCreateRequest{
 		Spec: ports.WorkloadSpec{
@@ -128,6 +236,88 @@ func TestLocalInstanceServiceLifecycleOperationsUpdateStore(t *testing.T) {
 	}
 	if record.Status.State != ports.WorkloadStateDeleted {
 		t.Fatalf("state = %s, want deleted", record.Status.State)
+	}
+}
+
+func TestLocalInstanceServiceLifecycleRecordsOperation(t *testing.T) {
+	store := &fakeInstanceStore{
+		last: ports.WorkloadInstanceRecord{
+			TenantID:   "tenant-a",
+			InstanceID: "instance-a",
+			Name:       "app-01",
+			Kind:       ports.WorkloadKindContainer,
+			Status: ports.WorkloadStatus{
+				State: ports.WorkloadStateStopped,
+			},
+		},
+	}
+	operations := NewLocalOperationStore()
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+	)
+
+	record, err := service.Start(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		TenantID:        "tenant-a",
+		InstanceID:      "instance-a",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1200, 0),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if record.OperationID == "" {
+		t.Fatalf("OperationID is empty")
+	}
+	operation, err := operations.GetOperation(context.Background(), "tenant-a", record.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation error = %v", err)
+	}
+	if operation.Operation != ports.WorkloadLifecycleStart || operation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation=%s status=%s, want start/succeeded", operation.Operation, operation.Status)
+	}
+	if len(operation.Steps) == 0 {
+		t.Fatalf("operation steps are empty")
+	}
+	resized, err := service.Resize(context.Background(), ports.WorkloadInstanceResizeRequest{
+		IdempotencyKey:  "resize-key-1",
+		TenantID:        "tenant-a",
+		InstanceID:      "instance-a",
+		Resources:       ports.WorkloadResourceRequest{CPU: "4", Memory: "8Gi"},
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1300, 0),
+	})
+	if err != nil {
+		t.Fatalf("Resize() error = %v", err)
+	}
+	duplicate, err := service.Resize(context.Background(), ports.WorkloadInstanceResizeRequest{
+		IdempotencyKey:  "resize-key-1",
+		TenantID:        "tenant-a",
+		InstanceID:      "instance-a",
+		Resources:       ports.WorkloadResourceRequest{CPU: "4", Memory: "8Gi"},
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1301, 0),
+	})
+	if err != nil {
+		t.Fatalf("Resize(duplicate) error = %v", err)
+	}
+	if duplicate.OperationID != resized.OperationID {
+		t.Fatalf("duplicate resize operation id = %q, want %q", duplicate.OperationID, resized.OperationID)
+	}
+	list, err := operations.ListOperations(context.Background(), ports.WorkloadOperationListRequest{
+		TenantID:   "tenant-a",
+		InstanceID: "instance-a",
+	})
+	if err != nil {
+		t.Fatalf("ListOperations error = %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("operations = %d, want start + resize only", len(list.Items))
 	}
 }
 
@@ -242,8 +432,25 @@ func (o *fakeInstanceOrchestrator) Create(_ context.Context, request ports.Workl
 			Kind:       request.Spec.Kind,
 		},
 		FinalStatus: ports.WorkloadStatus{
-			State: ports.WorkloadStatePending,
+			State:     ports.WorkloadStateRunning,
+			UpdatedAt: time.Unix(950, 0),
 		},
+		Admission: ports.WorkloadAdmissionResult{
+			Allowed: true,
+			Reason:  "accepted",
+		},
+		DryRun: ports.WorkloadProviderDryRunResult{
+			Accepted: true,
+			Reason:   "accepted",
+		},
+		Apply: ports.WorkloadProviderApplyResult{
+			Applied:      true,
+			Reason:       "applied",
+			ResourceRefs: []string{"kubernetes/Deployment/app-01"},
+		},
+		Observation:  ports.WorkloadProviderObservation{Provider: "kubernetes", Phase: "Running"},
+		Reconcile:    ports.WorkloadReconcileResult{Changed: true, Reason: "state reconciled"},
+		Orchestrated: true,
 	}, nil
 }
 

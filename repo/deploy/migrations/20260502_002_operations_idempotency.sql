@@ -30,13 +30,13 @@ COMMENT ON COLUMN workload_instances.idempotency_key IS
 CREATE TABLE workload_instance_operations (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id               UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    instance_id             UUID        NOT NULL,
+    instance_id             TEXT        NOT NULL,
     operation               TEXT        NOT NULL
                                 CHECK (operation IN ('create','start','stop','restart','resize','delete')),
     status                  TEXT        NOT NULL DEFAULT 'accepted'
                                 CHECK (status IN ('accepted','in_progress','succeeded','failed','cancelled')),
     idempotency_key         TEXT,
-    requested_by            UUID        NOT NULL,
+    requested_by            TEXT        NOT NULL,
     precheck_json           JSONB       NOT NULL DEFAULT '{}',
     destructive_impact_json JSONB       NOT NULL DEFAULT '{}',
     before_spec_json        JSONB       NOT NULL DEFAULT '{}',
@@ -52,7 +52,7 @@ CREATE TABLE workload_instance_operations (
 ALTER TABLE workload_instance_operations ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY wio_tenant_isolation ON workload_instance_operations
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', TRUE), '')::uuid);
 
 CREATE INDEX idx_wio_tenant_instance ON workload_instance_operations (tenant_id, instance_id);
 CREATE INDEX idx_wio_active_status   ON workload_instance_operations (tenant_id, status)
@@ -81,7 +81,7 @@ CREATE TABLE workload_instance_operation_steps (
 ALTER TABLE workload_instance_operation_steps ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY wios_tenant_isolation ON workload_instance_operation_steps
-    USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', TRUE), '')::uuid);
 
 CREATE INDEX idx_wios_operation ON workload_instance_operation_steps (operation_id);
 
@@ -113,7 +113,7 @@ BEGIN
         );
         ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
         CREATE POLICY api_keys_tenant_isolation ON api_keys
-            USING (tenant_id = current_setting('app.tenant_id', TRUE)::uuid);
+            USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', TRUE), '')::uuid);
         CREATE INDEX idx_api_keys_tenant   ON api_keys (tenant_id, status);
         CREATE INDEX idx_api_keys_instance ON api_keys (instance_id) WHERE instance_id IS NOT NULL;
     ELSE

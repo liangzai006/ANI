@@ -22,6 +22,7 @@ func Load() Config {
 			NATSURL:     env("NATS_URL", "nats://127.0.0.1:4222"),
 			RedisURL:    env("REDIS_URL", "redis://:ani_dev_password@127.0.0.1:6379/0"),
 			GRPCPort:    envInt("GRPC_PORT", 9104),
+			HealthPort:  envInt("HEALTH_PORT", 9204),
 			ServiceName: "task-service",
 		},
 		OutboxEnabled:      envBool("OUTBOX_ENABLED", true),

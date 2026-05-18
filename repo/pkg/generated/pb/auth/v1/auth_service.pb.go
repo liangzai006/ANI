@@ -669,8 +669,8 @@ type CreateAPIKeyRequest struct {
 	UserId       string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	Name         string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Scopes       []string               `protobuf:"bytes,4,rep,name=scopes,proto3" json:"scopes,omitempty"`
-	RateLimitRpm int32                  `protobuf:"varint,5,opt,name=rate_limit_rpm,json=rateLimitRpm,proto3" json:"rate_limit_rpm,omitempty"`
-	ExpiresAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"` // optional
+	RateLimitRpm int32                  `protobuf:"varint,5,opt,name=rate_limit_rpm,json=rateLimitRpm,proto3" json:"rate_limit_rpm,omitempty"` // optional; <=0 defaults to 60, max 10000
+	ExpiresAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`             // optional
 }
 
 func (x *CreateAPIKeyRequest) Reset() {

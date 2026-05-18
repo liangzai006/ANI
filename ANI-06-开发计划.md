@@ -1,20 +1,34 @@
 # KuberCloud ANI · 开发计划
 
-> 版本 V8.1 | 广州常青云科技有限公司 | 内部产品规划文件
-> 最后更新：2026-05-15
+> 版本 V8.3 | 广州常青云科技有限公司 | 内部产品规划文件
+> 最后更新：2026-05-19（Sprint 2 启动 + 文档入口瘦身）
 
 ---
 
 ## 零、状态快照（先读这里）
 
 > 任何新开发者（人类或 AI）打开本文件，先看这一节，30 秒内定位现在的位置。
-> 任务细节见 → [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)（每冲刺更新）
+> 任务细节见 → [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)（当前冲刺唯一执行入口）。
+> 已完成批次不要堆在本文顶部，统一归档到 [`repo/development-records/README.md`](repo/development-records/README.md)。
+
+### 文档职责
+
+| 文档 | 职责 | 使用时机 |
+|---|---|---|
+| `ANI-06-开发计划.md` | 总路线、Services 解锁门禁、Sprint 边界、延期项 | 判断当前阶段和长期节奏 |
+| `repo/CURRENT-SPRINT.md` | 当前 Sprint 的执行清单、入口文件、验收命令 | 每次开始开发先读 |
+| `repo/development-records/README.md` | 已完成批次索引 | 查历史实现和验证记录 |
+| `repo/development-records/*.md` | 单批次闭环记录 | 需要追溯技术细节时再读 |
 
 ### 项目全局进度
 
 ```
-总体进度：Phase 1 v1.0.0 开发中（2026-05-15）
+当前阶段：Phase 1 / Sprint 2（VM & Container/GPU 深度 + Core API Alpha Freeze）
+当前不是 Phase 2：Phase 2 指 2026-10 以后延期能力，不是下一次开发阶段
 交付目标：2026-09-30 ANI Core v1.0.0 + ANI Services P0
+关键节奏：ANI Core 必须先在 2026-06 上中旬解锁 ANI Services 开发，不能等到 2026-09-30 才完成接口与 SDK
+刚完成：Sprint 1 Foundation + M2.2 Auth Final（2026-05-18，含 Docker Dex smoke）
+下一步：按 repo/CURRENT-SPRINT.md 执行 Sprint 2
 ```
 
 | 阶段 | 状态 | 完成时间 | 说明 |
@@ -22,10 +36,10 @@
 | **M1 基础设施底座** | ✅ 已完成 | 2026-05 | INFRA/GPU/Runtime/Instance A-S 全链路 |
 | **M2 Auth/Gateway** | ✅ 已完成 | 2026-05 | OIDC/JWT/RBAC/API Key 全流程 |
 | **V8 架构重规划** | ✅ 已完成 | 2026-05-15 | Core/Services 分层、AWS 工程加固 |
-| **Sprint 1（当前）** | 🔄 进行中 | 2026-05-15~05-31 | 操作语义底座 + Health + Idempotency |
-| Sprint 2 | ⏳ 计划中 | 2026-06-01~06-15 | VM & Container 深度 |
-| Sprint 3 | ⏳ 计划中 | 2026-06-16~06-30 | 网络/存储/向量 API |
-| Sprint 4 ⭐ | ⏳ 计划中 | 2026-07-01~07-15 | **API 冻结 + SDK**（硬截止）|
+| **Sprint 1** | ✅ 已完成 | 2026-05-18 | 操作语义底座 + Health + Idempotency + Auth Final |
+| **Sprint 2 ⭐（当前）** | 🔄 提前启动 | 2026-05-19 起；计划窗口 2026-06-01~06-15 | VM & Container/GPU 深度 + **Core API Alpha Freeze** |
+| Sprint 3 ⭐ | ⏳ 计划中 | 2026-06-16~06-30 | 网络/存储/向量 API + **SDK Alpha + Dev Profile Ready** |
+| Sprint 4 | ⏳ 计划中 | 2026-07-01~07-15 | API Beta 准备 + 四语言 SDK + Mock Server |
 | Sprint 5 | ⏳ 计划中 | 2026-07-16~07-31 | **K8s集群(vCluster)** + 控制器 + 加解密 ← K8S-A 恢复 v1.0.0 |
 | Sprint 6 | ⏳ 计划中 | 2026-08-01~08-15 | Sandbox + 平台支撑 + Services 模型仓库/推理 |
 | Sprint 7 | ⏳ 计划中 | 2026-08-16~09-01 | Installer + 知识库 RAG（从零建）+ Console Alpha |
@@ -33,21 +47,39 @@
 | Sprint 9 | ⏳ 计划中 | 2026-09-16~09-25 | RC 加固 |
 | Sprint 10 | ⏳ 计划中 | 2026-09-26~09-30 | v1.0.0 发布 |
 
-### 当前冲刺：Sprint 1（2026-05-15 → 2026-05-31）
+### Core 对 Services 的硬门禁
+
+ANI Core 的 Phase 1 有两个交付对象：先交付给 ANI Services 开发团队，再交付给最终客户。
+因此 Core 计划不以 2026-09-30 作为唯一截止，而是按 Services 依赖反推接口、SDK 和运行时成熟度。
+
+| 日期 | 门禁 | ANI Core 必须交付 | ANI Services 可开始 |
+|---|---|---|---|
+| **2026-05-31** | P0 依赖矩阵冻结 | VM/GPU/存储/网络/Auth/Operation/SDK/API 依赖全列清楚，能力标注 current/target maturity | 产品页面、业务流和前端信息架构设计 |
+| **2026-06-10** | Core API Alpha Freeze | P0 path/schema/error/state/RBAC scope 基本冻结，breaking change 需 CTO/架构负责人批准 | 生成 SDK、写 client、写 mock 集成 |
+| **2026-06-20** | SDK Alpha | Go/Python/TypeScript/Java SDK 可生成、可 import，核心示例可编译 | Services 后端开始真实代码开发 |
+| **2026-06-30** | Core Dev Profile Ready | P0 API 具备 dev/local profile 或 contract-compatible mock，状态机和错误语义与真实实现一致 | Services 可做端到端开发与 Console 联调 |
+| **2026-07-31** | Core Real Path Beta | VM/GPU Container 主链路真实跑通，含网络、存储、Auth/RBAC/RLS、审计、幂等和 operation timeline | Services 开始真实 provider 联调 |
+| **2026-08-15** | Core API Beta Freeze | Services P0 依赖 API 禁止 breaking change，缺口必须有 owner/date | Services 功能冻结，集中修 bug |
+| **2026-08-31** | Core Integration RC | Services 依赖缺口清零，部署和集成文档可演练 | 全项目联调、验收文档、部署演练 |
+| **2026-09-15** | Release Candidate | 只修 bug、安全、部署、文档 | 客户验收彩排 |
+| **2026-09-30** | Final Delivery | ANI Core v1.0.0 + ANI Services P0 | 客户交付 |
+
+**硬规则：** 凡是 ANI Services Phase 1 P0 场景依赖的 Core 能力，不允许在对应 Runtime Ready 日期后仍停留在 `contract`、`local-profile`、stub、mock success 或 `NOT_IMPLEMENTED`。
+
+### 当前冲刺：Sprint 2（2026-05-19 提前启动 → 2026-06-15）
 
 | 批次 | 优先级 | 状态 |
 |---|---|---|
-| M1-INSTANCE-T（操作语义）| P0 ⭐ | 🔄 进行中 |
-| M1-HEALTH-A（健康检查端点）| P1 | ⏳ 待开始 |
-| M1-IDEM-A（幂等性令牌集成）| P1 | ⏳ 待开始 |
-| M2.2-AUTH-FINAL（Auth 收尾）| P1 | ⏳ 待开始 |
+| SPEC-CORE-ALPHA（Core API Alpha Freeze）| P0 ⭐ | 🔄 当前优先：先冻结 Services P0 path/schema/error/state/RBAC scope |
+| M1-INSTANCE-U（VM 生产级操作）| P0 | ⏳ 待开始：终止保护、console/VNC session、快照、磁盘绑定、SSH 信息 |
+| M1-INSTANCE-V（Container/GPU 深度）| P0 | ⏳ 待开始：副本、滚动更新、回滚、历史、GPU 调度原因/利用率 |
 
-**→ 今天该做什么，看 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)**
+**→ 今天该做什么，只看 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)。**
 
 ### 已完成批次完整记录
 
 > 完整的已完成批次列表在 `repo/development-records/README.md`（唯一归档索引）。
-> 详细技术记录在 `repo/development-records/*.md`（56个文件）。
+> 详细技术记录在 `repo/development-records/*.md`。本文只保留关键里程碑，避免当前阶段被历史细节淹没。
 
 主要已完成里程碑（仅列关键节点）：
 - M1-INFRA-A/B/C/D/E/F — Kubernetes 基础设施、KubeOVN 网络、GPU 调度基线
@@ -55,19 +87,19 @@
 - M1-RUNTIME-A — WorkloadRuntime port（VM/容器/GPU/Sandbox/Batch Job 抽象）
 - M1-INSTANCE-A ~ S — 实例全链路（计划→渲染→准入→审计→dry-run→apply→observe→持久化→服务层）
 - M2.1-TASK-A/B/C — 异步任务/outbox/worker mutations
-- M2.2-AUTH-A ~ K — Auth 服务完整实现（JWT/RBAC/OIDC/JWKS/API Key）
+- M2.2-AUTH-A ~ K + M2.2-AUTH-FINAL — Auth 服务完整实现与生产收尾（JWT/RBAC/OIDC/JWKS/API Key/Dex smoke）
 - V8 架构设计 — Core/Services 分层、API 工程约定（幂等性/控制平面分离等）
 - AWS 工程加固 — /healthz /readyz schema、WorkloadReconcileController port、operations DB 表、permissions schema
 
-### Phase 2 延期（v1.0.0 不实现，生意驱动迭代）
+### v1.0.0 后续延期项（不是当前下一阶段）
 
 > ⚠️ **M1-K8S-A 已从延期列表移回 v1.0.0 范围（Sprint 5）**，理由见 Sprint 5 说明。
+> 这里的延期项不是 Sprint 2 之后立刻要做的任务；当前下一阶段仍是 Sprint 2/3 的 Core API 和 SDK 解锁。
 
 | 条目 | 理由 |
 |---|---|
 | M1-BM-A（裸金属/Metal3）| 需物理机环境，无 P0 依赖 |
 | M1-DPU-A（DPU节点）| 需专用硬件 |
-| SDK-JAVA-A（Java SDK）| 1天生成任务，按需做 |
 | M1-SVC-EP-A（服务目录/DNS）| PaaS 依赖，Phase 2 |
 | M1-NOTIFY-A（事件通知 API）| 非 P0 阻塞 |
 
@@ -84,7 +116,7 @@
 | **开发语言** | Go（平台层）、Python（AI 应用层）、TypeScript（前端） |
 
 **每个模块的 AI 辅助标准流程：**
-1. 人工编写 OpenAPI Spec / Protobuf 定义（明确接口契约）
+1. 人工编写 API 契约 / Protobuf 定义（明确接口契约）
 2. AI 生成 Server Stub、Client、单元测试骨架
 3. 人工审查逻辑正确性和安全边界
 4. AI 补充错误处理、日志、Metrics 等横切代码
@@ -92,7 +124,7 @@
 
 ---
 
-## 二、双周冲刺计划（V8.1 重规划，2026-05-15 更新）
+## 二、双周冲刺计划（V8.3 Core/Services 解锁节奏，2026-05-19 更新）
 
 > **规划原则：** 每个冲刺 2 周，有明确进入条件、交付清单、完工标准（验收命令）。
 > 任何开发者（人类或 AI）打开本节，应能在 5 分钟内知道当前冲刺在做什么、下一步是什么。
@@ -106,13 +138,14 @@
            ANI Core 开发线                         ANI Services 开发线
            ──────────────────────────────────      ──────────────────────────
 S1  05-15~05-31  操作语义底座 + Health + Auth收尾
-                 ↑ 当前位置（2026-05-15）
-S2  06-01~06-15  VM 深度 + Container/GPU 深度
-S3  06-16~06-30  网络/存储/向量 API（Handler 从 stub 变真实）
-S4  07-01~07-15  API 冻结 + 三语言 SDK + Mock Server   ← 解锁日：07-15
-S5  07-16~07-31  K8s集群(vCluster) + 控制器 + 加解密   S_A  模型仓库 + 推理服务
-S6  08-01~08-15  Sandbox + 平台支撑                    S_A  知识库 RAG
-S7  08-16~09-01  Installer + 集成测试                  S_B  Console Alpha
+                 ✅ 已完成（2026-05-18）
+S2  06-01~06-15  VM 深度 + Container/GPU 深度 + Core API Alpha Freeze
+                 ← 当前（2026-05-19 起提前启动）
+S3  06-16~06-30  网络/存储/向量 API + SDK Alpha + Dev Profile Ready
+S4  07-01~07-15  API Beta 准备 + 四语言 SDK + Mock Server   ← Services 持续开发
+S5  07-16~07-31  K8s集群(vCluster) + 控制器 + 加解密   S_A  模型仓库 + 推理服务真实开发
+S6  08-01~08-15  Sandbox + 平台支撑 + API Beta Freeze  S_A  知识库 RAG
+S7  08-16~09-01  Installer + 集成测试 + Integration RC S_B  Console Alpha
 S8  09-01~09-15  Console 全量 + BOSS                   S_B  BOSS 基础版
 S9  09-16~09-25  RC 加固（只修 Bug）
 S10 09-26~09-30  v1.0.0 发布
@@ -122,14 +155,15 @@ S10 09-26~09-30  v1.0.0 发布
 
 ### 代码依赖关键路径（实际代码状态驱动）
 
-> 以下基于 2026-05-15 代码扫描结果，反映真实依赖而非文档描述。
+> 以下基于 2026-05-19 代码与文档状态，反映真实依赖而非愿景描述。
 
 ```
 当前代码实际状态：
   ✅ pkg/ports/ 31个接口，pkg/adapters/runtime/ 28个文件 — 架构基础完整
   ✅ auth-service JWT/OIDC/RBAC 完整实现
   ✅ DB migrations 3个SQL，operations 表已建
-  ⚠️  /api/v1/instances /networks /volumes handler — 当前是 501 stub（stubs.go）
+  ⚠️  /api/v1/demo/instances 已有 local/demo profile，`/api/v1/instances` 规范路径仍需在 Sprint 2 收敛为 Services 可依赖的 Core API
+  ⚠️  /api/v1/networks /volumes handler — 仍需 Sprint 3 补真实或 contract-compatible dev profile
   ⚠️  model-service 有实现但属于 Services 层，需要划清边界
   ❌ kb-service — 完全空目录，Sprint 6 从零建
   ❌ K8s vCluster 集成 — 零代码，Sprint 5 建
@@ -141,9 +175,11 @@ S10 09-26~09-30  v1.0.0 发布
   Sprint 2：/instances handler stub → 真实实现（VM/Container/GPU）
        ↓ 解锁 Sprint 3（网络/存储需要 instances 关联）
   Sprint 3：/networks /volumes /objects /vector-stores handler → 真实
-       ↓ 解锁 Sprint 4（API Spec 能写全量路径）
-  Sprint 4：API 冻结 + SDK + Mock Server
-       ↓ 解锁 Services 团队（07-15）
+       ↓ 解锁 Sprint 4（API 契约能写全量路径）
+  Sprint 3：Core Dev Profile Ready + SDK Alpha
+       ↓ 解锁 Services 团队（06-30 前后）
+  Sprint 4：API Beta 准备 + 四语言 SDK + Mock Server
+       ↓ Services 团队基于稳定 SDK 持续开发
   Sprint 5：vCluster 生命周期（Services IaaS 最高需求）+ 加解密（模型上传需要）
        ↓ Services 团队并行：模型仓库 + 推理服务（依赖 objects + encryption）
   Sprint 6：Sandbox（Agent 服务需要）+ 平台支撑（告警/计量）
@@ -155,7 +191,7 @@ S10 09-26~09-30  v1.0.0 发布
 
 ---
 
-### Sprint 1：2026-05-15 → 2026-05-31（当前冲刺）
+### Sprint 1：2026-05-15 → 2026-05-18（已完成）
 
 **主题：操作语义底座 + Foundation**
 
@@ -181,18 +217,23 @@ curl http://localhost:8080/readyz    # → {"status":"ok","checks":{...}}
 
 **解锁：** Sprint 2 的 VM/Container 深度 + Sprint 4 的 operation timeline Console 展示
 
+**归档：** 详细完成记录见 `repo/development-records/README.md`，当前执行入口已切换到 `repo/CURRENT-SPRINT.md` 的 Sprint 2。
+
 ---
 
-### Sprint 2：2026-06-01 → 2026-06-15
+### Sprint 2：2026-05-19 提前启动 → 2026-06-15（当前）
 
 **主题：VM & Container / GPU 容器生产深度**
 
-**进入条件：** Sprint 1 完工标准通过；`workload_instance_operations` 表已建
+**进入条件：** Sprint 1 完工标准通过；`workload_instance_operations` 表已建；M2.2 Auth Final 已通过合同守卫和 Dex smoke。
+
+**执行原则：** 先冻结 Services P0 依赖的 API 契约，再做 VM/Container 深度实现；每完成一个可验证切片，都要补测试并写入 `repo/development-records/`。
 
 | 批次 | 内容 | 难度 | 预估 |
 |---|---|---|---|
 | **M1-INSTANCE-U** | VM 生产级操作：终止保护/VNC console/快照/磁盘绑定/SSH 连接信息 | 高 | 5天 |
 | **M1-INSTANCE-V** | Container 部署深度（副本/滚动更新/回滚/历史）；GPU 调度原因/利用率 | 高 | 5天 |
+| **SPEC-CORE-ALPHA** ⭐ | P0 Core path/schema/error/state/RBAC scope 冻结到 Alpha，覆盖 Services P0 依赖 | 中 | 2天 |
 
 **完工标准：**
 ```bash
@@ -200,6 +241,7 @@ make test
 # VM 实例可获取 VNC session URL
 # Container 实例可触发 rollback 到上一版本
 # GPU 容器状态包含 gpu_scheduling_reason 和 gpu_utilization
+# api/openapi/v1.yaml 中 Services P0 依赖路径达到 Alpha Freeze，不允许后续 breaking change
 ```
 
 **解锁：** Console VM 详情页、Container 部署页面接真实 API
@@ -218,6 +260,8 @@ make test
 | **M1-STORAGE-A** | 块存储(volumes) + 文件存储(filesystems) + 对象存储(objects) CRUD | 中 | 4天 |
 | **M1-VSTORE-A** | vector-stores 创建/删除/检索 API（Milvus adapter 已有，加 Gateway 路由）| 低 | 2天 |
 | **M1-WKID-A** | Workload Identity P0：实例创建时生成 lifecycle-bound API key + 实例删除时 revoke | 中 | 2天 |
+| **SDK-ALPHA-A** ⭐ | Go/Python/TypeScript/Java SDK Alpha：生成、import、compile smoke test | 中 | 2天 |
+| **MOCK-DEV-A** | Core dev profile / mock profile，语义对齐真实状态机和错误码 | 中 | 2天 |
 
 **完工标准：**
 ```bash
@@ -226,39 +270,42 @@ make test
 # POST /api/v1/volumes → 201 Created
 # POST /api/v1/vector-stores → 201；POST /{id}/search → 200
 # 新实例的 ANI_WORKLOAD_TOKEN 环境变量已注入 + 实例删除后自动 revoked
+make gen-core-sdk        # Go/Python/TypeScript/Java SDK 可生成
+# Services 团队可用 SDK + dev profile 做端到端开发，不手写 Core URL
 ```
 
-**解锁：** Sprint 4 的 API Spec 可以基于真实实现补全；Services 团队可测试 object/vector 接口
+**解锁：** ANI Services 团队开始真实开发；Sprint 4 进入 API Beta 准备和 SDK 加固
 
 ---
 
-### Sprint 4：2026-07-01 → 2026-07-15 ⭐ API 冻结硬截止
+### Sprint 4：2026-07-01 → 2026-07-15
 
-**主题：API 契约冻结 + 三语言 SDK + Mock Server**
+**主题：API Beta 准备 + 四语言 SDK 加固 + Mock Server**
 
-**进入条件：** Sprint 3 全部完工；v1.yaml 需扩充为全量 Core 路径
+**进入条件：** Sprint 3 全部完工；Services P0 依赖已在 06-30 前解锁
 
 | 批次 | 内容 | 难度 | 预估 |
 |---|---|---|---|
-| **SPEC-CORE-A** | 将 Sprint 1-3 所有新路径补入 api/openapi/v1.yaml，含正确 schema + 分页 + idempotency | 中 | 3天 |
+| **SPEC-CORE-BETA** | 将 Sprint 1-3 所有新路径补齐到 Beta：schema、分页、idempotency、错误码、状态机、RBAC scope | 中 | 3天 |
 | **SPEC-SPLIT-A** | /models /inference-services /knowledge-bases 移至 api/openapi/services/v1.yaml | 低 | 1天 |
 | **SDK-GO-A** | oapi-codegen 生成 Go SDK（sdks/ani-go/） | 低 | 1天 |
 | **SDK-PY-A** | openapi-generator 生成 Python SDK（sdks/ani-python/） | 低 | 1天 |
 | **SDK-TS-A** | openapi-typescript 生成 TypeScript Client（sdks/ani-typescript/） | 低 | 1天 |
+| **SDK-JAVA-A** | openapi-generator 生成 Java SDK（sdks/ani-java/，OkHttp3） | 低 | 1天 |
 | **MOCK-A** | Prism Mock Server 基于 v1.yaml 启动，覆盖所有 Core 路径 | 低 | 1天 |
 | **DOC-API-A** | Swagger UI / Redoc 自动生成并部署 | 低 | 1天 |
 
 **完工标准（2026-07-15 前必须达成）：**
 ```bash
-# v1.yaml 全量路径覆盖，无 TODO stub
-make gen-core-sdk        # 三个 SDK 目录生成完毕
+# v1.yaml 全量路径覆盖，Services P0 依赖路径无 TODO stub
+make gen-core-sdk        # Go/Python/TypeScript/Java 四个 SDK 目录生成完毕
 prism mock api/openapi/v1.yaml --port 4010   # 所有路径返回 200 mock
 # Services 团队用 ani-python SDK 调用 Mock Server 能获得正确响应类型
 ```
 
-**本冲刺结束即宣告 Core API 冻结。之后 v1.yaml 只增不删（API 兼容性承诺）。**
+**本冲刺结束即宣告 Core API Beta。之后 Services P0 依赖路径只允许兼容新增，不允许 breaking change。**
 
-**解锁：** ANI Services 团队正式解锁，开始用 Python SDK + Mock Server 开发
+**解锁：** Services 团队基于稳定 SDK 持续开发；Core 进入真实 provider 深度和集成收口
 
 ---
 
@@ -307,7 +354,7 @@ make test
 | **M1-REGISTRY-A** | Harbor API 封装（镜像推拉权限 + 安全扫描）| 中 | 2天 | Services 镜像仓库服务 |
 | **Core E2E** | Sprint 1-5 全链路集成测试回归 | 中 | 3天 | RC 门控 |
 
-**Services 任务（另一小组，从 07-15 解锁后并行，本 Sprint 是 Services 第一个完整冲刺）：**
+**Services 任务（另一小组，已在 06-30 前后解锁，本 Sprint 进入真实开发加速期）：**
 
 | 批次 | 依赖的 Core API | 内容 |
 |---|---|---|
@@ -489,7 +536,7 @@ ANI Core：
   [ ] 用量计量 API
   [ ] 可观测性 API（PromQL 代理 + 告警）
   [ ] Core API 契约 v1.yaml 完整 + 兼容承诺生效
-  [ ] Go SDK + Python SDK + TypeScript Client 发布
+  [ ] Go SDK + Python SDK + TypeScript Client + Java SDK 发布
   [ ] ani-installer（3 种部署模式）+ 离线包
   [ ] 信创基线（ARM64 构建通过）
 
@@ -515,8 +562,10 @@ ANI Services P0：
 - 2026-09-30：发布 `v1.0.0`
 
 **关键不可推迟节点：**
-- `2026-07-15`：Core API 契约冻结 ← Services 团队解锁，不可推迟
-- `2026-09-15`：Core + Services P0 功能完成，进入集成联调
+- `2026-06-10`：Core API Alpha Freeze ← Services P0 依赖接口开始稳定，不可推迟
+- `2026-06-30`：Core Dev Profile Ready + SDK Alpha ← Services 团队正式解锁，不可推迟
+- `2026-08-31`：Core Integration RC ← Services 依赖缺口清零，进入全项目联调
+- `2026-09-15`：Core + Services Release Candidate，只允许修 bug、安全、部署、文档
 - `2026-09-30`：v1.0.0 交付
 
 ---
@@ -630,7 +679,7 @@ ANI Services P0：
 - [ ] **P0 操作语义底座**
   - 所有 P0 实例操作必须先支持 precheck、禁用原因、危险操作确认、`operation_id`、操作时间线、失败原因、建议处理、重试资格和审计记录
   - 这是后续 VM、容器、GPU 容器和推理实例补强的统一前置能力，避免每类实例重复实现操作反馈
-  - **计划实现：** `M1-INSTANCE-T`
+  - **首轮实现已完成：** `M1-INSTANCE-T`（operation_id、timeline、幂等回放、操作查询）；危险操作二次确认和生产级并发幂等继续在后续批次收敛
 
 - [ ] **实例网络平面**
   - `tenant_vpc`：租户业务系统互通，VM 与 Pod 需要业务互通时共享此平面
@@ -824,7 +873,7 @@ ANI Services P0：
   │   ├── ratelimit/        # 限流
   │   ├── errors/           # 统一错误类型
   │   └── harbor/           # harbor-proxy 模块
-  ├── api/openapi/          # OpenAPI 3.1 Spec（代码先于实现）
+  ├── api/openapi/          # API 契约（契约先于实现）
   └── api/proto/            # Protobuf 定义
   ```
   - **框架：** Hertz 0.9+（CloudWeGo，字节开源，日万亿级请求生产验证）
@@ -838,8 +887,8 @@ ANI Services P0：
   6. 路由分发 → 对应 gRPC Service
   7. 统一错误响应：`{ code, message, request_id, details }`
 
-- [ ] **OpenAPI 3.1 Spec-First 工作流**
-  - 所有 API 的 Spec 定义先于代码，禁止反向
+- [ ] **API 契约优先工作流**
+  - 所有 API 的契约定义先于代码，禁止反向
   - `make gen-api`：oapi-codegen 生成 Go Server/Client → buf 生成 Protobuf 代码 → grpc-gateway 生成 REST 转发层
   - 同一 Spec 同时生成：Go SDK、Python SDK、TypeScript SDK、API 文档站
 
@@ -857,22 +906,26 @@ ANI Services P0：
 
 #### 2.2 认证授权（Go）（M2）✅ 已完成
 
-> 已完成：M2.2-AUTH-A~K（JWT/OIDC/JWKS/RBAC/API Key），详见 `repo/development-records/README.md`
+> 已完成：M2.2-AUTH-A~K + M2.2-AUTH-FINAL（JWT/OIDC/JWKS/RBAC/API Key/Gateway Auth REST/Dex smoke）。
+> 本节只保留能力定义；完成细节见 `repo/development-records/README.md` 和 `repo/development-records/m2-2-auth-final-production-closeout.md`。
 
 - [ ] **Dex（OIDC IdP）**
   - 对接企业 AD/LDAP（客户现有用户体系，无需重建账号）
   - SAML 2.0 支持（金融/国央企常用）
   - **开源组件：** Dex latest
+  - **完成记录（2026-05-18）：** Dex-compatible OIDC 自动化验收、issuer 默认端点推导、JWKS/ID Token 护栏、redirect_uri/state/nonce 防护、Gateway Auth REST 表面和 API 契约守卫均已闭环；`make validate-auth-dex-smoke`、`make build`、`make test`、`make validate-architecture`、`git diff --check` 已通过。
 
 - [ ] **JWT 服务**
   - AccessToken（1 小时过期）+ RefreshToken（7 天）
   - Token 吊销：黑名单机制，Redis 存储
   - API Key 管理：长期 Token，供 CLI / SDK / 自动化脚本使用
+  - **完成记录（2026-05-18）：** API Key scope 规范化、service-account scope allow/deny、rate limit、name/expires_at/rate_limit_rpm 创建护栏已完成并有回归测试。
 
 - [ ] **RBAC 服务**
   - 角色：`platform-admin` / `tenant-admin` / `user` / `auditor`
   - 权限粒度：API 路径 + HTTP Method
   - 与 Dex 集成：从 OIDC Token 的 `groups` 字段提取角色
+  - **完成记录（2026-05-18）：** OIDC group→role 映射已支持 group DN/path 归一化和配置角色 trim/lowercase 归一化，并保持白名单角色约束。
 
 ---
 
@@ -1072,7 +1125,7 @@ ANI Services P0：
 ### 模块 5：前端 Console ⏳ ANI Services — Sprint 7~8 实现
 
 > **归属：ANI Services 层（前端）**，Sprint 7 Console Alpha，Sprint 8 全量。
-> 依赖 Core API 冻结（Sprint 4）后替换 mock。
+> 依赖 Core API Alpha / Dev Profile 解锁后逐步替换 mock；Sprint 4 后进入稳定 SDK 和 API Beta 收口。
 
 **目标：** IT 管理员和业务部门用户的操作界面，30 分钟能学会用。
 
@@ -1085,7 +1138,7 @@ ANI Services P0：
   - TanStack Router（类型安全路由 + 代码分割）
   - TanStack Query（服务端数据缓存与同步）
   - Zustand（轻量客户端 UI 状态）
-  - 从 OpenAPI Spec 自动生成 TypeScript SDK（openapi-typescript-codegen）
+  - 从 API 契约自动生成 TypeScript SDK（openapi-typescript-codegen）
 
 - [ ] **OIDC 鉴权流程**
   - 跳转 Dex → 回调处理 Token → AccessToken 无感刷新
@@ -1295,7 +1348,7 @@ M5（9月）
 
 | 模块 | 人工负责 | AI 生成 |
 |---|---|---|
-| ANI Gateway | OpenAPI Spec 定义、安全边界审查 | Handler 骨架、Middleware 实现、错误处理 |
+| ANI Gateway | API 契约定义、安全边界审查 | Handler 骨架、Middleware 实现、错误处理 |
 | 模型加密 | 算法选型、密钥安全设计 | SM4-GCM 流式加解密完整实现（基于 gmsm） |
 | RAG 引擎 | Prompt 模板调优、检索策略 | LangChain Pipeline 代码、向量化服务 |
 | K8s Operator | CRD 设计、状态机 | controller-runtime Controller 实现 |

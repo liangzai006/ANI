@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	authv1 "github.com/kubercloud/ani/pkg/generated/pb/auth/v1"
@@ -34,19 +35,33 @@ type oidcLoginManager struct {
 	verifier    oidcIDTokenVerifier
 	sessions    oidcSessionStore
 	issuer      *JWTIssuer
+	configErr   error
 }
 
+type oidcStateRecord struct {
+	TenantName  string `json:"tenant_name"`
+	RedirectURI string `json:"redirect_uri"`
+	Nonce       string `json:"nonce"`
+}
+
+const oidcHTTPTimeout = 10 * time.Second
+const oidcJWKSCacheTTL = 5 * time.Minute
+const oidcTokenClockSkew = 2 * time.Minute
+const oidcMinRSAKeyBits = 2048
+
 func newOIDCLoginManager(cache ports.CacheStore, cfg JWTConfig, sessions oidcSessionStore, issuer *JWTIssuer) *oidcLoginManager {
+	rawCfg := cfg
+	cfg = withDexOIDCDefaults(cfg)
 	var exchanger oidcCodeExchanger
 	if cfg.OIDCTokenURL != "" && cfg.OIDCClientID != "" {
 		exchanger = oidcHTTPExchanger{
 			tokenURL:     cfg.OIDCTokenURL,
 			clientID:     cfg.OIDCClientID,
 			clientSecret: cfg.OIDCClientSecret,
-			httpClient:   http.DefaultClient,
+			httpClient:   newOIDCHTTPClient(),
 		}
 	}
-	verifier, _ := newOIDCIDTokenVerifier(cfg)
+	verifier, err := newOIDCIDTokenVerifier(rawCfg)
 	return &oidcLoginManager{
 		cache:       cache,
 		authURL:     cfg.OIDCAuthURL,
@@ -57,7 +72,30 @@ func newOIDCLoginManager(cache ports.CacheStore, cfg JWTConfig, sessions oidcSes
 		verifier:    verifier,
 		sessions:    sessions,
 		issuer:      issuer,
+		configErr:   err,
 	}
+}
+
+func newOIDCHTTPClient() *http.Client {
+	return &http.Client{Timeout: oidcHTTPTimeout}
+}
+
+func withDexOIDCDefaults(cfg JWTConfig) JWTConfig {
+	issuer := strings.TrimRight(cfg.OIDCIssuerURL, "/")
+	if issuer == "" {
+		return cfg
+	}
+	cfg.OIDCIssuerURL = issuer
+	if cfg.OIDCAuthURL == "" {
+		cfg.OIDCAuthURL = issuer + "/auth"
+	}
+	if cfg.OIDCTokenURL == "" {
+		cfg.OIDCTokenURL = issuer + "/token"
+	}
+	if cfg.OIDCJWKSURL == "" {
+		cfg.OIDCJWKSURL = issuer + "/keys"
+	}
+	return cfg
 }
 
 func (m *oidcLoginManager) Begin(ctx context.Context, req *authv1.BeginOIDCLoginRequest) (*authv1.BeginOIDCLoginResponse, error) {
@@ -67,6 +105,12 @@ func (m *oidcLoginManager) Begin(ctx context.Context, req *authv1.BeginOIDCLogin
 	if req.GetRedirectUri() == "" {
 		return nil, status.Error(codes.InvalidArgument, "redirect_uri required")
 	}
+	if err := validateOIDCRedirectURI(req.GetRedirectUri()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid redirect_uri")
+	}
+	if m != nil && m.configErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "oidc login configuration is invalid")
+	}
 	if m == nil || m.cache == nil || m.authURL == "" || m.clientID == "" {
 		return nil, status.Error(codes.FailedPrecondition, "oidc login is not configured")
 	}
@@ -74,11 +118,22 @@ func (m *oidcLoginManager) Begin(ctx context.Context, req *authv1.BeginOIDCLogin
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to create oidc state")
 	}
-	stateValue := req.GetTenantName() + "\n" + req.GetRedirectUri()
+	nonce, err := randomURLToken(32)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to create oidc nonce")
+	}
+	stateValue, err := json.Marshal(oidcStateRecord{
+		TenantName:  req.GetTenantName(),
+		RedirectURI: req.GetRedirectUri(),
+		Nonce:       nonce,
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to encode oidc state")
+	}
 	if err := m.cache.Set(ctx, m.statePrefix+state, []byte(stateValue), m.stateTTL); err != nil {
 		return nil, status.Error(codes.Internal, "failed to store oidc state")
 	}
-	authURL, err := m.authorizationURL(state, req.GetRedirectUri())
+	authURL, err := m.authorizationURL(state, req.GetRedirectUri(), nonce)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "invalid oidc authorization url")
 	}
@@ -89,16 +144,25 @@ func (m *oidcLoginManager) Complete(ctx context.Context, req *authv1.CompleteOID
 	if req.GetState() == "" || req.GetCode() == "" || req.GetRedirectUri() == "" {
 		return nil, status.Error(codes.InvalidArgument, "state, code, and redirect_uri required")
 	}
+	if err := validateOIDCRedirectURI(req.GetRedirectUri()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid redirect_uri")
+	}
 	if m == nil || m.cache == nil {
 		return nil, status.Error(codes.FailedPrecondition, "oidc login is not configured")
+	}
+	if m.configErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "oidc login configuration is invalid")
 	}
 	value, err := m.cache.Get(ctx, m.statePrefix+req.GetState())
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid oidc state")
 	}
-	parts := strings.SplitN(string(value), "\n", 2)
-	if len(parts) != 2 || parts[1] != req.GetRedirectUri() {
+	stateRecord, err := decodeOIDCState(value)
+	if err != nil || stateRecord.RedirectURI != req.GetRedirectUri() {
 		return nil, status.Error(codes.Unauthenticated, "invalid oidc state")
+	}
+	if err := m.cache.Delete(ctx, m.statePrefix+req.GetState()); err != nil {
+		return nil, status.Error(codes.Internal, "failed to consume oidc state")
 	}
 	if m.exchanger == nil || m.verifier == nil || m.sessions == nil || m.issuer == nil {
 		return nil, status.Error(codes.FailedPrecondition, "oidc code exchange is not configured")
@@ -111,7 +175,10 @@ func (m *oidcLoginManager) Complete(ctx context.Context, req *authv1.CompleteOID
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid oidc id token")
 	}
-	principal, refreshToken, err := m.sessions.CreateSession(ctx, parts[0], claims)
+	if stateRecord.Nonce != "" && claims.Nonce != stateRecord.Nonce {
+		return nil, status.Error(codes.Unauthenticated, "invalid oidc nonce")
+	}
+	principal, refreshToken, err := m.sessions.CreateSession(ctx, stateRecord.TenantName, claims)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "failed to create oidc session")
 	}
@@ -119,7 +186,6 @@ func (m *oidcLoginManager) Complete(ctx context.Context, req *authv1.CompleteOID
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to issue access token")
 	}
-	_ = m.cache.Delete(ctx, m.statePrefix+req.GetState())
 	return &authv1.TokenPair{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -128,7 +194,36 @@ func (m *oidcLoginManager) Complete(ctx context.Context, req *authv1.CompleteOID
 	}, nil
 }
 
-func (m *oidcLoginManager) authorizationURL(state, redirectURI string) (string, error) {
+func decodeOIDCState(value []byte) (oidcStateRecord, error) {
+	var record oidcStateRecord
+	if err := json.Unmarshal(value, &record); err == nil && record.TenantName != "" && record.RedirectURI != "" {
+		return record, nil
+	}
+	parts := strings.SplitN(string(value), "\n", 2)
+	if len(parts) != 2 {
+		return oidcStateRecord{}, errInvalidJWT
+	}
+	return oidcStateRecord{TenantName: parts[0], RedirectURI: parts[1]}, nil
+}
+
+func validateOIDCRedirectURI(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if !parsed.IsAbs() || parsed.Host == "" {
+		return fmt.Errorf("redirect_uri must be absolute")
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return fmt.Errorf("redirect_uri must use http or https")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("redirect_uri must not include a fragment")
+	}
+	return nil
+}
+
+func (m *oidcLoginManager) authorizationURL(state, redirectURI string, nonce string) (string, error) {
 	parsed, err := url.Parse(m.authURL)
 	if err != nil {
 		return "", err
@@ -139,6 +234,9 @@ func (m *oidcLoginManager) authorizationURL(state, redirectURI string) (string, 
 	query.Set("response_type", "code")
 	query.Set("scope", "openid email profile groups")
 	query.Set("state", state)
+	if nonce != "" {
+		query.Set("nonce", nonce)
+	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
@@ -216,6 +314,7 @@ type oidcClaims struct {
 	Email   string
 	Name    string
 	Groups  []string
+	Nonce   string
 }
 
 type oidcStaticKeyVerifier struct {
@@ -226,12 +325,16 @@ type oidcStaticKeyVerifier struct {
 }
 
 func newOIDCIDTokenVerifier(cfg JWTConfig) (oidcIDTokenVerifier, error) {
+	if cfg.OIDCJWKSURL == "" && (cfg.OIDCPublicKeyPEM != "" || cfg.OIDCPublicKeyFile != "") {
+		return newOIDCStaticKeyVerifier(cfg)
+	}
+	cfg = withDexOIDCDefaults(cfg)
 	if cfg.OIDCJWKSURL != "" && cfg.OIDCIssuerURL != "" && cfg.OIDCClientID != "" {
 		return &oidcJWKSVerifier{
 			jwksURL:    cfg.OIDCJWKSURL,
 			issuer:     cfg.OIDCIssuerURL,
 			audience:   cfg.OIDCClientID,
-			httpClient: http.DefaultClient,
+			httpClient: newOIDCHTTPClient(),
 			now:        time.Now,
 		}, nil
 	}
@@ -264,11 +367,15 @@ func (v *oidcStaticKeyVerifier) Verify(ctx context.Context, idToken string) (oid
 }
 
 type oidcJWKSVerifier struct {
-	jwksURL    string
-	issuer     string
-	audience   string
-	httpClient *http.Client
-	now        func() time.Time
+	jwksURL     string
+	issuer      string
+	audience    string
+	httpClient  *http.Client
+	now         func() time.Time
+	cacheTTL    time.Duration
+	cacheMu     sync.Mutex
+	cachedKeys  map[string]*rsa.PublicKey
+	cachedUntil time.Time
 }
 
 func (v *oidcJWKSVerifier) Verify(ctx context.Context, idToken string) (oidcClaims, error) {
@@ -278,6 +385,22 @@ func (v *oidcJWKSVerifier) Verify(ctx context.Context, idToken string) (oidcClai
 func (v *oidcJWKSVerifier) keyFor(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	if kid == "" {
 		return nil, errInvalidJWT
+	}
+	now := v.now
+	if now == nil {
+		now = time.Now
+	}
+	cacheTTL := v.cacheTTL
+	if cacheTTL <= 0 {
+		cacheTTL = oidcJWKSCacheTTL
+	}
+	currentTime := now()
+	v.cacheMu.Lock()
+	defer v.cacheMu.Unlock()
+	if currentTime.Before(v.cachedUntil) {
+		if key := v.cachedKeys[kid]; key != nil {
+			return key, nil
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {
@@ -299,6 +422,8 @@ func (v *oidcJWKSVerifier) keyFor(ctx context.Context, kid string) (*rsa.PublicK
 	if err != nil {
 		return nil, err
 	}
+	v.cachedKeys = keys
+	v.cachedUntil = currentTime.Add(cacheTTL)
 	key := keys[kid]
 	if key == nil {
 		return nil, errInvalidJWT
@@ -339,13 +464,30 @@ func verifyOIDCIDToken(
 	if err := decodeSegment(parts[1], &payload); err != nil {
 		return oidcClaims{}, errInvalidJWT
 	}
-	if payload.Issuer != issuer || payload.Subject == "" || payload.Expires <= now().Unix() || !payload.Audience.Contains(audience) {
+	if now == nil {
+		now = time.Now
+	}
+	currentTime := now()
+	if payload.Issuer != issuer || payload.Subject == "" || !validOIDCTimeClaims(payload, currentTime) || !payload.Audience.Contains(audience) {
 		return oidcClaims{}, errInvalidJWT
 	}
 	if payload.Email == "" {
 		return oidcClaims{}, errInvalidJWT
 	}
-	return oidcClaims{Subject: payload.Subject, Email: payload.Email, Name: payload.Name, Groups: payload.Groups}, nil
+	return oidcClaims{Subject: payload.Subject, Email: payload.Email, Name: payload.Name, Groups: payload.Groups, Nonce: payload.Nonce}, nil
+}
+
+func validOIDCTimeClaims(payload oidcIDTokenPayload, now time.Time) bool {
+	if payload.Expires <= now.Add(-oidcTokenClockSkew).Unix() {
+		return false
+	}
+	if payload.NotBefore > 0 && time.Unix(payload.NotBefore, 0).After(now.Add(oidcTokenClockSkew)) {
+		return false
+	}
+	if payload.IssuedAt > 0 && time.Unix(payload.IssuedAt, 0).After(now.Add(oidcTokenClockSkew)) {
+		return false
+	}
+	return true
 }
 
 func parseJWKS(data []byte) (map[string]*rsa.PublicKey, error) {
@@ -364,7 +506,7 @@ func parseJWKS(data []byte) (map[string]*rsa.PublicKey, error) {
 	}
 	keys := map[string]*rsa.PublicKey{}
 	for _, item := range set.Keys {
-		if item.Kid == "" || item.Kty != "RSA" || item.N == "" || item.E == "" {
+		if item.Kid == "" || item.Kty != "RSA" || item.N == "" || item.E == "" || !validOIDCJWKUseAndAlg(item.Use, item.Alg) {
 			continue
 		}
 		nBytes, err := base64.RawURLEncoding.DecodeString(item.N)
@@ -382,19 +524,34 @@ func parseJWKS(data []byte) (map[string]*rsa.PublicKey, error) {
 		if e == 0 {
 			continue
 		}
-		keys[item.Kid] = &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: e}
+		key := &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: e}
+		if !validOIDCRSAPublicKey(key) {
+			continue
+		}
+		keys[item.Kid] = key
 	}
 	return keys, nil
 }
 
+func validOIDCJWKUseAndAlg(use string, alg string) bool {
+	return (use == "" || use == "sig") && (alg == "" || alg == "RS256")
+}
+
+func validOIDCRSAPublicKey(key *rsa.PublicKey) bool {
+	return key != nil && key.N != nil && key.N.BitLen() >= oidcMinRSAKeyBits && key.E > 1 && key.E%2 == 1
+}
+
 type oidcIDTokenPayload struct {
-	Issuer   string       `json:"iss"`
-	Subject  string       `json:"sub"`
-	Audience oidcAudience `json:"aud"`
-	Expires  int64        `json:"exp"`
-	Email    string       `json:"email"`
-	Name     string       `json:"name"`
-	Groups   []string     `json:"groups"`
+	Issuer    string       `json:"iss"`
+	Subject   string       `json:"sub"`
+	Audience  oidcAudience `json:"aud"`
+	Expires   int64        `json:"exp"`
+	IssuedAt  int64        `json:"iat"`
+	NotBefore int64        `json:"nbf"`
+	Email     string       `json:"email"`
+	Name      string       `json:"name"`
+	Groups    []string     `json:"groups"`
+	Nonce     string       `json:"nonce"`
 }
 
 type oidcAudience []string

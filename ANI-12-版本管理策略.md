@@ -72,7 +72,7 @@ v1.0.0
 
 | 类型 | 触发条件 |
 |---|---|
-| **MAJOR** | OpenAPI `/api/v1` 破坏性变更；Protobuf 字段删除/重编号/语义不兼容；数据库迁移需要人工处理或不可自动回滚；CRD `apiVersion` 不兼容升级；Helm values 结构不兼容；移除已有认证方式；多租户/RLS 安全模型破坏性调整；NATS subject 或 payload 不兼容；MinIO bucket/object layout 不兼容 |
+| **MAJOR** | API 契约 `/api/v1` 破坏性变更；Protobuf 字段删除/重编号/语义不兼容；数据库迁移需要人工处理或不可自动回滚；CRD `apiVersion` 不兼容升级；Helm values 结构不兼容；移除已有认证方式；多租户/RLS 安全模型破坏性调整；NATS subject 或 payload 不兼容；MinIO bucket/object layout 不兼容 |
 | **MINOR** | 新功能模块；新增 API/Proto 方法且向后兼容；新增认证方式；新增模型导入源；新增 CRD 字段且默认兼容；新增 Installer 部署目标；新增 SDK 能力；数据库只做向后兼容加法迁移 |
 | **PATCH** | Bug 修复；安全补丁；性能优化；非破坏性 UI 改进；文档修正；CI/构建修复；向后兼容的小型迁移 |
 | **Pre-release** | `-alpha.N` 内部开发验证；`-beta.N` 功能基本完成、待测试；`-rc.N` 发布候选，只允许修复阻断问题 |
@@ -83,7 +83,7 @@ v1.0.0
 
 ### 5.1 API / SDK
 
-- REST API 以 OpenAPI 为唯一契约来源。
+- REST API 以 API 契约（OpenAPI 3.1 YAML）为唯一来源。
 - gRPC API 以 Protobuf 为唯一契约来源。
 - `MINOR` 和 `PATCH` 不允许破坏已发布字段、枚举值、HTTP 状态语义和错误码语义。
 - 删除字段必须至少经历一个 `MINOR` 版本的 deprecated 周期。

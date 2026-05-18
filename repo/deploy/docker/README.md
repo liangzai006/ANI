@@ -37,6 +37,29 @@ docker compose -f deploy/docker/docker-compose.yml --profile tools up -d attu
 docker compose -f deploy/docker/docker-compose.yml --profile auth up -d dex
 ```
 
+Dex 开发配置位于 `deploy/docker/config/dex-dev.yaml`：
+
+| 项 | 值 |
+|---|---|
+| Issuer | `http://127.0.0.1:5556/dex` |
+| Client ID | `ani-console` |
+| Client Secret | `ani-console-secret` |
+| 测试账号 | `admin@ani.local` |
+| 测试密码 | `ani-dev-password` |
+
+auth-service 只需要配置 `AUTH_OIDC_ISSUER_URL`、`AUTH_OIDC_CLIENT_ID`、`AUTH_OIDC_CLIENT_SECRET`。
+Dex-compatible 端点会自动推导为 `{issuer}/auth`、`{issuer}/token`、`{issuer}/keys`；接入非 Dex-compatible IdP 时再显式覆盖 `AUTH_OIDC_AUTH_URL` / `AUTH_OIDC_TOKEN_URL` / `AUTH_OIDC_JWKS_URL`。
+
+## Dex smoke 验收
+
+具备 Docker 的环境执行：
+
+```bash
+make validate-auth-dex-smoke
+```
+
+该命令会启动 `auth` profile 的 Dex，并用 `scripts/smoke_auth_dex.py` 验证 discovery、JWKS、用户名密码登录、authorization code callback 和 token endpoint。无 Docker 的本地环境不执行此项；CI 或外部验收环境需要用该命令完成 M2.2 的真实 Dex 登录签收。
+
 ## 环境变量
 
 复制 `.env.example` 为 `.env`，按注释修改后各服务自动加载：

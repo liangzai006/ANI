@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,14 +16,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	authv1 "github.com/kubercloud/ani/pkg/generated/pb/auth/v1"
+	"github.com/kubercloud/ani/pkg/ports"
 	"github.com/kubercloud/ani/pkg/types"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const apiKeyEnv = "dev"
+const maxAPIKeyNameLength = 128
+const defaultAPIKeyRateLimitRPM int32 = 60
+const maxAPIKeyRateLimitRPM int32 = 10000
+
+var errAPIKeyRateLimitExceeded = errors.New("api key rate limit exceeded")
 
 type apiKeyStore struct {
-	db *pgxpool.Pool
+	db    *pgxpool.Pool
+	cache ports.CacheStore
 }
 
 type apiKeyPrincipal struct {
@@ -31,8 +39,8 @@ type apiKeyPrincipal struct {
 	Scopes   []string
 }
 
-func newAPIKeyStore(db *pgxpool.Pool) *apiKeyStore {
-	return &apiKeyStore{db: db}
+func newAPIKeyStore(db *pgxpool.Pool, cache ports.CacheStore) *apiKeyStore {
+	return &apiKeyStore{db: db, cache: cache}
 }
 
 func (s *apiKeyStore) create(ctx context.Context, req *authv1.CreateAPIKeyRequest) (*authv1.CreateAPIKeyResponse, error) {
@@ -40,8 +48,13 @@ func (s *apiKeyStore) create(ctx context.Context, req *authv1.CreateAPIKeyReques
 	if err != nil || tenantID == uuid.Nil {
 		return nil, fmt.Errorf("invalid tenant_id")
 	}
-	if req.GetName() == "" {
-		return nil, fmt.Errorf("name required")
+	name, err := normalizeAPIKeyName(req.GetName())
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := normalizeAPIKeyScopes(req.GetScopes())
+	if err != nil {
+		return nil, err
 	}
 	var userID uuid.UUID
 	if req.GetUserId() != "" {
@@ -50,9 +63,9 @@ func (s *apiKeyStore) create(ctx context.Context, req *authv1.CreateAPIKeyReques
 			return nil, fmt.Errorf("invalid user_id")
 		}
 	}
-	rateLimit := req.GetRateLimitRpm()
-	if rateLimit <= 0 {
-		rateLimit = 60
+	rateLimit, err := normalizeAPIKeyRateLimit(req.GetRateLimitRpm())
+	if err != nil {
+		return nil, err
 	}
 
 	rawKey, err := generateAPIKey(tenantID)
@@ -74,11 +87,12 @@ func (s *apiKeyStore) create(ctx context.Context, req *authv1.CreateAPIKeyReques
 
 	var keyID uuid.UUID
 	var expiresAt any
-	if req.GetExpiresAt() != nil {
-		if err := req.GetExpiresAt().CheckValid(); err != nil {
-			return nil, fmt.Errorf("invalid expires_at")
-		}
-		expiresAt = req.GetExpiresAt().AsTime()
+	expiresAtTime, err := normalizeAPIKeyExpiresAt(req.GetExpiresAt(), time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if !expiresAtTime.IsZero() {
+		expiresAt = expiresAtTime
 	}
 	var userIDArg any
 	if userID != uuid.Nil {
@@ -90,7 +104,7 @@ func (s *apiKeyStore) create(ctx context.Context, req *authv1.CreateAPIKeyReques
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, tenantID, userIDArg, req.GetName(), keyHash, keyPrefix, req.GetScopes(), rateLimit, expiresAt).Scan(&keyID)
+	`, tenantID, userIDArg, name, keyHash, keyPrefix, scopes, rateLimit, expiresAt).Scan(&keyID)
 	if err != nil {
 		return nil, fmt.Errorf("insert api key: %w", err)
 	}
@@ -223,30 +237,84 @@ func (s *apiKeyStore) validate(ctx context.Context, rawKey string) (*apiKeyPrinc
 
 	var principal apiKeyPrincipal
 	var userID pgtype.UUID
+	var rateLimitRPM int32
 	err = tx.QueryRow(ctx, `
-		SELECT tenant_id, user_id, scopes
+		SELECT tenant_id, user_id, scopes, rate_limit_rpm
 		FROM api_keys
 		WHERE tenant_id=$1
 		  AND key_hash=$2
 		  AND revoked_at IS NULL
 		  AND (expires_at IS NULL OR expires_at > NOW())
-	`, tenantID, hashAPIKey(rawKey)).Scan(&principal.TenantID, &userID, &principal.Scopes)
+	`, tenantID, hashAPIKey(rawKey)).Scan(&principal.TenantID, &userID, &principal.Scopes, &rateLimitRPM)
 	if err != nil {
 		return nil, err
 	}
 	if userID.Valid {
 		principal.UserID = uuid.UUID(userID.Bytes)
 	}
+	keyHash := hashAPIKey(rawKey)
+	if err := s.enforceRateLimit(ctx, keyHash, rateLimitRPM); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE api_keys SET last_used_at=NOW()
 		WHERE tenant_id=$1 AND key_hash=$2
-	`, tenantID, hashAPIKey(rawKey)); err != nil {
+	`, tenantID, keyHash); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &principal, nil
+}
+
+func normalizeAPIKeyName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", fmt.Errorf("name required")
+	}
+	if len(name) > maxAPIKeyNameLength {
+		return "", fmt.Errorf("name too long")
+	}
+	return name, nil
+}
+
+func normalizeAPIKeyExpiresAt(value *timestamppb.Timestamp, now time.Time) (time.Time, error) {
+	if value == nil {
+		return time.Time{}, nil
+	}
+	if err := value.CheckValid(); err != nil {
+		return time.Time{}, fmt.Errorf("invalid expires_at")
+	}
+	expiresAt := value.AsTime()
+	if !expiresAt.After(now) {
+		return time.Time{}, fmt.Errorf("expires_at must be in the future")
+	}
+	return expiresAt, nil
+}
+
+func normalizeAPIKeyRateLimit(value int32) (int32, error) {
+	if value <= 0 {
+		return defaultAPIKeyRateLimitRPM, nil
+	}
+	if value > maxAPIKeyRateLimitRPM {
+		return 0, fmt.Errorf("rate_limit_rpm too high")
+	}
+	return value, nil
+}
+
+func (s *apiKeyStore) enforceRateLimit(ctx context.Context, keyHash string, limitRPM int32) error {
+	if s == nil || s.cache == nil || limitRPM <= 0 {
+		return nil
+	}
+	count, err := s.cache.Increment(ctx, "api-key:rate:"+keyHash, time.Minute)
+	if err != nil {
+		return fmt.Errorf("api key rate limit check: %w", err)
+	}
+	if count > int64(limitRPM) {
+		return errAPIKeyRateLimitExceeded
+	}
+	return nil
 }
 
 func generateAPIKey(tenantID uuid.UUID) (string, error) {
@@ -280,6 +348,64 @@ func prefixAPIKey(rawKey string) string {
 		return rawKey
 	}
 	return rawKey[:24]
+}
+
+func normalizeAPIKeyScopes(input []string) ([]string, error) {
+	if len(input) == 0 {
+		return nil, fmt.Errorf("at least one api key scope is required")
+	}
+	seen := map[string]struct{}{}
+	scopes := make([]string, 0, len(input))
+	for _, raw := range input {
+		scope := strings.TrimSpace(raw)
+		if scope == "" {
+			return nil, fmt.Errorf("api key scope cannot be empty")
+		}
+		parts := strings.Split(scope, ":")
+		if len(parts) == 3 {
+			if parts[0] != "scope" {
+				return nil, fmt.Errorf("invalid api key scope %q", raw)
+			}
+			parts = parts[1:]
+		}
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid api key scope %q", raw)
+		}
+		resource := strings.TrimSpace(parts[0])
+		action := strings.TrimSpace(parts[1])
+		if !validScopePart(resource) || !validScopePart(action) {
+			return nil, fmt.Errorf("invalid api key scope %q", raw)
+		}
+		normalized := "scope:" + resource + ":" + action
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		scopes = append(scopes, normalized)
+	}
+	return scopes, nil
+}
+
+func validScopePart(value string) bool {
+	if value == "*" {
+		return true
+	}
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch == '-' || ch == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func rollbackTx(ctx context.Context, tx pgx.Tx) {

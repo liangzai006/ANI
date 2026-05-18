@@ -2,6 +2,16 @@
 
 广州常青云科技有限公司 | AI 专有云平台
 
+## 当前状态
+
+```text
+当前阶段：Phase 1 / Sprint 2
+当前优先级：SPEC-CORE-ALPHA → M1-INSTANCE-U → M1-INSTANCE-V
+当前执行入口：CURRENT-SPRINT.md
+全局计划入口：../ANI-06-开发计划.md
+文档导航：../ANI-DOCS-INDEX.md
+```
+
 ## 代码仓库结构
 
 ```
@@ -30,12 +40,11 @@ repo/
 ├── installer/ani-installer/    # Go 安装程序（bubbletea TUI）
 │
 ├── api/
-│   ├── openapi/                # OpenAPI 3.1 Spec（v1.yaml 为主）
+│   ├── openapi/                # API 契约（v1.yaml 为 Core 唯一真实来源）
 │   └── proto/                  # Protobuf 定义（内部 gRPC）
 │
 ├── deploy/
 │   ├── helm/                   # ANI 平台 Helm Charts
-│   ├── karmada/                # Karmada 多集群配置
 │   └── docker/                 # docker-compose 本地开发环境
 │
 ├── scripts/                    # 构建、发布、维护脚本
@@ -47,18 +56,25 @@ repo/
 ## 快速开始
 
 ```bash
-# 克隆后启动本地开发环境
-make deps          # 启动 PostgreSQL、MinIO、NATS、Redis、Milvus
-make gen-api       # 从 OpenAPI Spec 生成代码
-make dev-gateway   # 启动 ANI Gateway（热重载）
-make dev-console   # 启动 Console 前端（Vite HMR）
+# 进入仓库后先做基础验证
+make build
+make test
+make validate-architecture
+
+# 当前冲刺任务和更细的启动方式见 CURRENT-SPRINT.md
 ```
 
 详见：[本地开发环境搭建指南](deploy/docker/README.md)
 
 ## 文档
 
-产品规划文档位于 `../`（父目录），按 `ANI-00` 至 `ANI-12` 顺序阅读。
+产品规划文档位于 `../`（父目录）。新开发者或 AI 工具不要从头顺读所有文档，推荐顺序：
+
+1. `../ANI-DOCS-INDEX.md`
+2. `../CLAUDE.md`
+3. `CURRENT-SPRINT.md`
+4. `../ANI-06-开发计划.md` Section 零和当前 Sprint
+5. `api/openapi/v1.yaml`
 
 版本管理：
 - 策略文档：`../ANI-12-版本管理策略.md`

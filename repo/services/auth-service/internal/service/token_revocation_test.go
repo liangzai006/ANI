@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"strconv"
 	"testing"
 	"time"
 
@@ -85,8 +86,13 @@ func (m *memoryCache) Delete(_ context.Context, key string) error {
 }
 
 func (m *memoryCache) Increment(_ context.Context, key string, _ time.Duration) (int64, error) {
-	m.values[key] = []byte("1")
-	return 1, nil
+	var current int64
+	if raw, ok := m.values[key]; ok {
+		current, _ = strconv.ParseInt(string(raw), 10, 64)
+	}
+	current++
+	m.values[key] = []byte(strconv.FormatInt(current, 10))
+	return current, nil
 }
 
 func (m *memoryCache) Exists(_ context.Context, key string) (bool, error) {

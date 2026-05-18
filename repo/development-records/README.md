@@ -6,6 +6,8 @@
 > - **当前冲刺任务** → `repo/CURRENT-SPRINT.md`（每冲刺更新）
 > - **已完成批次详情** → 本文件（每批次完成后追加）
 
+> 当前执行已切换到 **Sprint 2**。本文只做已完成批次归档，不作为当前任务清单使用。
+
 ---
 
 ## 已完成批次（按完成时间排列）
@@ -16,6 +18,13 @@
 |---|---|
 | V8-ARCH | Core/Services 分层、ANI-02/06 重写、CLAUDE.md 强制约定 |
 | AWS-HARDENING | /healthz /readyz、idempotency_key port、ReconcileController port、operations DB 表、permissions schema |
+
+### Sprint 1 Foundation（2026-05）
+
+| 批次 | 内容摘要 | 文件 |
+|---|---|---|
+| M1-HEALTH-A | Gateway/Auth/Model/Task 标准 /healthz 与 /readyz 探针 | m1-health-a-health-endpoints.md |
+| M1-IDEM-A | 实例 create/lifecycle 幂等锁、DB 原子冲突回放和 bootstrap 接线 | m1-idem-a-idempotency-wire-up.md |
 
 ### M1 基础设施底座（2026-05）
 
@@ -53,6 +62,7 @@
 | M1-INSTANCE-Q | KubernetesLifecycleExecutor | m1-instance-q-kubernetes-lifecycle-execution.md |
 | M1-INSTANCE-R | KubernetesInstanceOps | m1-instance-r-kubernetes-ops-execution.md |
 | M1-INSTANCE-S | VM console/VNC/serial remote ops session 边界 | — |
+| M1-INSTANCE-T | 操作语义横切基础：operation_id、timeline、幂等回放和操作查询 | m1-instance-t-operation-semantics.md |
 | M1-E2E-A | M1 端到端集成剖面 | m1-e2e-a-instance-profile.md |
 | M1-E2E-B | M1 real provider integration regression profile | m1-e2e-b-real-provider-profile.md |
 
@@ -73,6 +83,7 @@
 | M2.1-TASK-A/B | task-service + transactional outbox | m2-1-task-a-b-task-service-outbox.md |
 | M2.1-TASK-C | worker mutation RPCs | m2-1-task-c-worker-mutations.md |
 | M2.2-AUTH-A~K | auth-service 完整实现（JWT/OIDC/JWKS/RBAC/API Key）| m2-2-auth-*.md |
+| M2.2-AUTH-FINAL | Auth 生产收尾：OIDC/Dex 护栏、Gateway Auth REST、API Key 管理、合同守卫与 Docker Dex smoke | m2-2-auth-final-production-closeout.md |
 
 ---
 

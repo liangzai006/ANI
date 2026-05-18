@@ -41,6 +41,15 @@ func GetTenantID(c *app.RequestContext) string {
 	return ""
 }
 
+// GetUserID retrieves the user ID set by the Auth middleware.
+func GetUserID(c *app.RequestContext) string {
+	v, _ := c.Get("user_id")
+	if id, ok := v.(string); ok {
+		return id
+	}
+	return ""
+}
+
 // respondError writes a standardized ANI error response.
 func respondError(c *app.RequestContext, statusCode int, code, message string) {
 	c.JSON(statusCode, utils.H{

@@ -40,7 +40,7 @@ func NewAuthService(db *pgxpool.Pool, cache ports.CacheStore, jwtCfg JWTConfig) 
 	return &AuthService{
 		jwt:           validator,
 		issuer:        issuer,
-		apiKeys:       newAPIKeyStore(db),
+		apiKeys:       newAPIKeyStore(db, cache),
 		refreshTokens: newRefreshTokenStore(db),
 		blocklist:     blocklist,
 		oidc:          newOIDCLoginManager(cache, jwtCfg, newOIDCSessionStore(db, newOIDCGroupRoleMapper(jwtCfg.OIDCGroupRoleMapJSON)), issuer),
@@ -101,6 +101,9 @@ func (s *AuthService) ValidateToken(ctx context.Context, req *authv1.ValidateTok
 	if isAPIKey(req.GetToken()) {
 		principal, err := s.apiKeys.validate(ctx, req.GetToken())
 		if err != nil {
+			if errors.Is(err, errAPIKeyRateLimitExceeded) {
+				return nil, status.Error(codes.ResourceExhausted, "api key rate limit exceeded")
+			}
 			return nil, status.Error(codes.Unauthenticated, "invalid api key")
 		}
 		return &commonv1.TenantContext{
@@ -148,7 +151,7 @@ func (s *AuthService) CheckPermission(_ context.Context, req *authv1.CheckPermis
 		}
 		return deny("user role cannot perform this action"), nil
 	}
-	return deny("no matching role"), nil
+	return deny("no matching role or scope"), nil
 }
 
 func (s *AuthService) CreateAPIKey(ctx context.Context, req *authv1.CreateAPIKeyRequest) (*authv1.CreateAPIKeyResponse, error) {

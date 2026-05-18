@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,27 +72,30 @@ func (s *demoInstanceStore) List(_ context.Context, tenantID string, kind ports.
 var _ ports.WorkloadInstanceStore = (*demoInstanceStore)(nil)
 
 type demoInstanceAPI struct {
-	service ports.WorkloadInstanceService
+	service    ports.WorkloadInstanceService
+	operations ports.WorkloadOperationStore
 }
 
 type demoCreateInstanceRequest struct {
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	CPU         string `json:"cpu"`
-	Memory      string `json:"memory"`
-	BootImage   string `json:"boot_image"`
-	Image       string `json:"image"`
-	GPUVendor   string `json:"gpu_vendor"`
-	GPUModel    string `json:"gpu_model"`
-	GPUCount    int    `json:"gpu_count"`
-	AutoStart   *bool  `json:"auto_start"`
-	Description string `json:"description"`
+	Kind           string `json:"kind"`
+	Name           string `json:"name"`
+	CPU            string `json:"cpu"`
+	Memory         string `json:"memory"`
+	BootImage      string `json:"boot_image"`
+	Image          string `json:"image"`
+	GPUVendor      string `json:"gpu_vendor"`
+	GPUModel       string `json:"gpu_model"`
+	GPUCount       int    `json:"gpu_count"`
+	AutoStart      *bool  `json:"auto_start"`
+	Description    string `json:"description"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type demoLifecycleRequest struct {
-	Action string `json:"action"`
-	CPU    string `json:"cpu"`
-	Memory string `json:"memory"`
+	Action         string `json:"action"`
+	CPU            string `json:"cpu"`
+	Memory         string `json:"memory"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type demoConsoleRequest struct {
@@ -116,6 +120,7 @@ type demoInstanceResponse struct {
 	Kind         string   `json:"kind"`
 	Status       string   `json:"status"`
 	Provider     string   `json:"provider"`
+	OperationID  string   `json:"operation_id,omitempty"`
 	ResourceRefs []string `json:"resource_refs"`
 	Endpoint     string   `json:"endpoint"`
 	CreatedAt    string   `json:"created_at"`
@@ -123,11 +128,28 @@ type demoInstanceResponse struct {
 }
 
 type demoInstanceCreateResponse struct {
-	Instance   demoInstanceResponse `json:"instance"`
-	AuditID    string               `json:"audit_id"`
-	Manifests  []demoManifest       `json:"manifests"`
-	Timeline   []demoTimelineStep   `json:"timeline"`
-	DemoNotice string               `json:"demo_notice"`
+	Instance    demoInstanceResponse `json:"instance"`
+	OperationID string               `json:"operation_id"`
+	AuditID     string               `json:"audit_id"`
+	Manifests   []demoManifest       `json:"manifests"`
+	Timeline    []demoTimelineStep   `json:"timeline"`
+	DemoNotice  string               `json:"demo_notice"`
+}
+
+type demoOperationResponse struct {
+	ID             string             `json:"id"`
+	TenantID       string             `json:"tenant_id"`
+	InstanceID     string             `json:"instance_id"`
+	Operation      string             `json:"operation"`
+	Status         string             `json:"status"`
+	IdempotencyKey string             `json:"idempotency_key,omitempty"`
+	RequestedBy    string             `json:"requested_by"`
+	FailureReason  string             `json:"failure_reason,omitempty"`
+	FailureMessage string             `json:"failure_message,omitempty"`
+	RetryEligible  bool               `json:"retry_eligible"`
+	Steps          []demoTimelineStep `json:"steps"`
+	CreatedAt      string             `json:"created_at"`
+	UpdatedAt      string             `json:"updated_at"`
 }
 
 type demoManifest struct {
@@ -145,6 +167,7 @@ type demoTimelineStep struct {
 
 func newDemoInstanceAPI() *demoInstanceAPI {
 	store := newDemoInstanceStore()
+	operations := runtimeadapter.NewLocalOperationStore()
 	planner := runtimeadapter.NewPlanningRuntime(runtimeadapter.WithGPUInventory(demoGPUInventory{}))
 	orchestrator := runtimeadapter.NewLocalInstanceOrchestrator(
 		planner,
@@ -157,12 +180,13 @@ func newDemoInstanceAPI() *demoInstanceAPI {
 		runtimeadapter.NewLocalStatusReconciler(),
 		runtimeadapter.WithInstanceStore(store),
 	)
-	service := runtimeadapter.NewLocalInstanceService(
+	service := runtimeadapter.NewLocalInstanceServiceWithOptions(
 		orchestrator,
 		store,
 		runtimeadapter.NewLocalInstanceOpsGuard(runtimeadapter.WithInstanceOpsEnabled(true)),
+		runtimeadapter.WithOperationStore(operations),
 	)
-	return &demoInstanceAPI{service: service}
+	return &demoInstanceAPI{service: service, operations: operations}
 }
 
 func registerDemoInstances(v1 *route.RouterGroup) {
@@ -170,10 +194,13 @@ func registerDemoInstances(v1 *route.RouterGroup) {
 	v1.GET("/demo/instances", api.list)
 	v1.POST("/demo/instances", api.create)
 	v1.GET("/demo/instances/:instance_id", api.get)
+	v1.GET("/demo/instances/:instance_id/operations", api.listOperations)
 	v1.POST("/demo/instances/:instance_id/lifecycle", api.lifecycle)
 	v1.GET("/demo/instances/:instance_id/ops/:action", api.ops)
 	v1.POST("/demo/instances/:instance_id/console", api.console)
 	v1.POST("/demo/instances/:instance_id/console/exec", api.consoleExec)
+	v1.GET("/instances/:instance_id/operations", api.listOperations)
+	v1.GET("/instance-operations/:operation_id", api.getOperation)
 }
 
 func (api *demoInstanceAPI) create(ctx context.Context, c *app.RequestContext) {
@@ -188,6 +215,7 @@ func (api *demoInstanceAPI) create(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	result, err := api.service.Create(ctx, ports.WorkloadInstanceCreateRequest{
+		IdempotencyKey:  req.IdempotencyKey,
 		Spec:            spec,
 		UserID:          demoUserID(c),
 		PermissionProof: "demo:instance:create",
@@ -195,6 +223,14 @@ func (api *demoInstanceAPI) create(ctx context.Context, c *app.RequestContext) {
 	})
 	if err != nil {
 		writeDemoError(c, http.StatusBadRequest, "INSTANCE_CREATE_FAILED", err.Error())
+		return
+	}
+	if result.IdempotentReplay && strings.HasPrefix(result.Ref.InstanceID, "pending:") {
+		c.JSON(http.StatusConflict, map[string]any{
+			"code":         "IDEMPOTENT_REPLAY_IN_PROGRESS",
+			"message":      "request is already accepted and still in progress",
+			"operation_id": result.OperationID,
+		})
 		return
 	}
 	record, err := api.service.Get(ctx, ports.WorkloadInstanceGetRequest{
@@ -205,12 +241,17 @@ func (api *demoInstanceAPI) create(ctx context.Context, c *app.RequestContext) {
 		writeDemoError(c, http.StatusInternalServerError, "INSTANCE_LOOKUP_FAILED", err.Error())
 		return
 	}
-	c.JSON(http.StatusCreated, demoInstanceCreateResponse{
-		Instance:   demoInstanceFromRecord(record),
-		AuditID:    result.AuditID,
-		Manifests:  demoManifests(result.Manifests),
-		Timeline:   demoTimeline(result),
-		DemoNotice: "demo profile uses the M1 instance service with local apply enabled; set kubernetes_rest provider separately for live cluster execution.",
+	status := http.StatusCreated
+	if result.IdempotentReplay {
+		status = http.StatusConflict
+	}
+	c.JSON(status, demoInstanceCreateResponse{
+		Instance:    demoInstanceFromRecord(record),
+		OperationID: result.OperationID,
+		AuditID:     result.AuditID,
+		Manifests:   demoManifests(result.Manifests),
+		Timeline:    demoTimeline(result),
+		DemoNotice:  "demo profile uses the M1 instance service with local apply enabled; set kubernetes_rest provider separately for live cluster execution.",
 	})
 }
 
@@ -250,6 +291,7 @@ func (api *demoInstanceAPI) lifecycle(ctx context.Context, c *app.RequestContext
 		return
 	}
 	lifecycle := ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  req.IdempotencyKey,
 		TenantID:        demoTenantID(c),
 		InstanceID:      c.Param("instance_id"),
 		UserID:          demoUserID(c),
@@ -271,6 +313,7 @@ func (api *demoInstanceAPI) lifecycle(ctx context.Context, c *app.RequestContext
 		record, err = api.service.Resize(ctx, ports.WorkloadInstanceResizeRequest{
 			TenantID:        lifecycle.TenantID,
 			InstanceID:      lifecycle.InstanceID,
+			IdempotencyKey:  lifecycle.IdempotencyKey,
 			Resources:       ports.WorkloadResourceRequest{CPU: firstNonEmpty(req.CPU, "4"), Memory: firstNonEmpty(req.Memory, "8Gi")},
 			UserID:          lifecycle.UserID,
 			PermissionProof: lifecycle.PermissionProof,
@@ -287,6 +330,33 @@ func (api *demoInstanceAPI) lifecycle(ctx context.Context, c *app.RequestContext
 		return
 	}
 	c.JSON(http.StatusOK, demoInstanceFromRecord(record))
+}
+
+func (api *demoInstanceAPI) listOperations(ctx context.Context, c *app.RequestContext) {
+	result, err := api.operations.ListOperations(ctx, ports.WorkloadOperationListRequest{
+		TenantID:   demoTenantID(c),
+		InstanceID: c.Param("instance_id"),
+		Limit:      queryInt(c, "limit", 20),
+		Cursor:     c.Query("cursor"),
+	})
+	if err != nil {
+		writeDemoError(c, http.StatusBadRequest, "INSTANCE_OPERATIONS_FAILED", err.Error())
+		return
+	}
+	items := make([]demoOperationResponse, 0, len(result.Items))
+	for _, item := range result.Items {
+		items = append(items, demoOperationFromRecord(item))
+	}
+	c.JSON(http.StatusOK, map[string]any{"items": items, "total": len(items), "next_cursor": result.NextCursor})
+}
+
+func (api *demoInstanceAPI) getOperation(ctx context.Context, c *app.RequestContext) {
+	record, err := api.operations.GetOperation(ctx, demoTenantID(c), c.Param("operation_id"))
+	if err != nil {
+		writeDemoError(c, http.StatusNotFound, "INSTANCE_OPERATION_NOT_FOUND", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, demoOperationFromRecord(record))
 }
 
 func (api *demoInstanceAPI) ops(ctx context.Context, c *app.RequestContext) {
@@ -544,6 +614,7 @@ func demoInstanceFromRecord(record ports.WorkloadInstanceRecord) demoInstanceRes
 		Kind:         string(record.Kind),
 		Status:       string(record.Status.State),
 		Provider:     record.Provider,
+		OperationID:  record.OperationID,
 		ResourceRefs: record.ResourceRefs,
 		Endpoint:     record.Status.Endpoint,
 		CreatedAt:    record.CreatedAt.Format(time.RFC3339),
@@ -572,6 +643,32 @@ func demoTimeline(result ports.WorkloadInstanceCreateResult) []demoTimelineStep 
 		{Name: "Dry-run", Status: boolStatus(result.DryRun.Accepted), Detail: result.DryRun.Reason},
 		{Name: "Apply", Status: boolStatus(result.Apply.Applied), Detail: result.Apply.Reason},
 		{Name: "状态回写", Status: string(result.FinalStatus.State), Detail: result.FinalStatus.Reason},
+	}
+}
+
+func demoOperationFromRecord(record ports.WorkloadOperationRecord) demoOperationResponse {
+	steps := make([]demoTimelineStep, 0, len(record.Steps))
+	for _, step := range record.Steps {
+		steps = append(steps, demoTimelineStep{
+			Name:   step.StepName,
+			Status: string(step.Status),
+			Detail: step.Message,
+		})
+	}
+	return demoOperationResponse{
+		ID:             record.ID,
+		TenantID:       record.TenantID,
+		InstanceID:     record.InstanceID,
+		Operation:      string(record.Operation),
+		Status:         string(record.Status),
+		IdempotencyKey: record.IdempotencyKey,
+		RequestedBy:    record.RequestedBy,
+		FailureReason:  record.FailureReason,
+		FailureMessage: record.FailureMessage,
+		RetryEligible:  record.RetryEligible,
+		Steps:          steps,
+		CreatedAt:      record.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:      record.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -613,6 +710,18 @@ func boolStatus(ok bool) string {
 		return "completed"
 	}
 	return "blocked"
+}
+
+func queryInt(c *app.RequestContext, name string, fallback int) int {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func maxInt(value int, fallback int) int {

@@ -87,7 +87,7 @@ func setTenantContext(c *app.RequestContext, tenantID, userID string, roles []st
 
 func isPublicPath(path string) bool {
 	switch path {
-	case "/health", "/ready", "/api/v1/branding", "/api/v1/auth/token", "/api/v1/auth/refresh":
+	case "/health", "/ready", "/healthz", "/readyz", "/api/v1/branding", "/api/v1/auth/oidc/begin", "/api/v1/auth/token", "/api/v1/auth/refresh":
 		return true
 	default:
 		return false

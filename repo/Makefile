@@ -5,7 +5,7 @@
         tools-proto gen-api gen-proto \
         build build-gateway build-auth-service build-model-service build-task-service \
         test test-go test-python test-cover \
-        validate-infra validate-gpu-preflight validate-gpu-contracts validate-runtime-contracts validate-instance-contracts validate-instance-planner validate-instance-renderer validate-instance-admission validate-instance-audit validate-instance-provider-dry-run validate-instance-provider-apply validate-instance-status-reconcile validate-instance-orchestrator validate-instance-store validate-instance-provider-adapter validate-instance-service validate-instance-lifecycle-ops validate-m1-e2e validate-kubernetes-provider-execution validate-kubernetes-rest-client validate-kubernetes-bootstrap-wiring validate-kubernetes-lifecycle-execution validate-kubernetes-ops-execution validate-m1-real-provider-profile validate-demo-instances validate-architecture \
+        validate-infra validate-gpu-preflight validate-gpu-contracts validate-runtime-contracts validate-instance-contracts validate-instance-planner validate-instance-renderer validate-instance-admission validate-instance-audit validate-instance-provider-dry-run validate-instance-provider-apply validate-instance-status-reconcile validate-instance-orchestrator validate-instance-store validate-instance-provider-adapter validate-instance-service validate-instance-lifecycle-ops validate-m1-e2e validate-kubernetes-provider-execution validate-kubernetes-rest-client validate-kubernetes-bootstrap-wiring validate-kubernetes-lifecycle-execution validate-kubernetes-ops-execution validate-m1-real-provider-profile validate-demo-instances validate-auth-contract validate-auth-dex-smoke validate-architecture \
         lint lint-go lint-python lint-ts \
         dev-gateway dev-console \
         image image-gateway \
@@ -61,6 +61,8 @@ help:
 	@echo "    make validate-kubernetes-ops-execution 校验 M1-INSTANCE-R Kubernetes visual ops execution"
 	@echo "    make validate-m1-real-provider-profile 校验 M1-E2E-B real provider 回归剖面"
 	@echo "    make validate-demo-instances 校验阶段性实例 Demo API"
+	@echo "    make validate-auth-contract 校验 M2.2 Auth Gateway/API 契约一致性"
+	@echo "    make validate-auth-dex-smoke 校验 M2.2 Docker Dex OIDC auth-code flow（需 Docker）"
 	@echo "    make validate-architecture 校验 ports/adapters 组件边界"
 	@echo ""
 	@echo "  代码检查:"
@@ -155,7 +157,7 @@ build-task-service:
 	@echo "✅ bin/task-service"
 
 # ── 测试 ──────────────────────────────────────────────────────────────────────
-test: validate-architecture test-go test-python
+test: validate-architecture validate-auth-contract test-go test-python
 
 test-go:
 	@echo "→ 运行 Go 单元测试..."
@@ -379,6 +381,17 @@ validate-demo-instances:
 	@echo "→ 校验阶段性 VM/container/GPU container Demo API..."
 	$(GO_CACHE_ENV) go test ./services/ani-gateway/internal/router -run TestDemoInstanceService -v
 	@echo "✅ staged instance demo API valid"
+
+validate-auth-contract:
+	@echo "→ 校验 M2.2 Auth Gateway/API 契约..."
+	python scripts/validate_auth_gateway_contract.py
+	@echo "✅ Auth Gateway/API contract valid"
+
+validate-auth-dex-smoke:
+	@echo "→ 启动 Dex 并校验 OIDC auth-code flow..."
+	$(COMPOSE) --profile auth up -d dex
+	python scripts/smoke_auth_dex.py
+	@echo "✅ Dex OIDC smoke passed"
 
 validate-architecture:
 	@echo "→ 校验开源组件 ports/adapters 边界..."

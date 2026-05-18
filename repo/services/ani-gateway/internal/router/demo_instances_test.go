@@ -103,6 +103,47 @@ func TestDemoInstanceServiceLifecycleAndOps(t *testing.T) {
 	}
 }
 
+func TestDemoInstanceOperationsAreQueryable(t *testing.T) {
+	api := newDemoInstanceAPI()
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "container", Name: "demo-ops"}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		IdempotencyKey:  "demo-create-ops",
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	if created.OperationID == "" {
+		t.Fatalf("OperationID is empty")
+	}
+	list, err := api.operations.ListOperations(context.Background(), ports.WorkloadOperationListRequest{
+		TenantID:   "tenant-a",
+		InstanceID: created.Ref.InstanceID,
+	})
+	if err != nil {
+		t.Fatalf("ListOperations error = %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("operations = %d, want 1", len(list.Items))
+	}
+	if len(list.Items[0].Steps) == 0 {
+		t.Fatalf("operation steps are empty")
+	}
+	got, err := api.operations.GetOperation(context.Background(), "tenant-a", created.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation error = %v", err)
+	}
+	if got.ID != created.OperationID || got.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation id=%q status=%s, want %q/succeeded", got.ID, got.Status, created.OperationID)
+	}
+}
+
 func TestDemoInstanceServiceVMConsoleSession(t *testing.T) {
 	api := newDemoInstanceAPI()
 	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "vm", Name: "demo-vm"}, "tenant-a")

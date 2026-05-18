@@ -1,6 +1,7 @@
 # KuberCloud ANI · 产品路线图
 
-> 版本 V1 | 广州常青云科技有限公司 | 内部产品规划文件
+> 版本 V1.1 | 广州常青云科技有限公司 | 内部产品规划文件
+> 最后更新：2026-05-19（补充 Core/Services 解锁节奏）
 
 ---
 
@@ -31,6 +32,17 @@ Phase 与版本号关系：
 - `v1.0.0` 之前统一使用 `v0.x.y` 或 `v1.0.0-alpha/beta/rc.N` 预发布版本。
 - Phase 2/3 的功能可以通过 `v1.x` 或未来 `v2.x` 交付，是否升级 MAJOR 取决于 API/DB/CRD/部署兼容性，而不是路线图阶段编号。
 
+### 当前开发节奏（与 ANI-06 对齐）
+
+当前执行阶段是 **Phase 1 / Sprint 2**，不是 Phase 2。Phase 1 内部拆成两个交付对象：
+
+| 交付对象 | 关键门禁 | 说明 |
+|---|---|---|
+| ANI Services 开发团队 | 2026-06-10 Core API Alpha Freeze；2026-06-30 Core Dev Profile Ready + SDK Alpha | 先让 Services 能基于稳定 API/SDK 开发 |
+| 最终客户 v1.0.0 | 2026-09-30 | ANI Core v1.0.0 + ANI Services P0 可交付 |
+
+路线图只定义 Phase 1/2/3 的产品阶段；当前 Sprint、批次状态和验收命令以 `ANI-06-开发计划.md` 和 `repo/CURRENT-SPRINT.md` 为准。
+
 ---
 
 ## 三、三阶段路线图
@@ -43,7 +55,6 @@ Phase 与版本号关系：
 
 | 模块 | 功能 | 优先级 |
 |---|---|---|
-| GPU 算力管理 | GPU 纳管、利用率监控、资源配额 | P0 |
 | GPU 算力管理 | GPU 纳管、利用率监控、资源配额（HAMi + Volcano）| P0 |
 | 模型管理平台 | 模型导入（离线包 + HuggingFace/ModelScope）、一键部署、动态加载 | P0 |
 | 模型加解密 | 国密 SM4 对称加密，推理时 Init Container 内存解密（Secret volume 非 env）| P0 |
@@ -60,7 +71,7 @@ Phase 与版本号关系：
 - ~~Karmada 多集群 Region/AZ~~ → Phase 2（单集群先跑通）
 - ~~Patch 升级 Operator + BOSS 升级界面~~ → Phase 2
 - ~~BOSS 白牌化（Logo/ICO/主题色）~~ → Phase 2
-- ~~Agent 平台（AgentToolPermission / 沙箱）~~ → Phase 2
+- ~~Agent 平台（AgentToolPermission / 工具市场 / 高级编排）~~ → Phase 2；Core Sandbox 基础能力仍按 ANI-06 v1.0.0 计划推进
 - ~~等保三级合规完整文档~~ → Phase 2
 - ~~信创适配（UOS + ARM64 构建）~~ → Phase 2（时间不够时延后）
 

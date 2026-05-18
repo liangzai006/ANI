@@ -25,25 +25,26 @@ import (
 // Capabilities exposes ANI-defined ports for loosely-coupled component access.
 // Existing raw clients stay available during the ARCH-ADAPTER migration window.
 type Capabilities struct {
-	Metadata          ports.MetadataStore
-	MessageBus        ports.MessageBus
-	Cache             ports.CacheStore
-	ObjectStore       ports.ObjectStore
-	VectorStore       ports.VectorStore
-	ImageRegistry     ports.ImageRegistry
-	GPUInventory      ports.GPUInventory
-	WorkloadRuntime   ports.WorkloadRuntime
-	WorkloadRenderer  ports.WorkloadRenderer
-	WorkloadAdmission ports.WorkloadAdmission
-	WorkloadPlanAudit ports.WorkloadPlanAuditStore
-	WorkloadDryRun    ports.WorkloadProviderDryRun
-	WorkloadApply     ports.WorkloadProviderApply
-	WorkloadReconcile ports.WorkloadStatusReconciler
-	WorkloadStatus    ports.WorkloadProviderStatusReader
-	WorkloadInstances ports.WorkloadInstanceOrchestrator
-	WorkloadStore     ports.WorkloadInstanceStore
-	InstanceService   ports.WorkloadInstanceService
-	InstanceOps       ports.WorkloadInstanceOps
+	Metadata           ports.MetadataStore
+	MessageBus         ports.MessageBus
+	Cache              ports.CacheStore
+	ObjectStore        ports.ObjectStore
+	VectorStore        ports.VectorStore
+	ImageRegistry      ports.ImageRegistry
+	GPUInventory       ports.GPUInventory
+	WorkloadRuntime    ports.WorkloadRuntime
+	WorkloadRenderer   ports.WorkloadRenderer
+	WorkloadAdmission  ports.WorkloadAdmission
+	WorkloadPlanAudit  ports.WorkloadPlanAuditStore
+	WorkloadDryRun     ports.WorkloadProviderDryRun
+	WorkloadApply      ports.WorkloadProviderApply
+	WorkloadReconcile  ports.WorkloadStatusReconciler
+	WorkloadStatus     ports.WorkloadProviderStatusReader
+	WorkloadInstances  ports.WorkloadInstanceOrchestrator
+	WorkloadStore      ports.WorkloadInstanceStore
+	WorkloadOperations ports.WorkloadOperationStore
+	InstanceService    ports.WorkloadInstanceService
+	InstanceOps        ports.WorkloadInstanceOps
 }
 
 // Deps holds all initialized external dependencies.
@@ -55,6 +56,9 @@ type Deps struct {
 	Redis  *redis.Client
 	Ports  Capabilities
 	Logger *slog.Logger
+
+	ServiceName string
+	HealthPort  int
 }
 
 func NewCapabilities(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *redis.Client) Capabilities {
@@ -85,6 +89,7 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 	}
 	reconciler := runtimeadapter.NewLocalStatusReconciler()
 	instanceStore := runtimeadapter.NewMetadataInstanceStore(metadata)
+	operationStore := runtimeadapter.NewMetadataOperationStore(metadata)
 	orchestrator := runtimeadapter.NewLocalInstanceOrchestrator(
 		planner,
 		runtimeadapter.NewKubernetesDryRunRenderer(planner),
@@ -97,27 +102,29 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		runtimeadapter.WithInstanceStore(instanceStore),
 	)
 	return Capabilities{
-		Metadata:          metadata,
-		MessageBus:        natsadapter.NewMessageBus(js),
-		Cache:             redisadapter.NewCacheStore(redisClient),
-		ObjectStore:       objectstore.NotConfigured{},
-		VectorStore:       vectorstore.NotConfigured{},
-		ImageRegistry:     registry.NotConfigured{},
-		GPUInventory:      gpuInventory,
-		WorkloadRuntime:   planner,
-		WorkloadRenderer:  runtimeadapter.NewKubernetesDryRunRenderer(planner),
-		WorkloadAdmission: admission,
-		WorkloadPlanAudit: audit,
-		WorkloadDryRun:    dryRun,
-		WorkloadApply:     apply,
-		WorkloadReconcile: reconciler,
-		WorkloadStatus:    statusReader,
-		WorkloadStore:     instanceStore,
-		WorkloadInstances: orchestrator,
+		Metadata:           metadata,
+		MessageBus:         natsadapter.NewMessageBus(js),
+		Cache:              redisadapter.NewCacheStore(redisClient),
+		ObjectStore:        objectstore.NotConfigured{},
+		VectorStore:        vectorstore.NotConfigured{},
+		ImageRegistry:      registry.NotConfigured{},
+		GPUInventory:       gpuInventory,
+		WorkloadRuntime:    planner,
+		WorkloadRenderer:   runtimeadapter.NewKubernetesDryRunRenderer(planner),
+		WorkloadAdmission:  admission,
+		WorkloadPlanAudit:  audit,
+		WorkloadDryRun:     dryRun,
+		WorkloadApply:      apply,
+		WorkloadReconcile:  reconciler,
+		WorkloadStatus:     statusReader,
+		WorkloadStore:      instanceStore,
+		WorkloadOperations: operationStore,
+		WorkloadInstances:  orchestrator,
 		InstanceService: runtimeadapter.NewLocalInstanceServiceWithOptions(
 			orchestrator,
 			instanceStore,
 			instanceOps,
+			runtimeadapter.WithOperationStore(operationStore),
 			runtimeadapter.WithInstanceLifecycleExecutor(lifecycle),
 		),
 		InstanceOps: instanceOps,

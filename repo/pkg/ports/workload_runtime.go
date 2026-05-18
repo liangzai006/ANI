@@ -42,6 +42,26 @@ const (
 	WorkloadLifecycleDelete  WorkloadLifecycleAction = "delete"
 )
 
+type WorkloadOperationStatus string
+
+const (
+	WorkloadOperationAccepted   WorkloadOperationStatus = "accepted"
+	WorkloadOperationInProgress WorkloadOperationStatus = "in_progress"
+	WorkloadOperationSucceeded  WorkloadOperationStatus = "succeeded"
+	WorkloadOperationFailed     WorkloadOperationStatus = "failed"
+	WorkloadOperationCancelled  WorkloadOperationStatus = "cancelled"
+)
+
+type WorkloadOperationStepStatus string
+
+const (
+	WorkloadOperationStepPending   WorkloadOperationStepStatus = "pending"
+	WorkloadOperationStepRunning   WorkloadOperationStepStatus = "running"
+	WorkloadOperationStepSucceeded WorkloadOperationStepStatus = "succeeded"
+	WorkloadOperationStepFailed    WorkloadOperationStepStatus = "failed"
+	WorkloadOperationStepSkipped   WorkloadOperationStepStatus = "skipped"
+)
+
 type NetworkPlane string
 
 const (
@@ -272,16 +292,20 @@ type WorkloadInstanceCreateRequest struct {
 }
 
 type WorkloadInstanceCreateResult struct {
-	Ref          WorkloadRef
-	AuditID      string
-	Manifests    []WorkloadManifest
-	Admission    WorkloadAdmissionResult
-	DryRun       WorkloadProviderDryRunResult
-	Apply        WorkloadProviderApplyResult
-	Observation  WorkloadProviderObservation
-	Reconcile    WorkloadReconcileResult
-	FinalStatus  WorkloadStatus
-	Orchestrated bool
+	Ref         WorkloadRef
+	OperationID string
+	// IdempotentReplay is true when the request reused an existing
+	// idempotency_key and no new provider operation was started.
+	IdempotentReplay bool
+	AuditID          string
+	Manifests        []WorkloadManifest
+	Admission        WorkloadAdmissionResult
+	DryRun           WorkloadProviderDryRunResult
+	Apply            WorkloadProviderApplyResult
+	Observation      WorkloadProviderObservation
+	Reconcile        WorkloadReconcileResult
+	FinalStatus      WorkloadStatus
+	Orchestrated     bool
 }
 
 type WorkloadInstanceGetRequest struct {
@@ -307,14 +331,16 @@ type WorkloadInstanceLifecycleRequest struct {
 }
 
 type WorkloadInstanceLifecycleResult struct {
-	Action    WorkloadLifecycleAction
-	Accepted  bool
-	Reason    string
-	Warnings  []string
-	CheckedAt time.Time
+	Action      WorkloadLifecycleAction
+	OperationID string
+	Accepted    bool
+	Reason      string
+	Warnings    []string
+	CheckedAt   time.Time
 }
 
 type WorkloadInstanceResizeRequest struct {
+	IdempotencyKey  string
 	TenantID        string
 	InstanceID      string
 	Resources       WorkloadResourceRequest
@@ -366,6 +392,7 @@ type WorkloadInstanceOpsResult struct {
 type WorkloadInstanceRecord struct {
 	TenantID     string
 	InstanceID   string
+	OperationID  string
 	Name         string
 	Kind         WorkloadKind
 	Provider     string
@@ -374,6 +401,58 @@ type WorkloadInstanceRecord struct {
 	Status       WorkloadStatus
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+type WorkloadOperationStep struct {
+	StepName    string
+	Status      WorkloadOperationStepStatus
+	Message     string
+	StartedAt   time.Time
+	CompletedAt time.Time
+	CreatedAt   time.Time
+}
+
+type WorkloadOperationRecord struct {
+	ID                string
+	TenantID          string
+	InstanceID        string
+	Operation         WorkloadLifecycleAction
+	Status            WorkloadOperationStatus
+	IdempotencyKey    string
+	RequestedBy       string
+	Precheck          map[string]any
+	DestructiveImpact map[string]any
+	BeforeSpec        map[string]any
+	AfterSpec         map[string]any
+	ProviderRefs      []string
+	FailureReason     string
+	FailureMessage    string
+	RetryEligible     bool
+	Steps             []WorkloadOperationStep
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type WorkloadOperationUpdate struct {
+	InstanceID     string
+	Status         WorkloadOperationStatus
+	ProviderRefs   []string
+	FailureReason  string
+	FailureMessage string
+	RetryEligible  bool
+	UpdatedAt      time.Time
+}
+
+type WorkloadOperationListRequest struct {
+	TenantID   string
+	InstanceID string
+	Limit      int
+	Cursor     string
+}
+
+type WorkloadOperationListResult struct {
+	Items      []WorkloadOperationRecord
+	NextCursor string
 }
 
 type WorkloadRuntimeCapabilities struct {
@@ -488,4 +567,16 @@ type WorkloadInstanceLifecycleExecutor interface {
 // remain inside the ops adapter.
 type WorkloadInstanceOps interface {
 	Run(ctx context.Context, request WorkloadInstanceOpsRequest, record WorkloadInstanceRecord) (WorkloadInstanceOpsResult, error)
+}
+
+// WorkloadOperationStore persists instance operation records and their
+// timeline. It is the query boundary behind GET /instances/{id}/operations and
+// the idempotency boundary for create/lifecycle retries.
+type WorkloadOperationStore interface {
+	RecordOperation(ctx context.Context, record WorkloadOperationRecord) (WorkloadOperationRecord, bool, error)
+	GetOperation(ctx context.Context, tenantID string, operationID string) (WorkloadOperationRecord, error)
+	GetOperationByIdempotencyKey(ctx context.Context, tenantID string, idempotencyKey string) (WorkloadOperationRecord, error)
+	ListOperations(ctx context.Context, request WorkloadOperationListRequest) (WorkloadOperationListResult, error)
+	AddOperationStep(ctx context.Context, operationID string, step WorkloadOperationStep) (WorkloadOperationStep, error)
+	UpdateOperation(ctx context.Context, operationID string, update WorkloadOperationUpdate) (WorkloadOperationRecord, error)
 }

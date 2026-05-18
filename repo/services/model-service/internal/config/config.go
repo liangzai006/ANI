@@ -13,7 +13,8 @@ func Load() bootstrap.Config {
 		DatabaseURL: env("DATABASE_URL", "postgres://ani_app_user:ani_dev_password@127.0.0.1:5432/ani?sslmode=disable"),
 		NATSURL:     env("NATS_URL", "nats://127.0.0.1:4222"),
 		RedisURL:    env("REDIS_URL", "redis://:ani_dev_password@127.0.0.1:6379/0"),
-		GRPCPort:    envInt("GRPC_PORT", 9101),
+		GRPCPort:    envInt("GRPC_PORT", 9103),
+		HealthPort:  envInt("HEALTH_PORT", 9203),
 		ServiceName: "model-service",
 	}
 }

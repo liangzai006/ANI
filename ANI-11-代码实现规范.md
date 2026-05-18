@@ -2,6 +2,7 @@
 
 > 版本 V1 | 广州常青云科技有限公司 | 内部技术文档  
 > **AI 代码生成必读**：本文档是 GPT/Claude 生成代码的"合同"，所有生成代码必须符合此规范。
+> 当前开发阶段以 `ANI-DOCS-INDEX.md`、`ANI-06-开发计划.md` Section 零和 `repo/CURRENT-SPRINT.md` 为准。
 
 ---
 
@@ -13,7 +14,7 @@
 
 - 产品计划阶段只以 `ANI-06-开发计划.md` 为准。
 - `模块 1/2/3...` 表示产品开发模块，不能被代码生成批次复用。
-- 当前实现仍处于 `ANI-06 / 模块 2 / 2.1 Gateway 骨架 / NATS JetStream 异步任务框架`，不是 `模块 3：模型管理平台`。
+- 当前实现已进入 `Phase 1 / Sprint 2`：`SPEC-CORE-ALPHA → M1-INSTANCE-U → M1-INSTANCE-V`。历史 `M2.1-TASK-*` 仅作为已完成批次归档存在，不代表当前任务。
 
 ### 0.2 代码生成批次编号
 
@@ -26,9 +27,9 @@ M{模块号}.{小节号}-{主题}-{批次字母}
 示例：
 
 ```text
-M2.1-TASK-A
-M2.1-TASK-B
-M2.1-TASK-C
+M1-INSTANCE-U
+M1-INSTANCE-V
+SPEC-CORE-ALPHA
 ```
 
 禁止在新的记录、提交说明、提示词中继续使用 `Stage 3A/3B/3C` 作为主名称，因为它会被误解为 `ANI-06` 的模块 3。
@@ -54,6 +55,32 @@ M2.1-TASK-C
 - 任何 API/Proto/DB/CRD/Helm values/NATS payload 的变更，提交说明或开发记录中必须标注兼容性影响：`MAJOR`、`MINOR`、`PATCH` 或 `no-release-impact`。
 - Codex Cloud 生成代码时不得擅自创建正式版本 tag。
 - 当前开发期默认属于 `v0.x`，只有达到 `ANI-12` 的发布门禁后才能进入 `v1.0.0-rc.N` 或 `v1.0.0`。
+
+### 0.5 Services 解锁与成熟度约束
+
+ANI Core Phase 1 的交付对象分为两类：
+
+1. **Services 解锁交付**：向 ANI Services 团队提前交付稳定 API、SDK、错误码、状态机、RBAC scope、示例和 dev profile。
+2. **客户最终交付**：在 2026-09-30 前交付真实 provider 路径、部署、安全、审计、幂等、可观测和验收文档。
+
+成熟度标签必须在开发记录、API 契约注解或批次说明中出现：
+
+| 成熟度 | 含义 |
+|---|---|
+| `contract` | API/Schema/Port 已定义，SDK 可生成 |
+| `local-profile` | 本地/mock adapter 可跑，语义与真实 API 一致 |
+| `real-provider` | 接入真实 provider，在测试环境跑通 |
+| `real-path` | 端到端可用，含权限、审计、幂等、operation timeline、状态查询、错误语义和基础测试 |
+| `production` | 增加 HA、升级、备份恢复、安全验收、运维文档和容量验证 |
+
+**AI 生成代码硬规则：**
+
+- P0 Core API 不允许只返回 `NOT_IMPLEMENTED`、stub 数据或 mock success 后标记完成。
+- `contract` 是起点，不是 Services P0 依赖能力的最终状态。凡是阻塞 ANI Services Phase 1 P0 的能力，必须按 `ANI-06` 门禁升级到 `real-path`。
+- dev/mock profile 必须与真实 API schema、状态机、错误码、RBAC scope 保持一致；release profile 禁止静态假成功。
+- AI 不得擅自提升成熟度标签。`contract → local-profile → real-provider → real-path → production` 的每次提升都必须有验收命令和 development record。
+- 2026-06-10 后，Services P0 依赖的 Core API 禁止删除字段、改路径、改状态机、改错误码或改变字段语义；新增可选字段允许，但必须保持 SDK 兼容。
+- 任何 breaking API change 必须在提交说明和 development record 中列出受影响的 Services 场景、迁移方式和批准人。
 
 ---
 
@@ -860,7 +887,7 @@ frontends/console/src/routes/
 ### 6.2 API Client 生成方式
 
 ```bash
-# 从 OpenAPI Spec 生成 TypeScript 类型（make gen-api 中调用）
+# 从 API 契约生成 TypeScript 类型（make gen-api 中调用）
 npx openapi-typescript ../../api/openapi/v1.yaml -o src/api/schema.d.ts
 
 # 使用方式（类型安全，无手写 URL）
@@ -873,7 +900,7 @@ const api = createClient<paths>({ baseUrl: '/api/v1' })
 const { data, error } = await api.GET('/models', {
     params: { query: { limit: 20 } }
 })
-// data 和 error 都是类型安全的，来自 OpenAPI Spec
+// data 和 error 都是类型安全的，来自 API 契约
 ```
 
 ### 6.3 状态管理约定

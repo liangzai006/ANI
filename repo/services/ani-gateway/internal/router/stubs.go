@@ -74,17 +74,6 @@ func registerTasks(v1 *route.RouterGroup) {
 	v1.DELETE("/tasks/:task_id", notImplemented) // cancel
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-func registerAuth(v1 *route.RouterGroup) {
-	v1.POST("/auth/token", notImplemented)
-	v1.POST("/auth/refresh", notImplemented)
-	v1.POST("/auth/logout", notImplemented)
-	v1.GET("/auth/api-keys", notImplemented)
-	v1.POST("/auth/api-keys", notImplemented)
-	v1.DELETE("/auth/api-keys/:key_id", notImplemented)
-}
-
 // ── Metering ──────────────────────────────────────────────────────────────────
 
 func registerMetering(v1 *route.RouterGroup) {

@@ -20,6 +20,12 @@ func TestNewCapabilitiesDefaultsToLocalProviderAdapters(t *testing.T) {
 	if _, ok := capabilities.WorkloadStatus.(*runtimeadapter.LocalProviderStatusReader); !ok {
 		t.Fatalf("WorkloadStatus = %T, want LocalProviderStatusReader", capabilities.WorkloadStatus)
 	}
+	if _, ok := capabilities.WorkloadOperations.(*runtimeadapter.MetadataOperationStore); !ok {
+		t.Fatalf("WorkloadOperations = %T, want MetadataOperationStore", capabilities.WorkloadOperations)
+	}
+	if _, ok := capabilities.InstanceService.(*runtimeadapter.LocalInstanceService); !ok {
+		t.Fatalf("InstanceService = %T, want LocalInstanceService with operation store", capabilities.InstanceService)
+	}
 }
 
 func TestNewCapabilitiesCanWireKubernetesRESTProvider(t *testing.T) {

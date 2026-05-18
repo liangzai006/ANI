@@ -120,8 +120,9 @@ func newOIDCGroupRoleMapper(rawJSON string) oidcGroupRoleMapper {
 			continue
 		}
 		for _, role := range roles {
-			if isAllowedOIDCRole(role) {
-				mapper.groupToRoles[normalizedGroup] = append(mapper.groupToRoles[normalizedGroup], role)
+			normalizedRole := normalizeOIDCRole(role)
+			if isAllowedOIDCRole(normalizedRole) {
+				mapper.groupToRoles[normalizedGroup] = append(mapper.groupToRoles[normalizedGroup], normalizedRole)
 			}
 		}
 	}
@@ -144,6 +145,10 @@ func (m oidcGroupRoleMapper) Map(groups []string) []string {
 	}
 	sort.Strings(roles)
 	return roles
+}
+
+func normalizeOIDCRole(role string) string {
+	return strings.TrimSpace(strings.ToLower(role))
 }
 
 func isAllowedOIDCRole(role string) bool {

@@ -186,7 +186,7 @@ AI/ML 生态几乎全是 Python，不存在能替代的选项。Go/Rust 调用 P
 ### TypeScript — 前端
 
 - **Console**（用户控制台）& **BOSS**（运营运维后台）：React 18 + TanStack Router + TanStack Query + TDesign
-- 从 OpenAPI Spec 自动生成 TypeScript SDK，前端禁止手写 API 调用 URL
+- 从 API 契约自动生成 TypeScript SDK，前端禁止手写 API 调用 URL
 - 移动端（Phase 3）：React Native + TDesign Mobile，与 Web 共享业务逻辑和类型定义
 - 无 BFF 层（直接通过 ANI Gateway 的 REST API），避免引入额外维护成本
 

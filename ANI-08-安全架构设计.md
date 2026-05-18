@@ -1,7 +1,9 @@
 # KuberCloud ANI · 安全架构设计
 
-> 版本 V1 | 广州常青云科技有限公司 | 内部产品规划文件  
+> 版本 V1.1 | 广州常青云科技有限公司 | 内部产品规划文件
+> 最后更新：2026-05-19（对齐 M2.2 Auth Final 与 Sandbox 分层）
 > 本文档覆盖两个维度：**平台自身安全**（第一层）和**平台提供的安全服务能力**（第二层）
+> 当前开发阶段以 `ANI-DOCS-INDEX.md`、`ANI-06-开发计划.md` Section 零和 `repo/CURRENT-SPRINT.md` 为准。
 
 ---
 
@@ -544,14 +546,15 @@ AI 增强型应用将 AI 能力嵌入现有业务，面临**模型访问控制**
 
 AI 原生应用（AI Agent、多智能体）面临**最复杂的安全挑战**，包括 AI 特有的攻击向量。
 
-### 11.1 AI Agent 多层沙箱（Phase 1 基础 + Phase 2 完整）
+### 11.1 AI Agent 多层沙箱（Phase 1 基础 + Phase 2 增强）
 
 **产品定义中已明确的核心能力，安全是实现的首要约束：**
 
-**Phase 1 基础版（容器级沙箱）：**
+**Phase 1 基础版（Kata QEMU + 容器安全护栏）：**
+- Core Sandbox 资源模型与 RuntimeClass 使用 Kata Containers QEMU 后端，详见 `ANI-06` Sprint 6 `M1-SANDBOX-A`
 - Agent 执行 Pod 独立命名空间，不与推理服务混部
 - 强制 `securityContext.readOnlyRootFilesystem: true`（防止恶意代码落盘）
-- 强制非 root 运行（`runAsNonRoot: true`，`runAsUser: 65534`）
+- 强制非 root 运行（`runAsNonRoot: true`）
 - 网络出口：只能访问配置的白名单 URL，通过 KubeOVN EgressPolicy 实现
 - CPU/Memory 硬限制（防止资源耗尽攻击）
 
@@ -566,9 +569,10 @@ spec:
 - gVisor 在用户态重新实现 Linux 系统调用，即使 Agent 代码逃逸也无法访问宿主机内核
 - 适用于：执行用户上传代码、调用不受信任工具的 Agent 场景
 
-**Phase 3 最强级别（MicroVM，KataContainers）：**
-- 每个 Agent 任务运行在独立轻量级 VM（Firecracker/KVM）
-- 金融/医疗等高安全要求场景适用
+**Phase 2+ 增强级别（Kata Firecracker / gVisor）：**
+- Firecracker 后端用于 CPU-only 快速沙箱
+- gVisor 用于高密度轻量隔离场景
+- 金融/医疗等高安全要求场景按客户约束选择增强 RuntimeClass
 
 ### 11.2 Prompt 注入防护（Phase 2，预留扩展点）
 
@@ -754,15 +758,15 @@ spec:
 | 安全能力 | 类别 | 交付阶段 | 当前状态 | 备注 |
 |---|---|---|---|---|
 | TLS 1.3 全链路加密 | 第一层 | Phase 1 | **Planned** | cert-manager 配置未写 |
-| JWT + RBAC 认证授权 | 第一层 | Phase 1 | **Implementing** | middleware stub 已建，JWT 验证逻辑待实现 |
+| JWT + RBAC 认证授权 | 第一层 | Phase 1 | **Verified** | M2.2 Auth Final 已完成：OIDC/JWT/RBAC/API Key/Gateway Auth REST/Dex smoke |
 | 租户网络隔离（KubeOVN VPC）| 第一层 | Phase 1 | **Planned** | NetworkPolicy 模板未创建 |
-| PostgreSQL RLS 多租户隔离 | 第一层 | Phase 1 | **Implementing** | ANI-09 RLS 规范已补全，代码待实现 |
+| PostgreSQL RLS 多租户隔离 | 第一层 | Phase 1 | **Implementing** | 数据模型和部分 metadata path 已落地，仍需按资源域补齐回归验证 |
 | OPA 准入控制 | 第一层 | Phase 1 | **Planned** | OPA policy 文件未编写 |
 | Falco 运行时检测 | 第一层 | Phase 1 | **Planned** | 自定义规则未编写 |
-| 审计日志（180天保留）| 第一层 | Phase 1 | **Implementing** | audit.go stub 已建，DB 写入待实现 |
+| 审计日志（180天保留）| 第一层 | Phase 1 | **Implementing** | operation timeline / audit 基础已落地，保留策略和全资源覆盖仍需收口 |
 | 模型加密（SM4/ZUC）| 第一层+第二层 | Phase 1 | **Planned** | 加密 CLI 和 Init Container 逻辑未实现 |
 | 镜像签名（Cosign）| 第一层 | Phase 1 | **Planned** | CI 流程未配置 |
-| Agent 容器级沙箱（securityContext）| 第二层 | Phase 1 | **Planned** | Pod 安全策略未配置 |
+| Kata QEMU Sandbox RuntimeClass | 第二层 | Phase 1 | **Planned** | Sprint 6 M1-SANDBOX-A；容器 securityContext 是基础护栏，不代表完整沙箱 |
 | Agent 工具权限清单（CRD）| 第二层 | Phase 1 | **Planned** | AgentToolPermission CRD 未创建 |
 | Agent 行为完整审计 | 第二层 | Phase 1 | **Planned** | 审计 schema 已设计，实现待开始 |
 | 安全组（Console 封装 NetworkPolicy）| 第二层 | Phase 1 | **Planned** | 前端和 API 均未实现 |
@@ -772,7 +776,7 @@ spec:
 | gVisor 进程级沙箱 | 第二层 | Phase 2 | **Planned** | — |
 | 双因素认证（TOTP）| 第一层 | Phase 2 | **Planned** | — |
 | 合规基线扫描（kube-bench）| 第二层 | Phase 2 | **Planned** | — |
-| KataContainers MicroVM 沙箱 | 第二层 | Phase 3 | **Planned** | 金融/医疗专供 |
+| Kata Firecracker / gVisor 增强沙箱 | 第二层 | Phase 2+ | **Planned** | QEMU 后端先行，Firecracker/gVisor 按场景增强 |
 
 **向金融/国央企客户的 Phase 1 安全能力诚实表述（GPT 审查建议）：**
-> "Phase 1 提供平台级网络隔离（VPC）、基于 JWT 的身份认证、RBAC 权限控制、完整操作审计日志和模型文件静态加密存储。AI 推理链路的 Prompt 注入防护将在 Phase 2 提供；当前阶段建议用于知识库问答等相对受控的场景，暂不推荐用于处理不可信外部输入的 Agent 场景。"
+> "Phase 1 提供平台级网络隔离（VPC）、基于 JWT 的身份认证、RBAC 权限控制、操作审计基础和模型文件静态加密存储。AI 推理链路的 Prompt 注入防护将在 Phase 2 提供；当前阶段建议用于知识库问答等相对受控的场景，暂不推荐用于处理不可信外部输入的 Agent 场景。"

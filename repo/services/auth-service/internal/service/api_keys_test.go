@@ -1,10 +1,14 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestGenerateAPIKeyEmbedsTenantID(t *testing.T) {
@@ -34,5 +38,110 @@ func TestHasScope(t *testing.T) {
 	}
 	if hasScope([]string{"scope:tasks:get"}, "models", "get") {
 		t.Fatal("unexpected scope allow")
+	}
+}
+
+func TestNormalizeAPIKeyScopes(t *testing.T) {
+	scopes, err := normalizeAPIKeyScopes([]string{"models:create", "scope:tasks:*", "models:create"})
+	if err != nil {
+		t.Fatalf("normalizeAPIKeyScopes error = %v", err)
+	}
+	want := []string{"scope:models:create", "scope:tasks:*"}
+	if len(scopes) != len(want) {
+		t.Fatalf("scopes = %v, want %v", scopes, want)
+	}
+	for i := range want {
+		if scopes[i] != want[i] {
+			t.Fatalf("scopes = %v, want %v", scopes, want)
+		}
+	}
+}
+
+func TestNormalizeAPIKeyScopesRejectsRolesAndEmptyScopes(t *testing.T) {
+	for _, scopes := range [][]string{
+		nil,
+		{""},
+		{"tenant-admin"},
+		{"scope:models:create:extra"},
+		{"Models:create"},
+	} {
+		if _, err := normalizeAPIKeyScopes(scopes); err == nil {
+			t.Fatalf("normalizeAPIKeyScopes(%v) error = nil, want validation error", scopes)
+		}
+	}
+}
+
+func TestNormalizeAPIKeyName(t *testing.T) {
+	name, err := normalizeAPIKeyName("  ci deploy  ")
+	if err != nil {
+		t.Fatalf("normalizeAPIKeyName error = %v", err)
+	}
+	if name != "ci deploy" {
+		t.Fatalf("name = %q", name)
+	}
+	if _, err := normalizeAPIKeyName("   "); err == nil {
+		t.Fatal("expected blank name to fail")
+	}
+	if _, err := normalizeAPIKeyName(strings.Repeat("a", maxAPIKeyNameLength+1)); err == nil {
+		t.Fatal("expected oversized name to fail")
+	}
+}
+
+func TestNormalizeAPIKeyExpiresAtRequiresFutureTime(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	future, err := normalizeAPIKeyExpiresAt(timestamppb.New(now.Add(time.Hour)), now)
+	if err != nil {
+		t.Fatalf("future expires_at error = %v", err)
+	}
+	if !future.Equal(now.Add(time.Hour)) {
+		t.Fatalf("future = %s", future)
+	}
+	if _, err := normalizeAPIKeyExpiresAt(timestamppb.New(now), now); err == nil {
+		t.Fatal("expected current expires_at to fail")
+	}
+	if _, err := normalizeAPIKeyExpiresAt(timestamppb.New(now.Add(-time.Second)), now); err == nil {
+		t.Fatal("expected past expires_at to fail")
+	}
+}
+
+func TestNormalizeAPIKeyRateLimit(t *testing.T) {
+	got, err := normalizeAPIKeyRateLimit(0)
+	if err != nil {
+		t.Fatalf("default rate limit error = %v", err)
+	}
+	if got != defaultAPIKeyRateLimitRPM {
+		t.Fatalf("default rate limit = %d, want %d", got, defaultAPIKeyRateLimitRPM)
+	}
+	got, err = normalizeAPIKeyRateLimit(120)
+	if err != nil {
+		t.Fatalf("explicit rate limit error = %v", err)
+	}
+	if got != 120 {
+		t.Fatalf("explicit rate limit = %d, want 120", got)
+	}
+	if _, err := normalizeAPIKeyRateLimit(maxAPIKeyRateLimitRPM + 1); err == nil {
+		t.Fatal("expected oversized rate limit to fail")
+	}
+}
+
+func TestAPIKeyRateLimitAllowsUntilLimit(t *testing.T) {
+	store := &apiKeyStore{cache: newMemoryCache()}
+	keyHash := hashAPIKey("ani_dev_tenant_secret")
+
+	if err := store.enforceRateLimit(context.Background(), keyHash, 2); err != nil {
+		t.Fatalf("first enforceRateLimit error = %v", err)
+	}
+	if err := store.enforceRateLimit(context.Background(), keyHash, 2); err != nil {
+		t.Fatalf("second enforceRateLimit error = %v", err)
+	}
+	if err := store.enforceRateLimit(context.Background(), keyHash, 2); !errors.Is(err, errAPIKeyRateLimitExceeded) {
+		t.Fatalf("third enforceRateLimit error = %v, want rate limit", err)
+	}
+}
+
+func TestAPIKeyRateLimitIsSkippedWithoutCache(t *testing.T) {
+	store := &apiKeyStore{}
+	if err := store.enforceRateLimit(context.Background(), "key-hash", 1); err != nil {
+		t.Fatalf("enforceRateLimit without cache error = %v", err)
 	}
 }

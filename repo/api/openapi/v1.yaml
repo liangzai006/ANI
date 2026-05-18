@@ -62,10 +62,6 @@ components:
       name: X-API-Key
       description: 长期 API Key（在 Console → 设置 → API Key 中创建）
 
-security:
-  - BearerAuth: []
-  - ApiKeyAuth: []
-
 # ── 公共 Schema ───────────────────────────────────────────────────────────────
   schemas:
 
@@ -184,6 +180,108 @@ security:
         created_at:       { type: string, format: date-time }
         updated_at:       { type: string, format: date-time }
 
+    BeginOIDCLoginRequest:
+      type: object
+      required: [tenant_name, redirect_uri]
+      properties:
+        tenant_name:  { type: string, description: "租户 slug，用于限定登录上下文" }
+        redirect_uri: { type: string, format: uri, description: "Console/CLI 注册的 OIDC callback 地址" }
+
+    BeginOIDCLoginResponse:
+      type: object
+      required: [authorization_url, state]
+      properties:
+        authorization_url: { type: string, format: uri }
+        state:            { type: string }
+
+    CompleteOIDCLoginRequest:
+      type: object
+      required: [state, code, redirect_uri]
+      properties:
+        state:        { type: string }
+        code:         { type: string }
+        redirect_uri: { type: string, format: uri }
+
+    TokenPairResponse:
+      type: object
+      required: [access_token, refresh_token, expires_in]
+      properties:
+        access_token:  { type: string }
+        refresh_token: { type: string }
+        expires_in:    { type: integer, example: 3600 }
+        issued_at:     { type: string, format: date-time }
+
+    RefreshAccessTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    RefreshAccessTokenResponse:
+      type: object
+      required: [access_token, expires_in]
+      properties:
+        access_token: { type: string }
+        expires_in:   { type: integer, example: 3600 }
+
+    LogoutRequest:
+      type: object
+      required: [jti]
+      properties:
+        jti: { type: string, description: "JWT ID，调用方从当前 AccessToken claims 中读取" }
+
+    RevokeStatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [revoked] }
+
+    CreateAPIKeyRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name:           { type: string, maxLength: 128 }
+        user_id:        { type: string, description: "可选；为空时使用当前认证用户" }
+        scopes:
+          type: array
+          minItems: 1
+          items: { type: string, pattern: "^scope:[a-z0-9_-]+:(\\*|[a-z0-9_-]+)$" }
+        rate_limit_rpm: { type: integer, minimum: 1, maximum: 10000, default: 60 }
+        expires_at:     { type: string, format: date-time }
+
+    CreateAPIKeyResponse:
+      type: object
+      required: [key_id, key_value, key_prefix]
+      properties:
+        key_id:     { type: string }
+        key_value:  { type: string, description: "仅创建时返回一次，服务端不保存明文" }
+        key_prefix: { type: string }
+
+    APIKeyInfo:
+      type: object
+      required: [id, name, key_prefix, scopes, rate_limit_rpm, is_active]
+      properties:
+        id:             { type: string }
+        name:           { type: string }
+        key_prefix:     { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        rate_limit_rpm: { type: integer }
+        created_at:     { type: string, format: date-time }
+        expires_at:     { type: string, format: date-time, nullable: true }
+        last_used_at:   { type: string, format: date-time, nullable: true }
+        is_active:      { type: boolean }
+
+    ListAPIKeysResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/APIKeyInfo' }
+        total: { type: integer }
+
   # 公共响应
   responses:
     Unauthorized:
@@ -220,6 +318,10 @@ security:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
 
 # ── API 路径定义 ──────────────────────────────────────────────────────────────
 # 说明：/demo/* 路径已迁移至 api/openapi/dev.yaml（不参与 SDK 生成）
@@ -301,37 +403,44 @@ paths:
                   checks: { type: object, additionalProperties: true }
 
   # ── 认证 ────────────────────────────────────────────────────────────────────
-  /auth/token:
-  # /demo/* 路径已移至 api/openapi/dev.yaml，不参与 SDK 生成
-
-  # ── 认证 ────────────────────────────────────────────────────────────────────
-  /auth/token:
+  /auth/oidc/begin:
     post:
-      operationId: getToken
-      summary: 获取 AccessToken（用户名密码登录 或 OIDC callback）
+      operationId: beginOIDCLogin
+      summary: 发起 OIDC 登录
       tags: [Auth]
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              required: [username, password]
-              properties:
-                username: { type: string }
-                password: { type: string, format: password }
+            schema: { $ref: '#/components/schemas/BeginOIDCLoginRequest' }
       responses:
         "200":
-          description: 登录成功
+          description: 返回 Dex/OIDC 授权地址
           content:
             application/json:
-              schema:
-                properties:
-                  access_token:  { type: string }
-                  refresh_token: { type: string }
-                  expires_in:    { type: integer, example: 3600 }
-        "401":
-          $ref: '#/components/responses/Unauthorized'
+              schema: { $ref: '#/components/schemas/BeginOIDCLoginResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+
+  /auth/token:
+    post:
+      operationId: completeOIDCLogin
+      summary: OIDC callback 换取 TokenPair
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteOIDCLoginRequest' }
+      responses:
+        "200":
+          description: OIDC 登录完成
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenPairResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
 
   /auth/refresh:
     post:
@@ -342,19 +451,97 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              required: [refresh_token]
-              properties:
-                refresh_token: { type: string }
+            schema: { $ref: '#/components/schemas/RefreshAccessTokenRequest' }
       responses:
         "200":
           description: 刷新成功
           content:
             application/json:
+              schema: { $ref: '#/components/schemas/RefreshAccessTokenResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: 吊销当前 JWT JTI
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      responses:
+        "200":
+          description: Token 已吊销
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokeStatusResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+
+  /auth/api-keys:
+    get:
+      operationId: listAPIKeys
+      summary: 列出当前租户 API Key
+      tags: [Auth]
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: API Key 列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAPIKeysResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createAPIKey
+      summary: 创建 API Key
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAPIKeyRequest' }
+      responses:
+        "201":
+          description: API Key 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateAPIKeyResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+
+  /auth/api-keys/{key_id}:
+    delete:
+      operationId: revokeAPIKey
+      summary: 吊销 API Key
+      tags: [Auth]
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: API Key 已吊销
+          content:
+            application/json:
               schema:
+                type: object
+                required: [status]
                 properties:
-                  access_token: { type: string }
-                  expires_in:   { type: integer }
+                  status: { type: string, enum: [revoked] }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
 
   # ── 平台品牌化 ──────────────────────────────────────────────────────────────
   /branding:

@@ -104,6 +104,11 @@ ANI 的开发从第一天就利用 AI 编码工具（Claude Code、Cursor 等）
 - 先写接口定义和测试用例，再让 AI 生成实现
 - 测试即规格，AI 以测试为目标生成的代码质量更可控
 
+**Core 先解锁 Services，再面向客户交付**
+- ANI Core 的 Phase 1 不是只在 2026-09-30 面向客户交付；它必须更早向 ANI Services 开发团队交付稳定接口、SDK、错误语义、状态机、权限 scope 和 dev profile。
+- 横向能力规划必须足够宽，借鉴 AWS 的资源原语和生命周期模型，为未来 Services 场景预留承载能力；但每项能力必须同时标注当前成熟度、目标成熟度、Services 解锁日期和最终交付验收。
+- 凡是 ANI Services Phase 1 P0 场景依赖的 Core 能力，不允许以 contract、stub、mock 或 `NOT_IMPLEMENTED` 作为最终状态；到对应 deadline 前必须达到 real-path，具备真实 API、SDK、权限、审计、幂等、状态查询、错误语义和基础测试。
+
 ### 3.3 人机协作分工
 
 | 任务类型 | 以人为主 | 以 AI 为主 |
