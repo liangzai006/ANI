@@ -9,8 +9,8 @@ This file provides mandatory guidance for Claude Code / Codex / Cursor / GPT cod
 ## 0. 当前状态
 
 ```text
-当前阶段：Phase 1 / Sprint 2
-当前优先级：SPEC-CORE-ALPHA → M1-INSTANCE-U → M1-INSTANCE-V
+当前阶段：Phase 1 / Sprint 3
+当前优先级：M1-NETWORK-A → M1-STORAGE-A → SDK-ALPHA-A
 当前不是 Phase 2：Phase 2 是 2026-10 以后延期能力
 下一步入口：repo/CURRENT-SPRINT.md
 文档导航：ANI-DOCS-INDEX.md

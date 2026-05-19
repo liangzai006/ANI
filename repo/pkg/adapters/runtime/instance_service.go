@@ -3,7 +3,9 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kubercloud/ani/pkg/ports"
@@ -205,6 +207,26 @@ func (s *LocalInstanceService) Delete(ctx context.Context, request ports.Workloa
 	return s.applyLifecycle(ctx, request)
 }
 
+func (s *LocalInstanceService) Snapshot(ctx context.Context, request ports.WorkloadInstanceLifecycleRequest) (ports.WorkloadInstanceRecord, error) {
+	request.Action = ports.WorkloadLifecycleSnapshot
+	return s.applyLifecycle(ctx, request)
+}
+
+func (s *LocalInstanceService) AttachVolume(ctx context.Context, request ports.WorkloadInstanceLifecycleRequest) (ports.WorkloadInstanceRecord, error) {
+	request.Action = ports.WorkloadLifecycleAttachVolume
+	return s.applyLifecycle(ctx, request)
+}
+
+func (s *LocalInstanceService) DetachVolume(ctx context.Context, request ports.WorkloadInstanceLifecycleRequest) (ports.WorkloadInstanceRecord, error) {
+	request.Action = ports.WorkloadLifecycleDetachVolume
+	return s.applyLifecycle(ctx, request)
+}
+
+func (s *LocalInstanceService) Rollback(ctx context.Context, request ports.WorkloadInstanceLifecycleRequest) (ports.WorkloadInstanceRecord, error) {
+	request.Action = ports.WorkloadLifecycleRollback
+	return s.applyLifecycle(ctx, request)
+}
+
 func (s *LocalInstanceService) Ops(ctx context.Context, request ports.WorkloadInstanceOpsRequest) (ports.WorkloadInstanceOpsResult, error) {
 	if s.store == nil || s.ops == nil {
 		return ports.WorkloadInstanceOpsResult{}, ports.ErrNotConfigured
@@ -216,7 +238,55 @@ func (s *LocalInstanceService) Ops(ctx context.Context, request ports.WorkloadIn
 	if err != nil {
 		return ports.WorkloadInstanceOpsResult{}, err
 	}
-	return s.ops.Run(ctx, request, record)
+	result, err := s.ops.Run(ctx, request, record)
+	if err != nil {
+		return ports.WorkloadInstanceOpsResult{}, err
+	}
+	if s.operations != nil && isSessionOpsAction(request.Action) {
+		operation, _, err := s.operations.RecordOperation(ctx, ports.WorkloadOperationRecord{
+			TenantID:    request.TenantID,
+			InstanceID:  request.InstanceID,
+			Operation:   ports.WorkloadLifecycleConsoleSession,
+			Status:      opsOperationStatus(result.Accepted),
+			RequestedBy: request.UserID,
+			Precheck: map[string]any{
+				"allowed":  true,
+				"action":   string(request.Action),
+				"protocol": result.Protocol,
+			},
+			DestructiveImpact: map[string]any{
+				"read_only":           true,
+				"opens_remote_access": true,
+			},
+			BeforeSpec: workloadRecordSummary(record),
+			AfterSpec: map[string]any{
+				"session_id":  result.SessionID,
+				"protocol":    result.Protocol,
+				"connect_url": result.ConnectURL,
+				"url":         result.URL,
+				"expires_at":  result.ExpiresAt.Format(time.RFC3339),
+			},
+			FailureReason:  opsFailureReason(result),
+			FailureMessage: opsFailureMessage(result),
+			RetryEligible:  !result.Accepted,
+			CreatedAt:      firstNonZeroTime(request.RequestedAt, result.CheckedAt),
+			UpdatedAt:      firstNonZeroTime(result.CheckedAt, request.RequestedAt),
+		})
+		if err != nil {
+			return ports.WorkloadInstanceOpsResult{}, err
+		}
+		result.OperationID = operation.ID
+		if _, err := s.operations.AddOperationStep(ctx, operation.ID, ports.WorkloadOperationStep{
+			StepName:    "issue_session",
+			Status:      opsStepStatus(result.Accepted),
+			Message:     result.Reason,
+			StartedAt:   firstNonZeroTime(result.CheckedAt, request.RequestedAt),
+			CompletedAt: firstNonZeroTime(result.CheckedAt, request.RequestedAt),
+		}); err != nil {
+			return ports.WorkloadInstanceOpsResult{}, err
+		}
+	}
+	return result, nil
 }
 
 func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports.WorkloadInstanceLifecycleRequest) (ports.WorkloadInstanceRecord, error) {
@@ -246,19 +316,32 @@ func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports
 	if err != nil {
 		return ports.WorkloadInstanceRecord{}, err
 	}
+	precheck := lifecyclePrecheck(record, request, next)
+	snapshot := vmSnapshotFor(record, request)
+	volume := volumeAttachmentFor(request)
+	rollback := containerRollbackFor(record, request)
 	opID := ""
 	if s.operations != nil {
+		status := ports.WorkloadOperationInProgress
+		if !precheck.allowed {
+			status = ports.WorkloadOperationFailed
+		}
 		operation, existing, err := s.operations.RecordOperation(ctx, ports.WorkloadOperationRecord{
-			TenantID:       request.TenantID,
-			InstanceID:     request.InstanceID,
-			Operation:      request.Action,
-			Status:         ports.WorkloadOperationInProgress,
-			IdempotencyKey: request.IdempotencyKey,
-			RequestedBy:    request.UserID,
-			Precheck:       map[string]any{"allowed": true, "from_state": string(record.Status.State), "to_state": string(next)},
-			BeforeSpec:     workloadRecordSummary(record),
-			CreatedAt:      request.RequestedAt,
-			UpdatedAt:      request.RequestedAt,
+			TenantID:          request.TenantID,
+			InstanceID:        request.InstanceID,
+			Operation:         request.Action,
+			Status:            status,
+			IdempotencyKey:    request.IdempotencyKey,
+			RequestedBy:       request.UserID,
+			Precheck:          precheck.details,
+			DestructiveImpact: lifecycleDestructiveImpact(record, request.Action),
+			BeforeSpec:        workloadRecordSummary(record),
+			AfterSpec:         lifecycleAfterSpec(record, request, next, snapshot, rollback),
+			FailureReason:     precheck.failureReason,
+			FailureMessage:    precheck.message,
+			RetryEligible:     precheck.retryEligible,
+			CreatedAt:         request.RequestedAt,
+			UpdatedAt:         request.RequestedAt,
 		})
 		if err != nil {
 			return ports.WorkloadInstanceRecord{}, err
@@ -268,6 +351,16 @@ func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports
 			record.OperationID = opID
 			return record, nil
 		}
+		if !precheck.allowed {
+			if _, err := s.operations.AddOperationStep(ctx, opID, ports.WorkloadOperationStep{
+				StepName: "precheck",
+				Status:   ports.WorkloadOperationStepFailed,
+				Message:  precheck.message,
+			}); err != nil {
+				return ports.WorkloadInstanceRecord{}, err
+			}
+			return ports.WorkloadInstanceRecord{}, fmt.Errorf("%w: %s", ports.ErrConflict, precheck.message)
+		}
 		if _, err := s.operations.AddOperationStep(ctx, opID, ports.WorkloadOperationStep{
 			StepName: "precheck",
 			Status:   ports.WorkloadOperationStepSucceeded,
@@ -276,7 +369,10 @@ func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports
 			return ports.WorkloadInstanceRecord{}, err
 		}
 	}
-	if s.lifecycle != nil {
+	if !precheck.allowed {
+		return ports.WorkloadInstanceRecord{}, fmt.Errorf("%w: %s", ports.ErrConflict, precheck.message)
+	}
+	if s.lifecycle != nil && usesProviderLifecycle(request.Action) {
 		result, err := s.lifecycle.Apply(ctx, request, record)
 		if err != nil {
 			if opID != "" {
@@ -315,6 +411,13 @@ func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports
 			return record, nil
 		}
 	}
+	if snapshot != nil {
+		record.Snapshots = append(record.Snapshots, *snapshot)
+	}
+	record.Status.Storage = applyVolumeBinding(record.Status.Storage, request.Action, volume, request.VolumeID)
+	if rollback != nil {
+		record.Container = rollback
+	}
 	record.Status.State = next
 	record.Status.Reason = "lifecycle " + string(request.Action) + " requested"
 	if !request.RequestedAt.IsZero() {
@@ -327,7 +430,7 @@ func (s *LocalInstanceService) applyLifecycle(ctx context.Context, request ports
 	record.OperationID = opID
 	if opID != "" {
 		if _, err := s.operations.AddOperationStep(ctx, opID, ports.WorkloadOperationStep{
-			StepName: "apply_lifecycle",
+			StepName: lifecycleApplyStepName(request.Action),
 			Status:   ports.WorkloadOperationStepSucceeded,
 			Message:  "lifecycle " + string(request.Action) + " accepted",
 		}); err != nil {
@@ -392,24 +495,375 @@ func applyStepStatus(applied bool) ports.WorkloadOperationStepStatus {
 
 func workloadSpecSummary(spec ports.WorkloadSpec) map[string]any {
 	return map[string]any{
-		"tenant_id": spec.TenantID,
-		"name":      spec.Name,
-		"kind":      string(spec.Kind),
-		"image":     spec.Image,
-		"cpu":       spec.Resources.CPU,
-		"memory":    spec.Resources.Memory,
-		"gpu_count": spec.Resources.GPU.RequiredCount,
+		"tenant_id":              spec.TenantID,
+		"name":                   spec.Name,
+		"kind":                   string(spec.Kind),
+		"image":                  spec.Image,
+		"cpu":                    spec.Resources.CPU,
+		"memory":                 spec.Resources.Memory,
+		"gpu_count":              spec.Resources.GPU.RequiredCount,
+		"termination_protection": spec.Lifecycle.TerminationProtection,
 	}
 }
 
 func workloadRecordSummary(record ports.WorkloadInstanceRecord) map[string]any {
+	summary := map[string]any{
+		"tenant_id":              record.TenantID,
+		"instance_id":            record.InstanceID,
+		"name":                   record.Name,
+		"kind":                   string(record.Kind),
+		"state":                  string(record.Status.State),
+		"provider":               record.Provider,
+		"termination_protection": record.Lifecycle.TerminationProtection,
+		"snapshot_count":         len(record.Snapshots),
+		"volume_count":           len(record.Status.Storage),
+	}
+	if record.Container != nil {
+		summary["container_revision"] = record.Container.Revision
+		summary["container_rollout_status"] = record.Container.RolloutStatus
+		summary["container_history_count"] = len(record.Container.History)
+	}
+	return summary
+}
+
+type lifecyclePrecheckResult struct {
+	allowed       bool
+	failureReason string
+	message       string
+	retryEligible bool
+	details       map[string]any
+}
+
+func lifecyclePrecheck(record ports.WorkloadInstanceRecord, request ports.WorkloadInstanceLifecycleRequest, next ports.WorkloadState) lifecyclePrecheckResult {
+	details := map[string]any{
+		"allowed":                true,
+		"action":                 string(request.Action),
+		"from_state":             string(record.Status.State),
+		"to_state":               string(next),
+		"termination_protection": record.Lifecycle.TerminationProtection,
+	}
+	if record.Kind == ports.WorkloadKindVM &&
+		record.Lifecycle.TerminationProtection &&
+		terminationProtectedAction(request.Action) {
+		message := "termination_protection is enabled; disable it before " + string(request.Action)
+		details["allowed"] = false
+		details["reason"] = "termination_protection_enabled"
+		return lifecyclePrecheckResult{
+			allowed:       false,
+			failureReason: "termination_protection_enabled",
+			message:       message,
+			retryEligible: false,
+			details:       details,
+		}
+	}
+	if request.Action == ports.WorkloadLifecycleSnapshot && record.Kind != ports.WorkloadKindVM {
+		message := "snapshot is only supported for vm instances in the local profile"
+		details["allowed"] = false
+		details["reason"] = "snapshot_requires_vm"
+		return lifecyclePrecheckResult{
+			allowed:       false,
+			failureReason: "snapshot_requires_vm",
+			message:       message,
+			retryEligible: false,
+			details:       details,
+		}
+	}
+	if request.Action == ports.WorkloadLifecycleAttachVolume || request.Action == ports.WorkloadLifecycleDetachVolume {
+		volumeID := strings.TrimSpace(request.VolumeID)
+		details["volume_id"] = volumeID
+		if record.Kind != ports.WorkloadKindVM {
+			return blockedLifecyclePrecheck(details, "volume_binding_requires_vm", "volume binding is only supported for vm instances in the local profile")
+		}
+		if volumeID == "" {
+			return blockedLifecyclePrecheck(details, "volume_id_required", "volume_id is required for volume binding")
+		}
+		attached := hasVolume(record.Status.Storage, volumeID)
+		if request.Action == ports.WorkloadLifecycleAttachVolume && attached {
+			return blockedLifecyclePrecheck(details, "volume_already_attached", "volume is already attached")
+		}
+		if request.Action == ports.WorkloadLifecycleDetachVolume {
+			if isRootVolume(record.Status.Storage, volumeID) {
+				return blockedLifecyclePrecheck(details, "root_volume_detach_forbidden", "root disk cannot be detached")
+			}
+			if !attached {
+				return blockedLifecyclePrecheck(details, "volume_not_attached", "volume is not attached")
+			}
+		}
+	}
+	if request.Action == ports.WorkloadLifecycleRollback {
+		revision := strings.TrimSpace(request.Revision)
+		details["revision"] = revision
+		if record.Kind != ports.WorkloadKindContainer && record.Kind != ports.WorkloadKindGPUContainer {
+			return blockedLifecyclePrecheck(details, "rollback_requires_container", "rollback is only supported for container and gpu_container instances in the local profile")
+		}
+		if record.Container == nil {
+			return blockedLifecyclePrecheck(details, "container_status_missing", "container rollout status is required for rollback")
+		}
+		if _, ok := rollbackTarget(record.Container, revision); !ok {
+			return blockedLifecyclePrecheck(details, "rollback_revision_not_found", "rollback revision was not found in rollout history")
+		}
+	}
+	return lifecyclePrecheckResult{allowed: true, details: details}
+}
+
+func blockedLifecyclePrecheck(details map[string]any, reason string, message string) lifecyclePrecheckResult {
+	details["allowed"] = false
+	details["reason"] = reason
+	return lifecyclePrecheckResult{
+		allowed:       false,
+		failureReason: reason,
+		message:       message,
+		retryEligible: false,
+		details:       details,
+	}
+}
+
+func terminationProtectedAction(action ports.WorkloadLifecycleAction) bool {
+	switch action {
+	case ports.WorkloadLifecycleStop, ports.WorkloadLifecycleDelete, ports.WorkloadLifecycleRebuild:
+		return true
+	default:
+		return false
+	}
+}
+
+func usesProviderLifecycle(action ports.WorkloadLifecycleAction) bool {
+	switch action {
+	case ports.WorkloadLifecycleSnapshot, ports.WorkloadLifecycleAttachVolume, ports.WorkloadLifecycleDetachVolume, ports.WorkloadLifecycleRollback:
+		return false
+	default:
+		return true
+	}
+}
+
+func lifecycleApplyStepName(action ports.WorkloadLifecycleAction) string {
+	if action == ports.WorkloadLifecycleSnapshot {
+		return "create_snapshot"
+	}
+	if action == ports.WorkloadLifecycleAttachVolume {
+		return "attach_volume"
+	}
+	if action == ports.WorkloadLifecycleDetachVolume {
+		return "detach_volume"
+	}
+	if action == ports.WorkloadLifecycleRollback {
+		return "rollback_revision"
+	}
+	return "apply_lifecycle"
+}
+
+func lifecycleAfterSpec(record ports.WorkloadInstanceRecord, request ports.WorkloadInstanceLifecycleRequest, next ports.WorkloadState, snapshot *ports.VMInstanceSnapshot, rollback *ports.ContainerInstanceStatus) map[string]any {
+	after := workloadRecordSummary(record)
+	after["state"] = string(next)
+	if request.Action == ports.WorkloadLifecycleSnapshot && snapshot != nil {
+		after["snapshot"] = map[string]any{
+			"id":         snapshot.ID,
+			"name":       snapshot.Name,
+			"state":      snapshot.State,
+			"created_at": snapshot.CreatedAt.Format(time.RFC3339),
+		}
+		after["snapshot_count"] = len(record.Snapshots) + 1
+	}
+	if request.Action == ports.WorkloadLifecycleAttachVolume {
+		after["volume_id"] = strings.TrimSpace(request.VolumeID)
+		after["volume_count"] = len(record.Status.Storage) + 1
+	}
+	if request.Action == ports.WorkloadLifecycleDetachVolume {
+		after["volume_id"] = strings.TrimSpace(request.VolumeID)
+		if len(record.Status.Storage) > 0 {
+			after["volume_count"] = len(record.Status.Storage) - 1
+		}
+	}
+	if request.Action == ports.WorkloadLifecycleRollback && rollback != nil {
+		after["container_revision"] = rollback.Revision
+		after["container_rollout_status"] = rollback.RolloutStatus
+		after["container_history_count"] = len(rollback.History)
+	}
+	return after
+}
+
+func vmSnapshotFor(record ports.WorkloadInstanceRecord, request ports.WorkloadInstanceLifecycleRequest) *ports.VMInstanceSnapshot {
+	if request.Action != ports.WorkloadLifecycleSnapshot {
+		return nil
+	}
+	now := firstNonZeroTime(request.RequestedAt, time.Now().UTC())
+	name := firstNonEmpty(request.SnapshotName, "snapshot-"+now.Format("20060102150405"))
+	idSeed := firstNonEmpty(request.IdempotencyKey, record.InstanceID+"-"+name+"-"+now.Format("20060102150405"))
+	return &ports.VMInstanceSnapshot{
+		ID:               "snap_" + sanitizeSnapshotID(idSeed),
+		Name:             name,
+		SourceInstanceID: record.InstanceID,
+		State:            "ready",
+		Reason:           "snapshot metadata recorded by local profile; provider snapshot execution is a follow-up capability",
+		CreatedAt:        now,
+		ReadyAt:          now,
+	}
+}
+
+var snapshotIDPattern = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+func sanitizeSnapshotID(value string) string {
+	value = strings.Trim(snapshotIDPattern.ReplaceAllString(value, "_"), "_")
+	if value == "" {
+		return "local"
+	}
+	if len(value) > 48 {
+		return value[:48]
+	}
+	return value
+}
+
+func volumeAttachmentFor(request ports.WorkloadInstanceLifecycleRequest) *ports.WorkloadStorageAttachment {
+	if request.Action != ports.WorkloadLifecycleAttachVolume {
+		return nil
+	}
+	volumeID := strings.TrimSpace(request.VolumeID)
+	if volumeID == "" {
+		return nil
+	}
+	return &ports.WorkloadStorageAttachment{
+		Name:      volumeID,
+		Kind:      ports.StorageAttachmentDataDisk,
+		MountPath: "/mnt/" + sanitizeSnapshotID(volumeID),
+		SourceRef: volumeID,
+		Required:  true,
+	}
+}
+
+func applyVolumeBinding(storage []ports.WorkloadStorageAttachment, action ports.WorkloadLifecycleAction, volume *ports.WorkloadStorageAttachment, volumeID string) []ports.WorkloadStorageAttachment {
+	switch action {
+	case ports.WorkloadLifecycleAttachVolume:
+		if volume == nil {
+			return storage
+		}
+		next := append([]ports.WorkloadStorageAttachment(nil), storage...)
+		next = append(next, *volume)
+		return next
+	case ports.WorkloadLifecycleDetachVolume:
+		volumeID = strings.TrimSpace(volumeID)
+		next := make([]ports.WorkloadStorageAttachment, 0, len(storage))
+		for _, attachment := range storage {
+			if sameVolume(attachment, volumeID) {
+				continue
+			}
+			next = append(next, attachment)
+		}
+		return next
+	default:
+		return storage
+	}
+}
+
+func hasVolume(storage []ports.WorkloadStorageAttachment, volumeID string) bool {
+	for _, attachment := range storage {
+		if sameVolume(attachment, volumeID) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRootVolume(storage []ports.WorkloadStorageAttachment, volumeID string) bool {
+	for _, attachment := range storage {
+		if attachment.Kind == ports.StorageAttachmentRootDisk && sameVolume(attachment, volumeID) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameVolume(attachment ports.WorkloadStorageAttachment, volumeID string) bool {
+	volumeID = strings.TrimSpace(volumeID)
+	return volumeID != "" && (attachment.Name == volumeID || attachment.SourceRef == volumeID)
+}
+
+func containerRollbackFor(record ports.WorkloadInstanceRecord, request ports.WorkloadInstanceLifecycleRequest) *ports.ContainerInstanceStatus {
+	if request.Action != ports.WorkloadLifecycleRollback || record.Container == nil {
+		return nil
+	}
+	target, ok := rollbackTarget(record.Container, request.Revision)
+	if !ok {
+		return nil
+	}
+	next := *record.Container
+	next.Revision = target.Revision
+	next.RolloutStatus = "rolled_back"
+	next.History = append([]ports.ContainerRevisionHistory(nil), record.Container.History...)
+	if len(next.History) == 0 || next.History[len(next.History)-1].Revision != target.Revision {
+		next.History = append(next.History, target)
+	}
+	return &next
+}
+
+func rollbackTarget(container *ports.ContainerInstanceStatus, revision string) (ports.ContainerRevisionHistory, bool) {
+	if container == nil {
+		return ports.ContainerRevisionHistory{}, false
+	}
+	revision = strings.TrimSpace(revision)
+	if revision != "" {
+		for _, item := range container.History {
+			if item.Revision == revision {
+				return item, true
+			}
+		}
+		return ports.ContainerRevisionHistory{}, false
+	}
+	for i := len(container.History) - 1; i >= 0; i-- {
+		if container.History[i].Revision != "" && container.History[i].Revision != container.Revision {
+			return container.History[i], true
+		}
+	}
+	return ports.ContainerRevisionHistory{}, false
+}
+
+func isSessionOpsAction(action ports.WorkloadInstanceOpsAction) bool {
+	switch action {
+	case ports.WorkloadInstanceOpsTerminal, ports.WorkloadInstanceOpsExec,
+		ports.WorkloadInstanceOpsVMConsole, ports.WorkloadInstanceOpsVMVNC, ports.WorkloadInstanceOpsVMSerial:
+		return true
+	default:
+		return false
+	}
+}
+
+func opsOperationStatus(accepted bool) ports.WorkloadOperationStatus {
+	if accepted {
+		return ports.WorkloadOperationSucceeded
+	}
+	return ports.WorkloadOperationFailed
+}
+
+func opsStepStatus(accepted bool) ports.WorkloadOperationStepStatus {
+	if accepted {
+		return ports.WorkloadOperationStepSucceeded
+	}
+	return ports.WorkloadOperationStepFailed
+}
+
+func opsFailureReason(result ports.WorkloadInstanceOpsResult) string {
+	if result.Accepted {
+		return ""
+	}
+	return "ops_session_rejected"
+}
+
+func opsFailureMessage(result ports.WorkloadInstanceOpsResult) string {
+	if result.Accepted {
+		return ""
+	}
+	return result.Reason
+}
+
+func lifecycleDestructiveImpact(record ports.WorkloadInstanceRecord, action ports.WorkloadLifecycleAction) map[string]any {
 	return map[string]any{
-		"tenant_id":   record.TenantID,
-		"instance_id": record.InstanceID,
-		"name":        record.Name,
-		"kind":        string(record.Kind),
-		"state":       string(record.Status.State),
-		"provider":    record.Provider,
+		"action":                string(action),
+		"workload_kind":         string(record.Kind),
+		"state":                 string(record.Status.State),
+		"stops_running_compute": action == ports.WorkloadLifecycleStop || action == ports.WorkloadLifecycleDelete || action == ports.WorkloadLifecycleRebuild,
+		"creates_snapshot":      action == ports.WorkloadLifecycleSnapshot,
+		"mutates_storage":       action == ports.WorkloadLifecycleAttachVolume || action == ports.WorkloadLifecycleDetachVolume,
+		"mutates_rollout":       action == ports.WorkloadLifecycleRollback,
+		"may_delete_storage":    action == ports.WorkloadLifecycleDelete && !record.Lifecycle.RetainStorage,
 	}
 }
 

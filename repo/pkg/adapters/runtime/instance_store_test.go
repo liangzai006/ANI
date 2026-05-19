@@ -16,12 +16,48 @@ func TestMetadataInstanceStoreUpsertsStatus(t *testing.T) {
 	}))
 
 	err := store.UpsertStatus(context.Background(), ports.WorkloadInstanceRecord{
-		TenantID:     "5dbb1d01-0000-4000-8000-000000000001",
-		InstanceID:   "inst_1",
-		Name:         "app-01",
-		Kind:         ports.WorkloadKindContainer,
-		Provider:     "kubernetes",
-		AuditID:      "5dbb1d01-0000-4000-8000-000000000002",
+		TenantID:   "5dbb1d01-0000-4000-8000-000000000001",
+		InstanceID: "inst_1",
+		Name:       "app-01",
+		Kind:       ports.WorkloadKindContainer,
+		Provider:   "kubernetes",
+		AuditID:    "5dbb1d01-0000-4000-8000-000000000002",
+		Lifecycle: ports.InstanceLifecyclePolicy{
+			TerminationProtection: true,
+		},
+		SSH: &ports.VMSSHConnectionInfo{
+			Username: "ubuntu",
+			Host:     "inst_1.vm.ani.internal",
+			Port:     22,
+			KeyRef:   "secret/ssh-key-a",
+			Ready:    true,
+		},
+		Snapshots: []ports.VMInstanceSnapshot{
+			{
+				ID:               "snap-a",
+				Name:             "before-upgrade",
+				SourceInstanceID: "inst_1",
+				State:            "ready",
+				CreatedAt:        time.Unix(550, 0),
+				ReadyAt:          time.Unix(560, 0),
+			},
+		},
+		Container: &ports.ContainerInstanceStatus{
+			Replicas:      3,
+			ReadyReplicas: 2,
+			Revision:      "rev-harbor-app-1",
+			RolloutStatus: "progressing",
+			History: []ports.ContainerRevisionHistory{
+				{Revision: "rev-harbor-app-1", Image: "harbor/app:1", CreatedAt: time.Unix(540, 0)},
+			},
+		},
+		GPU: &ports.GPUInstanceStatus{
+			Vendor:             ports.GPUVendorNVIDIA,
+			Model:              "A100",
+			Count:              2,
+			SchedulingReason:   "scheduled by test inventory",
+			UtilizationPercent: 0,
+		},
 		ResourceRefs: []string{"kubernetes/Deployment/app-01"},
 		Status: ports.WorkloadStatus{
 			Ref: ports.WorkloadRef{
@@ -40,11 +76,38 @@ func TestMetadataInstanceStoreUpsertsStatus(t *testing.T) {
 	if !strings.Contains(tx.sql, "INSERT INTO workload_instances") {
 		t.Fatalf("sql = %q, want workload_instances insert", tx.sql)
 	}
+	if !strings.Contains(tx.sql, "lifecycle_policy") {
+		t.Fatalf("sql = %q, want lifecycle_policy persistence", tx.sql)
+	}
+	if !strings.Contains(tx.sql, "snapshots") {
+		t.Fatalf("sql = %q, want snapshots persistence", tx.sql)
+	}
+	if !strings.Contains(tx.sql, "container_status") {
+		t.Fatalf("sql = %q, want container status persistence", tx.sql)
+	}
+	if !strings.Contains(tx.sql, "gpu_status") {
+		t.Fatalf("sql = %q, want gpu status persistence", tx.sql)
+	}
 	if got, want := tx.args[2], "app-01"; got != want {
 		t.Fatalf("name arg = %v, want %s", got, want)
 	}
 	if got, want := tx.args[8], "running"; got != want {
 		t.Fatalf("state arg = %v, want %s", got, want)
+	}
+	if got := tx.args[14]; !strings.Contains(got.(string), "TerminationProtection") {
+		t.Fatalf("lifecycle arg = %v, want termination protection policy", got)
+	}
+	if got := tx.args[15]; !strings.Contains(got.(string), "ssh-key-a") {
+		t.Fatalf("ssh arg = %v, want ssh key reference", got)
+	}
+	if got := tx.args[16]; !strings.Contains(got.(string), "snap-a") {
+		t.Fatalf("snapshots arg = %v, want snapshot metadata", got)
+	}
+	if got := tx.args[17]; !strings.Contains(got.(string), "rev-harbor-app-1") {
+		t.Fatalf("container arg = %v, want rollout metadata", got)
+	}
+	if got := tx.args[18]; !strings.Contains(got.(string), "A100") {
+		t.Fatalf("gpu arg = %v, want gpu metadata", got)
 	}
 }
 

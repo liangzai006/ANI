@@ -2,6 +2,8 @@ package router
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,18 @@ func TestDemoInstanceServiceCreatesVMContainerAndGPUContainer(t *testing.T) {
 		}
 		if len(result.Manifests) != 1 {
 			t.Fatalf("Create(%s) manifests = %d, want 1", kind, len(result.Manifests))
+		}
+		if kind == "vm" {
+			record, err := api.service.Get(context.Background(), ports.WorkloadInstanceGetRequest{
+				TenantID:   result.Ref.TenantID,
+				InstanceID: result.Ref.InstanceID,
+			})
+			if err != nil {
+				t.Fatalf("Get(%s) error = %v", kind, err)
+			}
+			if record.SSH == nil || record.SSH.Username == "" || record.SSH.Host == "" || record.SSH.Port != 22 {
+				t.Fatalf("vm ssh = %+v, want connection metadata", record.SSH)
+			}
 		}
 	}
 	records, err := api.service.List(context.Background(), ports.WorkloadInstanceListRequest{TenantID: "tenant-a"})
@@ -100,6 +114,110 @@ func TestDemoInstanceServiceLifecycleAndOps(t *testing.T) {
 	}
 	if !ops.Accepted {
 		t.Fatalf("ops accepted = false, want true")
+	}
+}
+
+func TestDemoLifecycleErrorStatusMapsConflict(t *testing.T) {
+	err := fmt.Errorf("%w: termination_protection is enabled", ports.ErrConflict)
+	if got := demoLifecycleErrorStatus(err); got != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", got)
+	}
+	if got := demoLifecycleErrorCode(err); got != "CONFLICT" {
+		t.Fatalf("code = %q, want CONFLICT", got)
+	}
+}
+
+func TestDemoGatewayRequiresIdempotencyKey(t *testing.T) {
+	if hasIdempotencyKey("   ") {
+		t.Fatalf("blank idempotency key should be rejected")
+	}
+	if !hasIdempotencyKey("create-123") {
+		t.Fatalf("nonblank idempotency key should be accepted")
+	}
+}
+
+func TestDemoInstanceServiceContainerRolloutStatus(t *testing.T) {
+	api := newDemoInstanceAPI()
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{
+		Kind:     "container",
+		Name:     "demo-rollout",
+		Image:    "harbor/demo:2",
+		Replicas: 3,
+	}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Unix(1900, 0),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	record, err := api.service.Get(context.Background(), ports.WorkloadInstanceGetRequest{
+		TenantID:   "tenant-a",
+		InstanceID: created.Ref.InstanceID,
+	})
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	response := demoInstanceFromRecord(record)
+	if response.Container == nil {
+		t.Fatalf("response container is nil")
+	}
+	if response.Container.Replicas != 3 || response.Container.ReadyReplicas != 3 || response.Container.RolloutStatus != "healthy" {
+		t.Fatalf("container = %+v, want 3 ready healthy", response.Container)
+	}
+	if response.Container.Revision == "" || len(response.Container.History) != 1 {
+		t.Fatalf("container revision=%q history=%#v, want one revision", response.Container.Revision, response.Container.History)
+	}
+}
+
+func TestDemoInstanceServiceGPUStatus(t *testing.T) {
+	api := newDemoInstanceAPI()
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{
+		Kind:  "gpu_container",
+		Name:  "demo-gpu-status",
+		Image: "harbor/gpu:2",
+		GPU: demoCreateGPURequest{
+			Vendor: "nvidia",
+			Model:  "A100",
+			Count:  2,
+		},
+	}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Unix(1950, 0),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	record, err := api.service.Get(context.Background(), ports.WorkloadInstanceGetRequest{
+		TenantID:   "tenant-a",
+		InstanceID: created.Ref.InstanceID,
+	})
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	response := demoInstanceFromRecord(record)
+	if response.GPU == nil {
+		t.Fatalf("response GPU is nil")
+	}
+	if response.GPU.Vendor != "nvidia" || response.GPU.Model != "A100" || response.GPU.Count != 2 {
+		t.Fatalf("gpu = %+v, want nvidia/A100 x2", response.GPU)
+	}
+	if response.GPU.SchedulingReason == "" {
+		t.Fatalf("gpu scheduling reason is empty")
+	}
+	if response.GPU.UtilizationPercent < 0 || response.GPU.UtilizationPercent > 100 {
+		t.Fatalf("gpu utilization = %f, want 0..100", response.GPU.UtilizationPercent)
 	}
 }
 
@@ -173,6 +291,93 @@ func TestDemoInstanceServiceVMConsoleSession(t *testing.T) {
 	}
 	if !console.Accepted || console.Protocol != "vnc" || console.ConnectURL == "" {
 		t.Fatalf("console accepted=%v protocol=%q connect=%q, want vnc connect session", console.Accepted, console.Protocol, console.ConnectURL)
+	}
+}
+
+func TestDemoInstanceServiceVMSnapshot(t *testing.T) {
+	api := newDemoInstanceAPI()
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "vm", Name: "demo-vm-snapshot"}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	record, err := api.service.Snapshot(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "demo-snapshot-vm",
+		TenantID:        "tenant-a",
+		InstanceID:      created.Ref.InstanceID,
+		SnapshotName:    "before-upgrade",
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Unix(1700, 0),
+	})
+	if err != nil {
+		t.Fatalf("Snapshot error = %v", err)
+	}
+	if record.Status.State != ports.WorkloadStateRunning || len(record.Snapshots) != 1 {
+		t.Fatalf("state=%s snapshots=%d, want running with one snapshot", record.Status.State, len(record.Snapshots))
+	}
+	response := demoInstanceFromRecord(record)
+	if len(response.Snapshots) != 1 || response.Snapshots[0].Name != "before-upgrade" {
+		t.Fatalf("response snapshots = %#v, want before-upgrade", response.Snapshots)
+	}
+}
+
+func TestDemoInstanceServiceVMVolumeBinding(t *testing.T) {
+	api := newDemoInstanceAPI()
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "vm", Name: "demo-vm-volume"}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	attached, err := api.service.AttachVolume(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "demo-attach-volume",
+		TenantID:        "tenant-a",
+		InstanceID:      created.Ref.InstanceID,
+		VolumeID:        "vol-data-demo",
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Unix(1800, 0),
+	})
+	if err != nil {
+		t.Fatalf("AttachVolume error = %v", err)
+	}
+	response := demoInstanceFromRecord(attached)
+	if response.Status != "running" || len(response.Volumes) != 2 {
+		t.Fatalf("status=%s volumes=%d, want running with root+data volume", response.Status, len(response.Volumes))
+	}
+	if response.Volumes[1].Name != "vol-data-demo" || response.Volumes[1].Kind != string(ports.StorageAttachmentDataDisk) {
+		t.Fatalf("response volumes = %#v, want data volume", response.Volumes)
+	}
+	detached, err := api.service.DetachVolume(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "demo-detach-volume",
+		TenantID:        "tenant-a",
+		InstanceID:      created.Ref.InstanceID,
+		VolumeID:        "vol-data-demo",
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Unix(1810, 0),
+	})
+	if err != nil {
+		t.Fatalf("DetachVolume error = %v", err)
+	}
+	if len(demoInstanceFromRecord(detached).Volumes) != 1 {
+		t.Fatalf("volumes after detach = %#v, want root disk only", demoInstanceFromRecord(detached).Volumes)
 	}
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -321,6 +322,307 @@ func TestLocalInstanceServiceLifecycleRecordsOperation(t *testing.T) {
 	}
 }
 
+func TestLocalInstanceServiceTerminationProtectionBlocksDangerousVMOperation(t *testing.T) {
+	store := &fakeInstanceStore{
+		last: ports.WorkloadInstanceRecord{
+			TenantID:   "tenant-a",
+			InstanceID: "vm-a",
+			Name:       "vm-01",
+			Kind:       ports.WorkloadKindVM,
+			Lifecycle: ports.InstanceLifecyclePolicy{
+				TerminationProtection: true,
+			},
+			Status: ports.WorkloadStatus{
+				State: ports.WorkloadStateRunning,
+			},
+		},
+	}
+	operations := NewLocalOperationStore()
+	lifecycle := &fakeLifecycleExecutor{}
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+		WithInstanceLifecycleExecutor(lifecycle),
+	)
+
+	_, err := service.Stop(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "stop-protected-vm",
+		TenantID:        "tenant-a",
+		InstanceID:      "vm-a",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1400, 0),
+	})
+	if !errors.Is(err, ports.ErrConflict) {
+		t.Fatalf("Stop() error = %v, want ErrConflict", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls = %d, want 0 when precheck blocks", lifecycle.calls)
+	}
+	if store.upserts != 0 {
+		t.Fatalf("upserts = %d, want 0 when precheck blocks", store.upserts)
+	}
+	list, err := operations.ListOperations(context.Background(), ports.WorkloadOperationListRequest{
+		TenantID:   "tenant-a",
+		InstanceID: "vm-a",
+	})
+	if err != nil {
+		t.Fatalf("ListOperations error = %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("operations = %d, want 1 failed precheck operation", len(list.Items))
+	}
+	operation := list.Items[0]
+	if operation.Status != ports.WorkloadOperationFailed || operation.FailureReason != "termination_protection_enabled" {
+		t.Fatalf("operation status=%s reason=%q, want failed termination_protection_enabled", operation.Status, operation.FailureReason)
+	}
+	if operation.Precheck["allowed"] != false || operation.Precheck["termination_protection"] != true {
+		t.Fatalf("precheck = %#v, want denied termination protection", operation.Precheck)
+	}
+	if len(operation.Steps) != 1 || operation.Steps[0].Status != ports.WorkloadOperationStepFailed {
+		t.Fatalf("steps = %#v, want failed precheck step", operation.Steps)
+	}
+}
+
+func TestLocalInstanceServiceVMSnapshotRecordsLocalProfile(t *testing.T) {
+	store := &fakeInstanceStore{
+		last: ports.WorkloadInstanceRecord{
+			TenantID:   "tenant-a",
+			InstanceID: "vm-a",
+			Name:       "vm-01",
+			Kind:       ports.WorkloadKindVM,
+			Provider:   "kubevirt",
+			Status: ports.WorkloadStatus{
+				State: ports.WorkloadStateRunning,
+			},
+		},
+	}
+	operations := NewLocalOperationStore()
+	lifecycle := &fakeLifecycleExecutor{}
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+		WithInstanceLifecycleExecutor(lifecycle),
+	)
+
+	record, err := service.Snapshot(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "snap-vm-a",
+		TenantID:        "tenant-a",
+		InstanceID:      "vm-a",
+		SnapshotName:    "before-upgrade",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1500, 0),
+	})
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls = %d, want 0 for local snapshot metadata", lifecycle.calls)
+	}
+	if store.upserts != 1 {
+		t.Fatalf("upserts = %d, want 1", store.upserts)
+	}
+	if record.Status.State != ports.WorkloadStateRunning {
+		t.Fatalf("state = %s, want running", record.Status.State)
+	}
+	if len(record.Snapshots) != 1 {
+		t.Fatalf("snapshots = %d, want 1", len(record.Snapshots))
+	}
+	snapshot := record.Snapshots[0]
+	if snapshot.ID != "snap_snap-vm-a" || snapshot.Name != "before-upgrade" || snapshot.State != "ready" {
+		t.Fatalf("snapshot = %+v, want ready named before-upgrade", snapshot)
+	}
+	if snapshot.SourceInstanceID != "vm-a" || !snapshot.ReadyAt.Equal(time.Unix(1500, 0)) {
+		t.Fatalf("snapshot source=%q ready=%s, want vm-a at request time", snapshot.SourceInstanceID, snapshot.ReadyAt)
+	}
+	operation, err := operations.GetOperation(context.Background(), "tenant-a", record.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(snapshot) error = %v", err)
+	}
+	if operation.Operation != ports.WorkloadLifecycleSnapshot || operation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation=%s status=%s, want snapshot/succeeded", operation.Operation, operation.Status)
+	}
+	if got := operation.DestructiveImpact["creates_snapshot"]; got != true {
+		t.Fatalf("creates_snapshot = %v, want true", got)
+	}
+	if got := operation.AfterSpec["snapshot_count"]; got != 1 {
+		t.Fatalf("after snapshot_count = %v, want 1", got)
+	}
+	if len(operation.Steps) != 2 || operation.Steps[1].StepName != "create_snapshot" {
+		t.Fatalf("steps = %#v, want precheck + create_snapshot", operation.Steps)
+	}
+}
+
+func TestLocalInstanceServiceVMVolumeBindingLocalProfile(t *testing.T) {
+	store := &fakeInstanceStore{
+		last: ports.WorkloadInstanceRecord{
+			TenantID:   "tenant-a",
+			InstanceID: "vm-a",
+			Name:       "vm-01",
+			Kind:       ports.WorkloadKindVM,
+			Provider:   "kubevirt",
+			Status: ports.WorkloadStatus{
+				State: ports.WorkloadStateRunning,
+				Storage: []ports.WorkloadStorageAttachment{
+					{Name: "vm-root", Kind: ports.StorageAttachmentRootDisk, SourceRef: "images/ubuntu.qcow2", SizeGiB: 40},
+				},
+			},
+		},
+	}
+	operations := NewLocalOperationStore()
+	lifecycle := &fakeLifecycleExecutor{}
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+		WithInstanceLifecycleExecutor(lifecycle),
+	)
+
+	attached, err := service.AttachVolume(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "attach-volume-a",
+		TenantID:        "tenant-a",
+		InstanceID:      "vm-a",
+		VolumeID:        "vol-data-a",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1600, 0),
+	})
+	if err != nil {
+		t.Fatalf("AttachVolume() error = %v", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls = %d, want 0 for local volume binding", lifecycle.calls)
+	}
+	if attached.Status.State != ports.WorkloadStateRunning || len(attached.Status.Storage) != 2 {
+		t.Fatalf("state=%s storage=%d, want running with root+data disk", attached.Status.State, len(attached.Status.Storage))
+	}
+	if got := attached.Status.Storage[1]; got.Name != "vol-data-a" || got.Kind != ports.StorageAttachmentDataDisk || got.MountPath != "/mnt/vol-data-a" {
+		t.Fatalf("attached volume = %+v, want local data disk binding", got)
+	}
+	attachOperation, err := operations.GetOperation(context.Background(), "tenant-a", attached.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(attach) error = %v", err)
+	}
+	if attachOperation.Operation != ports.WorkloadLifecycleAttachVolume || attachOperation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("attach operation=%s status=%s, want attach_volume/succeeded", attachOperation.Operation, attachOperation.Status)
+	}
+	if attachOperation.DestructiveImpact["mutates_storage"] != true || attachOperation.AfterSpec["volume_id"] != "vol-data-a" {
+		t.Fatalf("attach impact=%#v after=%#v, want storage mutation for vol-data-a", attachOperation.DestructiveImpact, attachOperation.AfterSpec)
+	}
+	if len(attachOperation.Steps) != 2 || attachOperation.Steps[1].StepName != "attach_volume" {
+		t.Fatalf("attach steps = %#v, want attach_volume", attachOperation.Steps)
+	}
+
+	detached, err := service.DetachVolume(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "detach-volume-a",
+		TenantID:        "tenant-a",
+		InstanceID:      "vm-a",
+		VolumeID:        "vol-data-a",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1610, 0),
+	})
+	if err != nil {
+		t.Fatalf("DetachVolume() error = %v", err)
+	}
+	if detached.Status.State != ports.WorkloadStateRunning || len(detached.Status.Storage) != 1 {
+		t.Fatalf("state=%s storage=%d, want running with root disk only", detached.Status.State, len(detached.Status.Storage))
+	}
+	detachOperation, err := operations.GetOperation(context.Background(), "tenant-a", detached.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(detach) error = %v", err)
+	}
+	if detachOperation.Operation != ports.WorkloadLifecycleDetachVolume || detachOperation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("detach operation=%s status=%s, want detach_volume/succeeded", detachOperation.Operation, detachOperation.Status)
+	}
+	if len(detachOperation.Steps) != 2 || detachOperation.Steps[1].StepName != "detach_volume" {
+		t.Fatalf("detach steps = %#v, want detach_volume", detachOperation.Steps)
+	}
+	if store.upserts != 2 {
+		t.Fatalf("upserts = %d, want 2", store.upserts)
+	}
+}
+
+func TestLocalInstanceServiceContainerRollbackLocalProfile(t *testing.T) {
+	store := &fakeInstanceStore{
+		last: ports.WorkloadInstanceRecord{
+			TenantID:   "tenant-a",
+			InstanceID: "container-a",
+			Name:       "app-01",
+			Kind:       ports.WorkloadKindContainer,
+			Provider:   "kubernetes",
+			Container: &ports.ContainerInstanceStatus{
+				Replicas:      3,
+				ReadyReplicas: 3,
+				Revision:      "rev-v2",
+				RolloutStatus: "healthy",
+				History: []ports.ContainerRevisionHistory{
+					{Revision: "rev-v1", Image: "harbor/app:1", CreatedAt: time.Unix(1500, 0)},
+					{Revision: "rev-v2", Image: "harbor/app:2", CreatedAt: time.Unix(1600, 0)},
+				},
+			},
+			Status: ports.WorkloadStatus{
+				State: ports.WorkloadStateRunning,
+			},
+		},
+	}
+	operations := NewLocalOperationStore()
+	lifecycle := &fakeLifecycleExecutor{}
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(),
+		WithOperationStore(operations),
+		WithInstanceLifecycleExecutor(lifecycle),
+	)
+
+	record, err := service.Rollback(context.Background(), ports.WorkloadInstanceLifecycleRequest{
+		IdempotencyKey:  "rollback-container-a",
+		TenantID:        "tenant-a",
+		InstanceID:      "container-a",
+		UserID:          "user-a",
+		PermissionProof: "rbac:update:workload",
+		RequestedAt:     time.Unix(1700, 0),
+	})
+	if err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls = %d, want 0 for local rollback", lifecycle.calls)
+	}
+	if record.Status.State != ports.WorkloadStateRunning {
+		t.Fatalf("state = %s, want running", record.Status.State)
+	}
+	if record.Container == nil || record.Container.Revision != "rev-v1" || record.Container.RolloutStatus != "rolled_back" {
+		t.Fatalf("container = %+v, want rollback to rev-v1", record.Container)
+	}
+	if len(record.Container.History) != 3 || record.Container.History[2].Revision != "rev-v1" {
+		t.Fatalf("history = %#v, want rollback event appended", record.Container.History)
+	}
+	operation, err := operations.GetOperation(context.Background(), "tenant-a", record.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(rollback) error = %v", err)
+	}
+	if operation.Operation != ports.WorkloadLifecycleRollback || operation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation=%s status=%s, want rollback/succeeded", operation.Operation, operation.Status)
+	}
+	if operation.DestructiveImpact["mutates_rollout"] != true {
+		t.Fatalf("impact = %#v, want mutates_rollout", operation.DestructiveImpact)
+	}
+	if operation.AfterSpec["container_revision"] != "rev-v1" || operation.AfterSpec["container_rollout_status"] != "rolled_back" {
+		t.Fatalf("after = %#v, want rolled_back rev-v1", operation.AfterSpec)
+	}
+	if len(operation.Steps) != 2 || operation.Steps[1].StepName != "rollback_revision" {
+		t.Fatalf("steps = %#v, want rollback_revision", operation.Steps)
+	}
+}
+
 func TestLocalInstanceServiceLifecycleUsesProviderExecutor(t *testing.T) {
 	store := &fakeInstanceStore{
 		last: ports.WorkloadInstanceRecord{
@@ -403,7 +705,13 @@ func TestLocalInstanceServiceVMConsoleOpsCreatesSession(t *testing.T) {
 			},
 		},
 	}
-	service := NewLocalInstanceService(&fakeInstanceOrchestrator{}, store, NewLocalInstanceOpsGuard(WithInstanceOpsEnabled(true)))
+	operations := NewLocalOperationStore()
+	service := NewLocalInstanceServiceWithOptions(
+		&fakeInstanceOrchestrator{},
+		store,
+		NewLocalInstanceOpsGuard(WithInstanceOpsEnabled(true)),
+		WithOperationStore(operations),
+	)
 	result, err := service.Ops(context.Background(), ports.WorkloadInstanceOpsRequest{
 		TenantID:        "tenant-a",
 		InstanceID:      "instance-a",
@@ -416,6 +724,19 @@ func TestLocalInstanceServiceVMConsoleOpsCreatesSession(t *testing.T) {
 	}
 	if !result.Accepted || result.Protocol != "vnc" || result.ConnectURL == "" {
 		t.Fatalf("result accepted=%v protocol=%q connect=%q, want vnc session", result.Accepted, result.Protocol, result.ConnectURL)
+	}
+	if result.OperationID == "" || result.URL != result.ConnectURL || result.ExpiresAt.IsZero() {
+		t.Fatalf("result operation=%q url=%q connect=%q expires=%s, want operation/url/expires", result.OperationID, result.URL, result.ConnectURL, result.ExpiresAt)
+	}
+	operation, err := operations.GetOperation(context.Background(), "tenant-a", result.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(console session) error = %v", err)
+	}
+	if operation.Operation != ports.WorkloadLifecycleConsoleSession || operation.Status != ports.WorkloadOperationSucceeded {
+		t.Fatalf("operation=%s status=%s, want console_session/succeeded", operation.Operation, operation.Status)
+	}
+	if len(operation.Steps) != 1 || operation.Steps[0].StepName != "issue_session" {
+		t.Fatalf("steps = %#v, want issue_session", operation.Steps)
 	}
 }
 

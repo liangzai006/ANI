@@ -34,12 +34,18 @@ const (
 type WorkloadLifecycleAction string
 
 const (
-	WorkloadLifecycleCreate  WorkloadLifecycleAction = "create"
-	WorkloadLifecycleStart   WorkloadLifecycleAction = "start"
-	WorkloadLifecycleStop    WorkloadLifecycleAction = "stop"
-	WorkloadLifecycleRestart WorkloadLifecycleAction = "restart"
-	WorkloadLifecycleResize  WorkloadLifecycleAction = "resize"
-	WorkloadLifecycleDelete  WorkloadLifecycleAction = "delete"
+	WorkloadLifecycleCreate         WorkloadLifecycleAction = "create"
+	WorkloadLifecycleStart          WorkloadLifecycleAction = "start"
+	WorkloadLifecycleStop           WorkloadLifecycleAction = "stop"
+	WorkloadLifecycleRestart        WorkloadLifecycleAction = "restart"
+	WorkloadLifecycleResize         WorkloadLifecycleAction = "resize"
+	WorkloadLifecycleRebuild        WorkloadLifecycleAction = "rebuild"
+	WorkloadLifecycleDelete         WorkloadLifecycleAction = "delete"
+	WorkloadLifecycleSnapshot       WorkloadLifecycleAction = "snapshot"
+	WorkloadLifecycleAttachVolume   WorkloadLifecycleAction = "attach_volume"
+	WorkloadLifecycleDetachVolume   WorkloadLifecycleAction = "detach_volume"
+	WorkloadLifecycleRollback       WorkloadLifecycleAction = "rollback"
+	WorkloadLifecycleConsoleSession WorkloadLifecycleAction = "console_session"
 )
 
 type WorkloadOperationStatus string
@@ -124,25 +130,69 @@ type VMInstanceSpec struct {
 	BootImage       string
 	CloudInitSecret string
 	SSHKeySecret    string
+	SSHUsername     string
 	Firmware        string
 	MachineType     string
 	RootDisk        WorkloadStorageAttachment
 	DataDisks       []WorkloadStorageAttachment
 }
 
+type VMSSHConnectionInfo struct {
+	Username string
+	Host     string
+	Port     int32
+	KeyRef   string
+	Ready    bool
+	Reason   string
+}
+
+type VMInstanceSnapshot struct {
+	ID               string
+	Name             string
+	SourceInstanceID string
+	State            string
+	Reason           string
+	CreatedAt        time.Time
+	ReadyAt          time.Time
+}
+
 type ContainerInstanceSpec struct {
 	ImagePullSecret string
 	Ports           []int32
+	Replicas        int32
 	Volumes         []WorkloadStorageAttachment
 }
 
+type ContainerRevisionHistory struct {
+	Revision  string
+	Image     string
+	CreatedAt time.Time
+}
+
+type ContainerInstanceStatus struct {
+	Replicas      int32
+	ReadyReplicas int32
+	Revision      string
+	RolloutStatus string
+	History       []ContainerRevisionHistory
+}
+
+type GPUInstanceStatus struct {
+	Vendor             GPUVendor
+	Model              string
+	Count              int
+	SchedulingReason   string
+	UtilizationPercent float64
+}
+
 type InstanceLifecyclePolicy struct {
-	AutoStart        bool
-	RestartOnFailure bool
-	DeleteWithTenant bool
-	RetainStorage    bool
-	MaxRestarts      int
-	TTL              time.Duration
+	AutoStart             bool
+	RestartOnFailure      bool
+	DeleteWithTenant      bool
+	RetainStorage         bool
+	TerminationProtection bool
+	MaxRestarts           int
+	TTL                   time.Duration
 }
 
 type WorkloadSpec struct {
@@ -229,6 +279,8 @@ type WorkloadProviderApplyRequest struct {
 	AdmissionResult WorkloadAdmissionResult
 	DryRunResult    WorkloadProviderDryRunResult
 	RequestedAt     time.Time
+	SnapshotName    string
+	VolumeID        string
 }
 
 type WorkloadProviderApplyResult struct {
@@ -325,6 +377,9 @@ type WorkloadInstanceLifecycleRequest struct {
 	TenantID        string
 	InstanceID      string
 	Action          WorkloadLifecycleAction
+	SnapshotName    string
+	VolumeID        string
+	Revision        string
 	UserID          string
 	PermissionProof string
 	RequestedAt     time.Time
@@ -377,16 +432,18 @@ type WorkloadInstanceOpsRequest struct {
 }
 
 type WorkloadInstanceOpsResult struct {
-	Action     WorkloadInstanceOpsAction `json:"action"`
-	Accepted   bool                      `json:"accepted"`
-	SessionID  string                    `json:"session_id"`
-	Protocol   string                    `json:"protocol"`
-	ConnectURL string                    `json:"connect_url"`
-	Output     string                    `json:"output"`
-	Reason     string                    `json:"reason"`
-	Warnings   []string                  `json:"warnings"`
-	CheckedAt  time.Time                 `json:"checked_at"`
-	ExpiresAt  time.Time                 `json:"expires_at"`
+	Action      WorkloadInstanceOpsAction `json:"action"`
+	Accepted    bool                      `json:"accepted"`
+	OperationID string                    `json:"operation_id,omitempty"`
+	SessionID   string                    `json:"session_id"`
+	Protocol    string                    `json:"protocol"`
+	ConnectURL  string                    `json:"connect_url"`
+	URL         string                    `json:"url,omitempty"`
+	Output      string                    `json:"output"`
+	Reason      string                    `json:"reason"`
+	Warnings    []string                  `json:"warnings"`
+	CheckedAt   time.Time                 `json:"checked_at"`
+	ExpiresAt   time.Time                 `json:"expires_at"`
 }
 
 type WorkloadInstanceRecord struct {
@@ -397,6 +454,11 @@ type WorkloadInstanceRecord struct {
 	Kind         WorkloadKind
 	Provider     string
 	AuditID      string
+	Lifecycle    InstanceLifecyclePolicy
+	SSH          *VMSSHConnectionInfo
+	Snapshots    []VMInstanceSnapshot
+	Container    *ContainerInstanceStatus
+	GPU          *GPUInstanceStatus
 	ResourceRefs []string
 	Status       WorkloadStatus
 	CreatedAt    time.Time
@@ -551,6 +613,10 @@ type WorkloadInstanceService interface {
 	Stop(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
 	Restart(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
 	Resize(ctx context.Context, request WorkloadInstanceResizeRequest) (WorkloadInstanceRecord, error)
+	Snapshot(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
+	AttachVolume(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
+	DetachVolume(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
+	Rollback(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
 	Delete(ctx context.Context, request WorkloadInstanceLifecycleRequest) (WorkloadInstanceRecord, error)
 	Ops(ctx context.Context, request WorkloadInstanceOpsRequest) (WorkloadInstanceOpsResult, error)
 }

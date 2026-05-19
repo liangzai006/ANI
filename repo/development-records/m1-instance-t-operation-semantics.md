@@ -32,4 +32,4 @@
 
 ## 备注
 
-本批次完成的是操作语义底座，不等同于完整生产级幂等控制。`M1-IDEM-A` 仍需继续处理 metadata store 的并发唯一键冲突语义、正式 API 的 409/回放策略，以及迁移已落库环境下的兼容升级路径。
+本批次完成的是操作语义底座，不等同于完整生产级幂等控制。`M1-IDEM-A` 已在后续批次补齐 metadata store 原子幂等锁、正式 API 的 409/回放策略和 bootstrap wiring；真实 PostgreSQL 并发压测仍归入后续 integration profile。

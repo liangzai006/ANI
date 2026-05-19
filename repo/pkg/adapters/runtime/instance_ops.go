@@ -49,12 +49,14 @@ func (g *LocalInstanceOpsGuard) Run(_ context.Context, request ports.WorkloadIns
 			CheckedAt: g.now().UTC(),
 		}, nil
 	}
+	connectURL := opsConnectURL(request, record, g.now().UTC())
 	return ports.WorkloadInstanceOpsResult{
 		Action:     request.Action,
 		Accepted:   true,
 		SessionID:  opsSessionID(request),
 		Protocol:   opsProtocol(request),
-		ConnectURL: opsConnectURL(request, record, g.now().UTC()),
+		ConnectURL: connectURL,
+		URL:        connectURL,
 		Reason:     "accepted by local instance ops guard",
 		CheckedAt:  g.now().UTC(),
 		ExpiresAt:  g.now().UTC().Add(15 * time.Minute),

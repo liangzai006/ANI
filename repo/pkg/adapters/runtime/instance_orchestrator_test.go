@@ -82,6 +82,127 @@ func TestLocalInstanceOrchestratorStopsBeforeObservationWhenApplyDisabled(t *tes
 	}
 }
 
+func TestLocalInstanceOrchestratorBuildsVMSSHConnectionInfo(t *testing.T) {
+	store := &fakeInstanceStore{}
+	orchestrator := newTestInstanceOrchestrator(true, store)
+	result, err := orchestrator.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec: ports.WorkloadSpec{
+			TenantID: "tenant-a",
+			Name:     "vm-01",
+			Kind:     ports.WorkloadKindVM,
+			VM: &ports.VMInstanceSpec{
+				BootImage:    "images/ubuntu-22.04.qcow2",
+				SSHUsername:  "ani",
+				SSHKeySecret: "secret/ssh-key-a",
+				RootDisk: ports.WorkloadStorageAttachment{
+					Name:      "vm-01-root",
+					Kind:      ports.StorageAttachmentRootDisk,
+					SizeGiB:   40,
+					SourceRef: "images/ubuntu-22.04.qcow2",
+					Required:  true,
+				},
+			},
+			Lifecycle: ports.InstanceLifecyclePolicy{AutoStart: true},
+		},
+		UserID:          "user-a",
+		PermissionProof: "rbac:create:workload",
+	})
+	if err != nil {
+		t.Fatalf("Create(vm) error = %v", err)
+	}
+	if result.Ref.InstanceID == "" {
+		t.Fatalf("instance id is empty")
+	}
+	if store.last.SSH == nil {
+		t.Fatalf("stored SSH is nil")
+	}
+	if store.last.SSH.Username != "ani" || store.last.SSH.KeyRef != "secret/ssh-key-a" {
+		t.Fatalf("ssh = %+v, want configured username/key ref", store.last.SSH)
+	}
+	if store.last.SSH.Host == "" || store.last.SSH.Port != 22 || !store.last.SSH.Ready {
+		t.Fatalf("ssh = %+v, want host/22/ready", store.last.SSH)
+	}
+}
+
+func TestLocalInstanceOrchestratorBuildsContainerRolloutStatus(t *testing.T) {
+	store := &fakeInstanceStore{}
+	orchestrator := newTestInstanceOrchestrator(true, store)
+	result, err := orchestrator.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec: ports.WorkloadSpec{
+			TenantID: "tenant-a",
+			Name:     "app-01",
+			Kind:     ports.WorkloadKindContainer,
+			Image:    "harbor/app:1",
+			Container: &ports.ContainerInstanceSpec{
+				Ports:    []int32{8080},
+				Replicas: 3,
+			},
+			Lifecycle: ports.InstanceLifecyclePolicy{AutoStart: true},
+		},
+		UserID:          "user-a",
+		PermissionProof: "rbac:create:workload",
+		RequestedAt:     time.Unix(700, 0),
+	})
+	if err != nil {
+		t.Fatalf("Create(container) error = %v", err)
+	}
+	if result.FinalStatus.State != ports.WorkloadStateRunning {
+		t.Fatalf("state = %s, want running", result.FinalStatus.State)
+	}
+	if store.last.Container == nil {
+		t.Fatalf("stored Container is nil")
+	}
+	if store.last.Container.Replicas != 3 || store.last.Container.ReadyReplicas != 3 {
+		t.Fatalf("container replicas=%d ready=%d, want 3/3", store.last.Container.Replicas, store.last.Container.ReadyReplicas)
+	}
+	if store.last.Container.Revision == "" || store.last.Container.RolloutStatus != "healthy" {
+		t.Fatalf("container revision=%q rollout=%q, want revision + healthy", store.last.Container.Revision, store.last.Container.RolloutStatus)
+	}
+	if len(store.last.Container.History) != 1 || store.last.Container.History[0].Image != "harbor/app:1" {
+		t.Fatalf("history = %#v, want one image revision", store.last.Container.History)
+	}
+}
+
+func TestLocalInstanceOrchestratorBuildsGPUStatus(t *testing.T) {
+	store := &fakeInstanceStore{}
+	orchestrator := newTestInstanceOrchestrator(true, store)
+	_, err := orchestrator.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		Spec: ports.WorkloadSpec{
+			TenantID: "tenant-a",
+			Name:     "gpu-01",
+			Kind:     ports.WorkloadKindGPUContainer,
+			Image:    "harbor/gpu:1",
+			Resources: ports.WorkloadResourceRequest{
+				GPU: ports.GPUSchedulingRequest{
+					PreferredVendors: []ports.GPUVendor{ports.GPUVendorNVIDIA},
+					PreferredModels:  []string{"A100"},
+					RequiredCount:    2,
+				},
+			},
+			Container: &ports.ContainerInstanceSpec{Ports: []int32{8080}, Replicas: 1},
+			Lifecycle: ports.InstanceLifecyclePolicy{AutoStart: true},
+		},
+		UserID:          "user-a",
+		PermissionProof: "rbac:create:workload",
+		RequestedAt:     time.Unix(710, 0),
+	})
+	if err != nil {
+		t.Fatalf("Create(gpu) error = %v", err)
+	}
+	if store.last.GPU == nil {
+		t.Fatalf("stored GPU is nil")
+	}
+	if store.last.GPU.Vendor != ports.GPUVendorNVIDIA || store.last.GPU.Model != "A100" || store.last.GPU.Count != 2 {
+		t.Fatalf("gpu = %+v, want nvidia/A100 x2", store.last.GPU)
+	}
+	if store.last.GPU.SchedulingReason == "" {
+		t.Fatalf("gpu scheduling reason is empty")
+	}
+	if store.last.GPU.UtilizationPercent < 0 || store.last.GPU.UtilizationPercent > 100 {
+		t.Fatalf("gpu utilization = %f, want 0..100", store.last.GPU.UtilizationPercent)
+	}
+}
+
 func TestLocalInstanceOrchestratorRequiresPermissionProof(t *testing.T) {
 	_, err := newTestInstanceOrchestrator(true, &fakeInstanceStore{}).Create(context.Background(), ports.WorkloadInstanceCreateRequest{
 		Spec: ports.WorkloadSpec{
@@ -101,7 +222,7 @@ func TestLocalInstanceOrchestratorRequiresPermissionProof(t *testing.T) {
 }
 
 func newTestInstanceOrchestrator(applyEnabled bool, store ports.WorkloadInstanceStore) *LocalInstanceOrchestrator {
-	planner := NewPlanningRuntime()
+	planner := NewPlanningRuntime(WithGPUInventory(fakeGPUInventory{}))
 	return NewLocalInstanceOrchestrator(
 		planner,
 		NewKubernetesDryRunRenderer(planner),

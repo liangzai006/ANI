@@ -60,12 +60,14 @@ func (o *KubernetesInstanceOps) Run(ctx context.Context, request ports.WorkloadI
 	if err != nil {
 		return ports.WorkloadInstanceOpsResult{}, err
 	}
+	connectURL := opsConnectURL(request, record, o.now().UTC())
 	return ports.WorkloadInstanceOpsResult{
 		Action:     request.Action,
 		Accepted:   true,
 		SessionID:  sessionID,
 		Protocol:   opsProtocol(request),
-		ConnectURL: opsConnectURL(request, record, o.now().UTC()),
+		ConnectURL: connectURL,
+		URL:        connectURL,
 		Output:     output,
 		Reason:     "accepted by Kubernetes instance ops",
 		CheckedAt:  o.now().UTC(),

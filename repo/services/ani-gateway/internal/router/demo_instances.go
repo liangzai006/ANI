@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -77,24 +78,38 @@ type demoInstanceAPI struct {
 }
 
 type demoCreateInstanceRequest struct {
-	Kind           string `json:"kind"`
-	Name           string `json:"name"`
-	CPU            string `json:"cpu"`
-	Memory         string `json:"memory"`
-	BootImage      string `json:"boot_image"`
-	Image          string `json:"image"`
-	GPUVendor      string `json:"gpu_vendor"`
-	GPUModel       string `json:"gpu_model"`
-	GPUCount       int    `json:"gpu_count"`
-	AutoStart      *bool  `json:"auto_start"`
-	Description    string `json:"description"`
-	IdempotencyKey string `json:"idempotency_key"`
+	Kind                  string               `json:"kind"`
+	Name                  string               `json:"name"`
+	CPU                   string               `json:"cpu"`
+	Memory                string               `json:"memory"`
+	BootImage             string               `json:"boot_image"`
+	SSHUsername           string               `json:"ssh_username"`
+	SSHKeyRef             string               `json:"ssh_key_ref"`
+	Image                 string               `json:"image"`
+	GPUVendor             string               `json:"gpu_vendor"`
+	GPUModel              string               `json:"gpu_model"`
+	GPUCount              int                  `json:"gpu_count"`
+	GPU                   demoCreateGPURequest `json:"gpu"`
+	Replicas              int                  `json:"replicas"`
+	AutoStart             *bool                `json:"auto_start"`
+	TerminationProtection bool                 `json:"termination_protection"`
+	Description           string               `json:"description"`
+	IdempotencyKey        string               `json:"idempotency_key"`
+}
+
+type demoCreateGPURequest struct {
+	Vendor string `json:"vendor"`
+	Model  string `json:"model"`
+	Count  int    `json:"count"`
 }
 
 type demoLifecycleRequest struct {
 	Action         string `json:"action"`
 	CPU            string `json:"cpu"`
 	Memory         string `json:"memory"`
+	SnapshotName   string `json:"snapshot_name"`
+	VolumeID       string `json:"volume_id"`
+	Revision       string `json:"revision"`
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
@@ -114,17 +129,74 @@ type demoShellExecResponse struct {
 }
 
 type demoInstanceResponse struct {
-	ID           string   `json:"id"`
-	TenantID     string   `json:"tenant_id"`
-	Name         string   `json:"name"`
-	Kind         string   `json:"kind"`
-	Status       string   `json:"status"`
-	Provider     string   `json:"provider"`
-	OperationID  string   `json:"operation_id,omitempty"`
-	ResourceRefs []string `json:"resource_refs"`
-	Endpoint     string   `json:"endpoint"`
-	CreatedAt    string   `json:"created_at"`
-	UpdatedAt    string   `json:"updated_at"`
+	ID                    string           `json:"id"`
+	TenantID              string           `json:"tenant_id"`
+	Name                  string           `json:"name"`
+	Kind                  string           `json:"kind"`
+	State                 string           `json:"state"`
+	Status                string           `json:"status"`
+	Provider              string           `json:"provider"`
+	OperationID           string           `json:"operation_id,omitempty"`
+	ResourceRefs          []string         `json:"resource_refs"`
+	Endpoint              string           `json:"endpoint"`
+	TerminationProtection bool             `json:"termination_protection"`
+	SSH                   *demoSSHResponse `json:"ssh,omitempty"`
+	Volumes               []demoVolume     `json:"volumes,omitempty"`
+	Snapshots             []demoSnapshot   `json:"snapshots,omitempty"`
+	Container             *demoContainer   `json:"container,omitempty"`
+	GPU                   *demoGPU         `json:"gpu,omitempty"`
+	CreatedAt             string           `json:"created_at"`
+	UpdatedAt             string           `json:"updated_at"`
+}
+
+type demoSSHResponse struct {
+	Username string `json:"username"`
+	Host     string `json:"host"`
+	Port     int32  `json:"port"`
+	KeyRef   string `json:"key_ref,omitempty"`
+	Ready    bool   `json:"ready"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type demoVolume struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	SizeGiB   int64  `json:"size_gib,omitempty"`
+	SourceRef string `json:"source_ref,omitempty"`
+	MountPath string `json:"mount_path,omitempty"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+}
+
+type demoSnapshot struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	SourceInstanceID string `json:"source_instance_id"`
+	State            string `json:"state"`
+	Reason           string `json:"reason,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	ReadyAt          string `json:"ready_at,omitempty"`
+}
+
+type demoContainer struct {
+	Replicas      int32                 `json:"replicas"`
+	ReadyReplicas int32                 `json:"ready_replicas"`
+	Revision      string                `json:"revision,omitempty"`
+	RolloutStatus string                `json:"rollout_status,omitempty"`
+	History       []demoContainerChange `json:"history,omitempty"`
+}
+
+type demoContainerChange struct {
+	Revision  string `json:"revision"`
+	Image     string `json:"image,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+type demoGPU struct {
+	Vendor             string  `json:"vendor,omitempty"`
+	Model              string  `json:"model,omitempty"`
+	Count              int     `json:"count"`
+	SchedulingReason   string  `json:"scheduling_reason,omitempty"`
+	UtilizationPercent float64 `json:"utilization_percent"`
 }
 
 type demoInstanceCreateResponse struct {
@@ -134,6 +206,11 @@ type demoInstanceCreateResponse struct {
 	Manifests   []demoManifest       `json:"manifests"`
 	Timeline    []demoTimelineStep   `json:"timeline"`
 	DemoNotice  string               `json:"demo_notice"`
+}
+
+type demoInstanceLifecycleResponse struct {
+	Instance    demoInstanceResponse `json:"instance"`
+	OperationID string               `json:"operation_id"`
 }
 
 type demoOperationResponse struct {
@@ -191,6 +268,12 @@ func newDemoInstanceAPI() *demoInstanceAPI {
 
 func registerDemoInstances(v1 *route.RouterGroup) {
 	api := newDemoInstanceAPI()
+	v1.GET("/instances", api.list)
+	v1.POST("/instances", api.create)
+	v1.GET("/instances/:instance_id", api.get)
+	v1.POST("/instances/:instance_id/lifecycle", api.lifecycle)
+	v1.POST("/instances/:instance_id/console", api.console)
+	v1.GET("/instances/:instance_id/operations", api.listOperations)
 	v1.GET("/demo/instances", api.list)
 	v1.POST("/demo/instances", api.create)
 	v1.GET("/demo/instances/:instance_id", api.get)
@@ -199,7 +282,6 @@ func registerDemoInstances(v1 *route.RouterGroup) {
 	v1.GET("/demo/instances/:instance_id/ops/:action", api.ops)
 	v1.POST("/demo/instances/:instance_id/console", api.console)
 	v1.POST("/demo/instances/:instance_id/console/exec", api.consoleExec)
-	v1.GET("/instances/:instance_id/operations", api.listOperations)
 	v1.GET("/instance-operations/:operation_id", api.getOperation)
 }
 
@@ -207,6 +289,10 @@ func (api *demoInstanceAPI) create(ctx context.Context, c *app.RequestContext) {
 	var req demoCreateInstanceRequest
 	if err := c.BindJSON(&req); err != nil {
 		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "invalid instance request")
+		return
+	}
+	if !hasIdempotencyKey(req.IdempotencyKey) {
+		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "idempotency_key is required")
 		return
 	}
 	spec, err := demoSpecFromRequest(req, demoTenantID(c))
@@ -290,10 +376,17 @@ func (api *demoInstanceAPI) lifecycle(ctx context.Context, c *app.RequestContext
 		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "invalid lifecycle request")
 		return
 	}
+	if !hasIdempotencyKey(req.IdempotencyKey) {
+		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "idempotency_key is required")
+		return
+	}
 	lifecycle := ports.WorkloadInstanceLifecycleRequest{
 		IdempotencyKey:  req.IdempotencyKey,
 		TenantID:        demoTenantID(c),
 		InstanceID:      c.Param("instance_id"),
+		SnapshotName:    req.SnapshotName,
+		VolumeID:        req.VolumeID,
+		Revision:        req.Revision,
 		UserID:          demoUserID(c),
 		PermissionProof: "demo:instance:lifecycle",
 		RequestedAt:     time.Now().UTC(),
@@ -321,15 +414,26 @@ func (api *demoInstanceAPI) lifecycle(ctx context.Context, c *app.RequestContext
 		})
 	case "delete":
 		record, err = api.service.Delete(ctx, lifecycle)
+	case "snapshot":
+		record, err = api.service.Snapshot(ctx, lifecycle)
+	case "attach_volume":
+		record, err = api.service.AttachVolume(ctx, lifecycle)
+	case "detach_volume":
+		record, err = api.service.DetachVolume(ctx, lifecycle)
+	case "rollback":
+		record, err = api.service.Rollback(ctx, lifecycle)
 	default:
-		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "action must be start, stop, restart, resize, or delete")
+		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "action must be start, stop, restart, resize, snapshot, attach_volume, detach_volume, rollback, or delete")
 		return
 	}
 	if err != nil {
-		writeDemoError(c, http.StatusBadRequest, "INSTANCE_LIFECYCLE_FAILED", err.Error())
+		writeDemoError(c, demoLifecycleErrorStatus(err), demoLifecycleErrorCode(err), err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, demoInstanceFromRecord(record))
+	c.JSON(http.StatusOK, demoInstanceLifecycleResponse{
+		Instance:    demoInstanceFromRecord(record),
+		OperationID: record.OperationID,
+	})
 }
 
 func (api *demoInstanceAPI) listOperations(ctx context.Context, c *app.RequestContext) {
@@ -572,7 +676,7 @@ func demoSpecFromRequest(req demoCreateInstanceRequest, tenantID string) (ports.
 		Storage: []ports.WorkloadStorageAttachment{
 			{Name: name + "-root", Kind: ports.StorageAttachmentRootDisk, SizeGiB: 40, SourceRef: firstNonEmpty(req.BootImage, "images/ubuntu-22.04.qcow2"), Required: true},
 		},
-		Lifecycle: ports.InstanceLifecyclePolicy{AutoStart: autoStart},
+		Lifecycle: ports.InstanceLifecyclePolicy{AutoStart: autoStart, TerminationProtection: req.TerminationProtection},
 		Labels: map[string]string{
 			"ani.io/demo": "true",
 		},
@@ -583,22 +687,24 @@ func demoSpecFromRequest(req demoCreateInstanceRequest, tenantID string) (ports.
 	switch kind {
 	case ports.WorkloadKindVM:
 		spec.VM = &ports.VMInstanceSpec{
-			BootImage:   firstNonEmpty(req.BootImage, "images/ubuntu-22.04.qcow2"),
-			MachineType: "q35",
-			RootDisk:    spec.Storage[0],
+			BootImage:    firstNonEmpty(req.BootImage, "images/ubuntu-22.04.qcow2"),
+			SSHUsername:  firstNonEmpty(req.SSHUsername, "ubuntu"),
+			SSHKeySecret: req.SSHKeyRef,
+			MachineType:  "q35",
+			RootDisk:     spec.Storage[0],
 		}
 	case ports.WorkloadKindContainer:
 		spec.Storage = nil
-		spec.Container = &ports.ContainerInstanceSpec{Ports: []int32{8080}}
+		spec.Container = &ports.ContainerInstanceSpec{Ports: []int32{8080}, Replicas: int32(maxInt(req.Replicas, 1))}
 	case ports.WorkloadKindGPUContainer:
 		spec.Storage = nil
-		spec.Container = &ports.ContainerInstanceSpec{Ports: []int32{8080}}
+		spec.Container = &ports.ContainerInstanceSpec{Ports: []int32{8080}, Replicas: int32(maxInt(req.Replicas, 1))}
 		spec.Resources.GPU = ports.GPUSchedulingRequest{
 			TenantID:         tenantID,
 			WorkloadID:       name,
-			PreferredVendors: []ports.GPUVendor{ports.GPUVendor(firstNonEmpty(req.GPUVendor, "nvidia"))},
-			PreferredModels:  []string{firstNonEmpty(req.GPUModel, "A100")},
-			RequiredCount:    maxInt(req.GPUCount, 1),
+			PreferredVendors: []ports.GPUVendor{ports.GPUVendor(firstNonEmpty(req.GPU.Vendor, req.GPUVendor, "nvidia"))},
+			PreferredModels:  []string{firstNonEmpty(req.GPU.Model, req.GPUModel, "A100")},
+			RequiredCount:    maxInt(firstNonZeroInt(req.GPU.Count, req.GPUCount), 1),
 		}
 	default:
 		return ports.WorkloadSpec{}, fmt.Errorf("unsupported demo instance kind %q", kind)
@@ -608,18 +714,113 @@ func demoSpecFromRequest(req demoCreateInstanceRequest, tenantID string) (ports.
 
 func demoInstanceFromRecord(record ports.WorkloadInstanceRecord) demoInstanceResponse {
 	return demoInstanceResponse{
-		ID:           record.InstanceID,
-		TenantID:     record.TenantID,
-		Name:         record.Name,
-		Kind:         string(record.Kind),
-		Status:       string(record.Status.State),
-		Provider:     record.Provider,
-		OperationID:  record.OperationID,
-		ResourceRefs: record.ResourceRefs,
-		Endpoint:     record.Status.Endpoint,
-		CreatedAt:    record.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    record.UpdatedAt.Format(time.RFC3339),
+		ID:                    record.InstanceID,
+		TenantID:              record.TenantID,
+		Name:                  record.Name,
+		Kind:                  string(record.Kind),
+		State:                 string(record.Status.State),
+		Status:                string(record.Status.State),
+		Provider:              record.Provider,
+		OperationID:           record.OperationID,
+		ResourceRefs:          record.ResourceRefs,
+		Endpoint:              record.Status.Endpoint,
+		TerminationProtection: record.Lifecycle.TerminationProtection,
+		SSH:                   demoSSHFromRecord(record),
+		Volumes:               demoVolumesFromRecord(record),
+		Snapshots:             demoSnapshotsFromRecord(record),
+		Container:             demoContainerFromRecord(record),
+		GPU:                   demoGPUFromRecord(record),
+		CreatedAt:             record.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:             record.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+func demoSSHFromRecord(record ports.WorkloadInstanceRecord) *demoSSHResponse {
+	if record.SSH == nil {
+		return nil
+	}
+	return &demoSSHResponse{
+		Username: record.SSH.Username,
+		Host:     record.SSH.Host,
+		Port:     record.SSH.Port,
+		KeyRef:   record.SSH.KeyRef,
+		Ready:    record.SSH.Ready,
+		Reason:   record.SSH.Reason,
+	}
+}
+
+func demoVolumesFromRecord(record ports.WorkloadInstanceRecord) []demoVolume {
+	if len(record.Status.Storage) == 0 {
+		return nil
+	}
+	items := make([]demoVolume, 0, len(record.Status.Storage))
+	for _, volume := range record.Status.Storage {
+		items = append(items, demoVolume{
+			Name:      volume.Name,
+			Kind:      string(volume.Kind),
+			SizeGiB:   volume.SizeGiB,
+			SourceRef: volume.SourceRef,
+			MountPath: volume.MountPath,
+			ReadOnly:  volume.ReadOnly,
+		})
+	}
+	return items
+}
+
+func demoContainerFromRecord(record ports.WorkloadInstanceRecord) *demoContainer {
+	if record.Container == nil {
+		return nil
+	}
+	history := make([]demoContainerChange, 0, len(record.Container.History))
+	for _, item := range record.Container.History {
+		history = append(history, demoContainerChange{
+			Revision:  item.Revision,
+			Image:     item.Image,
+			CreatedAt: item.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return &demoContainer{
+		Replicas:      record.Container.Replicas,
+		ReadyReplicas: record.Container.ReadyReplicas,
+		Revision:      record.Container.Revision,
+		RolloutStatus: record.Container.RolloutStatus,
+		History:       history,
+	}
+}
+
+func demoGPUFromRecord(record ports.WorkloadInstanceRecord) *demoGPU {
+	if record.GPU == nil {
+		return nil
+	}
+	return &demoGPU{
+		Vendor:             string(record.GPU.Vendor),
+		Model:              record.GPU.Model,
+		Count:              record.GPU.Count,
+		SchedulingReason:   record.GPU.SchedulingReason,
+		UtilizationPercent: record.GPU.UtilizationPercent,
+	}
+}
+
+func demoSnapshotsFromRecord(record ports.WorkloadInstanceRecord) []demoSnapshot {
+	if len(record.Snapshots) == 0 {
+		return nil
+	}
+	items := make([]demoSnapshot, 0, len(record.Snapshots))
+	for _, snapshot := range record.Snapshots {
+		item := demoSnapshot{
+			ID:               snapshot.ID,
+			Name:             snapshot.Name,
+			SourceInstanceID: snapshot.SourceInstanceID,
+			State:            snapshot.State,
+			Reason:           snapshot.Reason,
+			CreatedAt:        snapshot.CreatedAt.Format(time.RFC3339),
+		}
+		if !snapshot.ReadyAt.IsZero() {
+			item.ReadyAt = snapshot.ReadyAt.Format(time.RFC3339)
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func demoManifests(manifests []ports.WorkloadManifest) []demoManifest {
@@ -696,6 +897,26 @@ func writeDemoError(c *app.RequestContext, status int, code string, message stri
 	})
 }
 
+func demoLifecycleErrorStatus(err error) int {
+	if errors.Is(err, ports.ErrConflict) {
+		return http.StatusConflict
+	}
+	if errors.Is(err, ports.ErrNotFound) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
+}
+
+func demoLifecycleErrorCode(err error) string {
+	if errors.Is(err, ports.ErrConflict) {
+		return "CONFLICT"
+	}
+	if errors.Is(err, ports.ErrNotFound) {
+		return "INSTANCE_NOT_FOUND"
+	}
+	return "INSTANCE_LIFECYCLE_FAILED"
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -703,6 +924,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func hasIdempotencyKey(value string) bool {
+	return strings.TrimSpace(value) != ""
 }
 
 func boolStatus(ok bool) string {
@@ -729,6 +954,15 @@ func maxInt(value int, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 type demoPlanAuditStore struct{}

@@ -369,8 +369,23 @@ func transition(state ports.WorkloadState, action ports.WorkloadLifecycleAction)
 			return "", fmt.Errorf("%w: cannot resize deleted instance", ports.ErrConflict)
 		}
 		return state, nil
+	case ports.WorkloadLifecycleRebuild:
+		if state == ports.WorkloadStateDeleted || state == ports.WorkloadStateDeleting {
+			return "", fmt.Errorf("%w: cannot rebuild deleted instance", ports.ErrConflict)
+		}
+		return ports.WorkloadStateProvisioning, nil
 	case ports.WorkloadLifecycleDelete:
 		return ports.WorkloadStateDeleted, nil
+	case ports.WorkloadLifecycleSnapshot, ports.WorkloadLifecycleAttachVolume, ports.WorkloadLifecycleDetachVolume:
+		if state == ports.WorkloadStateDeleted || state == ports.WorkloadStateDeleting {
+			return "", fmt.Errorf("%w: cannot %s deleted instance", ports.ErrConflict, action)
+		}
+		return state, nil
+	case ports.WorkloadLifecycleRollback:
+		if state == ports.WorkloadStateDeleted || state == ports.WorkloadStateDeleting {
+			return "", fmt.Errorf("%w: cannot rollback deleted instance", ports.ErrConflict)
+		}
+		return ports.WorkloadStateRunning, nil
 	case ports.WorkloadLifecycleCreate:
 		return state, nil
 	default:

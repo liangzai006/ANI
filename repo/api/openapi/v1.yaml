@@ -133,18 +133,85 @@ components:
       description: ANI Core 计算实例（VM/Container/GPU/Sandbox/BM/K8s集群/Batch）
       required: [id, tenant_id, name, kind, state, provider, created_at, updated_at]
       properties:
-        id:             { type: string, format: uuid }
-        tenant_id:      { type: string, format: uuid }
+        id:             { type: string }
+        tenant_id:      { type: string }
         name:           { type: string }
         kind:           { type: string, enum: [vm, container, gpu_container, sandbox, batch_job, notebook, k8s_cluster, bare_metal, dpu_node] }
         state:          { type: string, enum: [pending, provisioning, starting, running, stopping, stopped, failed, deleting, deleted] }
         state_reason:   { type: string, nullable: true, description: "机器可读的状态原因码，如 InsufficientGPU" }
         state_message:  { type: string, nullable: true, description: "人类可读的状态描述" }
         provider:       { type: string, example: "kubernetes_rest" }
-        audit_id:       { type: string, format: uuid, nullable: true }
+        audit_id:       { type: string, nullable: true }
         resource_refs:  { type: array, items: { type: string } }
         endpoint:       { type: string, nullable: true }
         node_name:      { type: string, nullable: true }
+        termination_protection: { type: boolean, default: false, description: "VM 危险操作保护开关；开启后 stop/delete/rebuild 等操作必须先关闭保护" }
+        ssh:
+          type: object
+          nullable: true
+          description: "VM SSH 连接信息；仅返回连接元数据，不返回私钥"
+          required: [username, host, port, ready]
+          properties:
+            username: { type: string, example: "ubuntu" }
+            host:     { type: string, nullable: true }
+            port:     { type: integer, default: 22 }
+            key_ref:  { type: string, nullable: true, description: "SSH key/secret 引用；不包含私钥内容" }
+            ready:    { type: boolean, description: "连接信息是否已可用于发起 SSH" }
+            reason:   { type: string, nullable: true }
+        volumes:
+          type: array
+          items:
+            type: object
+            required: [name, kind]
+            properties:
+              name:       { type: string }
+              kind:       { type: string, enum: [root_disk, data_disk, shared_pvc, object_fuse, ephemeral] }
+              size_gib:   { type: integer, format: int64 }
+              source_ref: { type: string, nullable: true }
+              mount_path: { type: string, nullable: true }
+              read_only:  { type: boolean, default: false }
+        container:
+          type: object
+          nullable: true
+          description: "Container/GPU Container 部署状态摘要"
+          properties:
+            replicas:       { type: integer, minimum: 0, default: 1 }
+            ready_replicas: { type: integer, minimum: 0, default: 0 }
+            revision:       { type: string, nullable: true }
+            rollout_status: { type: string, nullable: true, enum: [pending, progressing, healthy, degraded, rolled_back] }
+            history:
+              type: array
+              items:
+                type: object
+                required: [revision, created_at]
+                properties:
+                  revision:   { type: string }
+                  image:      { type: string, nullable: true }
+                  created_at: { type: string, format: date-time }
+        gpu:
+          type: object
+          nullable: true
+          description: "GPU container 调度和利用率状态"
+          properties:
+            vendor:                { type: string, nullable: true }
+            model:                 { type: string, nullable: true }
+            count:                 { type: integer, minimum: 0 }
+            scheduling_reason:     { type: string, nullable: true }
+            utilization_percent:   { type: number, format: float, minimum: 0, maximum: 100, nullable: true }
+        snapshots:
+          type: array
+          description: "VM 快照元数据；provider-native 快照执行后续通过 reconcile 对齐"
+          items:
+            type: object
+            required: [id, name, source_instance_id, state, created_at]
+            properties:
+              id:                 { type: string }
+              name:               { type: string }
+              source_instance_id: { type: string }
+              state:              { type: string, enum: [creating, ready, failed, deleting, deleted] }
+              reason:             { type: string, nullable: true }
+              created_at:         { type: string, format: date-time }
+              ready_at:           { type: string, format: date-time, nullable: true }
         created_at:     { type: string, format: date-time }
         updated_at:     { type: string, format: date-time }
 
@@ -153,13 +220,13 @@ components:
       description: 实例操作记录（创建/启动/停止/变配/删除等）
       required: [id, instance_id, tenant_id, operation, status, requested_by, created_at]
       properties:
-        id:               { type: string, format: uuid }
-        instance_id:      { type: string, format: uuid }
-        tenant_id:        { type: string, format: uuid }
-        operation:        { type: string, enum: [create, start, stop, restart, resize, delete] }
+        id:               { type: string }
+        instance_id:      { type: string }
+        tenant_id:        { type: string }
+        operation:        { type: string, enum: [create, start, stop, restart, resize, rebuild, delete, snapshot, attach_volume, detach_volume, rollback, console_session] }
         status:           { type: string, enum: [accepted, in_progress, succeeded, failed, cancelled] }
         idempotency_key:  { type: string, nullable: true, description: "客户端提供的幂等键" }
-        requested_by:     { type: string, format: uuid, description: "发起操作的用户 ID" }
+        requested_by:     { type: string, description: "发起操作的用户 ID" }
         precheck_result:  { type: object, nullable: true }
         failure_reason:   { type: string, nullable: true }
         failure_message:  { type: string, nullable: true }
@@ -179,6 +246,89 @@ components:
         after_spec:       { type: object, nullable: true, description: "变更后的实例规格快照" }
         created_at:       { type: string, format: date-time }
         updated_at:       { type: string, format: date-time }
+
+    InstanceListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/InstanceRecord' }
+        total:       { type: integer }
+        next_cursor: { type: string, nullable: true }
+
+    CreateInstanceRequest:
+      type: object
+      required: [name, kind, idempotency_key]
+      properties:
+        idempotency_key: { type: string, minLength: 1, maxLength: 128, description: "客户端生成；同一 tenant_id 下 24 小时内去重" }
+        name:           { type: string, minLength: 1, maxLength: 128 }
+        kind:           { type: string, enum: [vm, container, gpu_container] }
+        image:          { type: string, nullable: true, description: "容器镜像或运行时镜像引用" }
+        cpu:            { type: string, example: "2" }
+        memory:         { type: string, example: "4Gi" }
+        auto_start:     { type: boolean, default: true }
+        boot_image:     { type: string, nullable: true, description: "VM boot image 引用" }
+        ssh_username:   { type: string, nullable: true, default: "ubuntu", description: "VM SSH 用户名；仅 VM 使用" }
+        ssh_key_ref:    { type: string, nullable: true, description: "VM SSH key/secret 引用；不包含私钥内容" }
+        termination_protection: { type: boolean, default: false }
+        gpu:
+          type: object
+          nullable: true
+          properties:
+            vendor: { type: string, example: "nvidia" }
+            model:  { type: string, example: "A100" }
+            count:  { type: integer, minimum: 1, default: 1 }
+        replicas:
+          type: integer
+          minimum: 1
+          default: 1
+          description: "Container/GPU Container 副本数；VM 固定为 1"
+
+    CreateInstanceResponse:
+      type: object
+      required: [instance, operation_id]
+      properties:
+        instance:     { $ref: '#/components/schemas/InstanceRecord' }
+        operation_id: { type: string }
+        audit_id:     { type: string, nullable: true }
+
+    InstanceLifecycleRequest:
+      type: object
+      required: [action, idempotency_key]
+      properties:
+        action:
+          type: string
+          enum: [start, stop, restart, resize, rebuild, delete, snapshot, attach_volume, detach_volume, rollback]
+        idempotency_key: { type: string, minLength: 1, maxLength: 128 }
+        cpu:            { type: string, nullable: true, description: "resize 时使用" }
+        memory:         { type: string, nullable: true, description: "resize 时使用" }
+        snapshot_name:  { type: string, nullable: true, description: "snapshot 时指定快照名称；为空时由本地 profile 生成" }
+        revision:       { type: string, nullable: true, description: "rollback 时指定目标 revision；为空时回滚上一版本" }
+        volume_id:      { type: string, nullable: true, description: "attach_volume/detach_volume 时使用" }
+
+    InstanceLifecycleResponse:
+      type: object
+      required: [instance, operation_id]
+      properties:
+        instance:     { $ref: '#/components/schemas/InstanceRecord' }
+        operation_id: { type: string }
+
+    CreateInstanceConsoleSessionRequest:
+      type: object
+      properties:
+        protocol: { type: string, enum: [console, vnc, novnc, serial], default: "vnc" }
+
+    InstanceConsoleSession:
+      type: object
+      required: [session_id, protocol, connect_url, url, expires_at]
+      properties:
+        operation_id: { type: string, nullable: true, description: "对应 operation timeline，可通过 /instance-operations/{operation_id} 查询" }
+        session_id:  { type: string }
+        protocol:    { type: string, enum: [console, vnc, novnc, serial] }
+        connect_url: { type: string }
+        url:         { type: string, description: "连接 URL，和 connect_url 等价，供 Console/SDK 直接使用" }
+        expires_at:  { type: string, format: date-time }
 
     BeginOIDCLoginRequest:
       type: object
@@ -538,6 +688,125 @@ paths:
                 required: [status]
                 properties:
                   status: { type: string, enum: [revoked] }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  # ── 计算实例（Core API Alpha）──────────────────────────────────────────────
+  /instances:
+    get:
+      operationId: listInstances
+      summary: 查询实例列表
+      description: |
+        Services P0 依赖路径。返回 VM、container、gpu_container 的 Core 统一实例视图。
+        当前 Alpha 冻结 path/schema/error/state/RBAC scope；dev/local profile 可使用本地 provider。
+      tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:read"
+      parameters:
+        - { name: kind,   in: query, schema: { type: string, enum: [vm, container, gpu_container] } }
+        - { name: limit,  in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: 实例列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceListResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+
+    post:
+      operationId: createInstance
+      summary: 创建实例
+      description: |
+        创建 VM、container 或 gpu_container。POST 创建必须携带 idempotency_key；
+        同一 (tenant_id, idempotency_key) 在 24 小时内返回同一操作结果。
+      tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:create"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInstanceRequest' }
+      responses:
+        "201":
+          description: 实例创建已提交并返回当前状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateInstanceResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /instances/{instance_id}:
+    get:
+      operationId: getInstance
+      summary: 查询实例详情
+      tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:read"
+      parameters:
+        - { name: instance_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 实例详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceRecord' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /instances/{instance_id}/lifecycle:
+    post:
+      operationId: applyInstanceLifecycle
+      summary: 执行实例生命周期操作
+      description: |
+        执行 start/stop/restart/resize/rebuild/delete/snapshot/attach_volume/detach_volume/rollback。
+        stop/delete 等有副作用操作必须携带 idempotency_key，VM 开启 termination_protection
+        时危险操作返回 CONFLICT，并在 operation precheck 中记录拒绝原因。
+      tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:update"
+      parameters:
+        - { name: instance_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InstanceLifecycleRequest' }
+      responses:
+        "200":
+          description: 操作已接受并返回实例当前状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceLifecycleResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /instances/{instance_id}/console:
+    post:
+      operationId: createInstanceConsoleSession
+      summary: 申请 VM console/VNC session
+      description: 返回短期 console/VNC/serial session 信息；不暴露 provider 长期凭据。
+      tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:console"
+      parameters:
+        - { name: instance_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInstanceConsoleSessionRequest' }
+      responses:
+        "200":
+          description: console session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstanceConsoleSession' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
@@ -935,8 +1204,9 @@ paths:
         返回指定实例的所有操作记录（创建、启动、停止、变配、删除等）。
         每条操作记录包含：操作类型、状态、触发用户、时间线步骤、失败原因和重试建议。
       tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:read"
       parameters:
-        - { name: instance_id, in: path,  required: true, schema: { type: string, format: uuid } }
+        - { name: instance_id, in: path,  required: true, schema: { type: string } }
         - { name: limit,       in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
         - { name: cursor,      in: query, schema: { type: string } }
       responses:
@@ -961,8 +1231,9 @@ paths:
       summary: 查询单个操作详情
       description: 通过 operation_id 查询操作详情，包含完整时间线步骤。
       tags: [Instances]
+      x-ani-rbac-scope: "scope:instances:read"
       parameters:
-        - { name: operation_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: operation_id, in: path, required: true, schema: { type: string } }
       responses:
         "200":
           description: 操作详情
@@ -970,6 +1241,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/InstanceOperation' }
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
 
   # ── 异步任务 ────────────────────────────────────────────────────────────────

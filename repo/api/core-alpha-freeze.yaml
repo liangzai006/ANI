@@ -1,0 +1,155 @@
+version: core-api-alpha-2026-05-20
+phase: Phase 1 / Sprint 2
+scope: Services P0 Core API dependencies
+owner: ANI Core
+status: alpha_frozen
+
+freeze_rules:
+  compatibility:
+    allowed:
+      - add optional request fields
+      - add optional response fields
+      - add new enum values with documented behavior
+      - add new endpoints
+    breaking_change_requires:
+      - remove or rename path
+      - change HTTP method
+      - remove response field
+      - change field type
+      - remove enum value
+      - change RBAC scope
+      - change error code semantics
+  no_stub_without_owner_date: true
+  idempotency_required_for:
+    - POST /instances
+    - POST /instances/{instance_id}/lifecycle
+
+paths:
+  /instances:
+    get:
+      operation_id: listInstances
+      rbac_scope: scope:instances:read
+      maturity: dev_profile
+      responses: ["200", "401", "403"]
+    post:
+      operation_id: createInstance
+      rbac_scope: scope:instances:create
+      maturity: dev_profile
+      idempotency_required: true
+      responses: ["201", "400", "401", "403", "409"]
+  /instances/{instance_id}:
+    get:
+      operation_id: getInstance
+      rbac_scope: scope:instances:read
+      maturity: dev_profile
+      responses: ["200", "401", "403", "404"]
+  /instances/{instance_id}/lifecycle:
+    post:
+      operation_id: applyInstanceLifecycle
+      rbac_scope: scope:instances:update
+      maturity: dev_profile
+      idempotency_required: true
+      responses: ["200", "400", "401", "403", "404", "409"]
+  /instances/{instance_id}/console:
+    post:
+      operation_id: createInstanceConsoleSession
+      rbac_scope: scope:instances:console
+      maturity: dev_profile
+      responses: ["200", "400", "401", "403", "404"]
+  /instances/{instance_id}/operations:
+    get:
+      operation_id: listInstanceOperations
+      rbac_scope: scope:instances:read
+      maturity: dev_profile
+      responses: ["200", "401", "403", "404"]
+  /instance-operations/{operation_id}:
+    get:
+      operation_id: getInstanceOperation
+      rbac_scope: scope:instances:read
+      maturity: dev_profile
+      responses: ["200", "401", "403", "404"]
+
+schemas:
+  instance_record_fields:
+    required:
+      - id
+      - tenant_id
+      - name
+      - kind
+      - state
+      - provider
+      - created_at
+      - updated_at
+    alpha_fields:
+      - termination_protection
+      - ssh
+      - volumes
+      - snapshots
+      - container
+      - gpu
+  create_instance_request_fields:
+    required:
+      - name
+      - kind
+      - idempotency_key
+    alpha_fields:
+      - ssh_username
+      - ssh_key_ref
+      - termination_protection
+      - replicas
+      - gpu.vendor
+      - gpu.model
+      - gpu.count
+  lifecycle_request_fields:
+    required:
+      - action
+      - idempotency_key
+    alpha_fields:
+      - snapshot_name
+      - volume_id
+      - revision
+  lifecycle_actions:
+    - start
+    - stop
+    - restart
+    - resize
+    - rebuild
+    - delete
+    - snapshot
+    - attach_volume
+    - detach_volume
+    - rollback
+  operation_fields:
+    - precheck_result
+    - before_spec
+    - after_spec
+    - failure_reason
+    - retry_eligible
+    - steps
+
+states:
+  - pending
+  - provisioning
+  - starting
+  - running
+  - stopping
+  - stopped
+  - failed
+  - deleting
+  - deleted
+
+error_responses:
+  components:
+    - Unauthorized
+    - Forbidden
+    - NotFound
+    - BadRequest
+    - Conflict
+    - RateLimitExceeded
+  codes:
+    "400": BAD_REQUEST
+    "401": UNAUTHORIZED
+    "403": FORBIDDEN
+    "404": NOT_FOUND
+    "409": CONFLICT
+    "429": RATE_LIMIT_EXCEEDED

@@ -1,7 +1,7 @@
 # KuberCloud ANI · 开发计划
 
 > 版本 V8.3 | 广州常青云科技有限公司 | 内部产品规划文件
-> 最后更新：2026-05-19（Sprint 2 启动 + 文档入口瘦身）
+> 最后更新：2026-05-20（Sprint 2 完成，Sprint 3 提前启动）
 
 ---
 
@@ -23,12 +23,12 @@
 ### 项目全局进度
 
 ```
-当前阶段：Phase 1 / Sprint 2（VM & Container/GPU 深度 + Core API Alpha Freeze）
+当前阶段：Phase 1 / Sprint 3（Core API 面扩充 + SDK Alpha + Dev Profile Ready）
 当前不是 Phase 2：Phase 2 指 2026-10 以后延期能力，不是下一次开发阶段
 交付目标：2026-09-30 ANI Core v1.0.0 + ANI Services P0
 关键节奏：ANI Core 必须先在 2026-06 上中旬解锁 ANI Services 开发，不能等到 2026-09-30 才完成接口与 SDK
-刚完成：Sprint 1 Foundation + M2.2 Auth Final（2026-05-18，含 Docker Dex smoke）
-下一步：按 repo/CURRENT-SPRINT.md 执行 Sprint 2
+刚完成：Sprint 2（2026-05-20，Core API Alpha Freeze + VM/Container/GPU 本地 profile）
+下一步：按 repo/CURRENT-SPRINT.md 执行 Sprint 3
 ```
 
 | 阶段 | 状态 | 完成时间 | 说明 |
@@ -37,8 +37,8 @@
 | **M2 Auth/Gateway** | ✅ 已完成 | 2026-05 | OIDC/JWT/RBAC/API Key 全流程 |
 | **V8 架构重规划** | ✅ 已完成 | 2026-05-15 | Core/Services 分层、AWS 工程加固 |
 | **Sprint 1** | ✅ 已完成 | 2026-05-18 | 操作语义底座 + Health + Idempotency + Auth Final |
-| **Sprint 2 ⭐（当前）** | 🔄 提前启动 | 2026-05-19 起；计划窗口 2026-06-01~06-15 | VM & Container/GPU 深度 + **Core API Alpha Freeze** |
-| Sprint 3 ⭐ | ⏳ 计划中 | 2026-06-16~06-30 | 网络/存储/向量 API + **SDK Alpha + Dev Profile Ready** |
+| **Sprint 2** | ✅ 已完成 | 2026-05-20 | VM & Container/GPU 深度 + **Core API Alpha Freeze** |
+| Sprint 3 ⭐（当前） | 🔄 提前启动 | 2026-05-20 起；计划窗口 2026-06-16~06-30 | 网络/存储/向量 API + **SDK Alpha + Dev Profile Ready** |
 | Sprint 4 | ⏳ 计划中 | 2026-07-01~07-15 | API Beta 准备 + 四语言 SDK + Mock Server |
 | Sprint 5 | ⏳ 计划中 | 2026-07-16~07-31 | **K8s集群(vCluster)** + 控制器 + 加解密 ← K8S-A 恢复 v1.0.0 |
 | Sprint 6 | ⏳ 计划中 | 2026-08-01~08-15 | Sandbox + 平台支撑 + Services 模型仓库/推理 |
@@ -66,13 +66,16 @@ ANI Core 的 Phase 1 有两个交付对象：先交付给 ANI Services 开发团
 
 **硬规则：** 凡是 ANI Services Phase 1 P0 场景依赖的 Core 能力，不允许在对应 Runtime Ready 日期后仍停留在 `contract`、`local-profile`、stub、mock success 或 `NOT_IMPLEMENTED`。
 
-### 当前冲刺：Sprint 2（2026-05-19 提前启动 → 2026-06-15）
+### 当前冲刺：Sprint 3（2026-05-20 提前启动 → 2026-06-30）
 
 | 批次 | 优先级 | 状态 |
 |---|---|---|
-| SPEC-CORE-ALPHA（Core API Alpha Freeze）| P0 ⭐ | 🔄 当前优先：先冻结 Services P0 path/schema/error/state/RBAC scope |
-| M1-INSTANCE-U（VM 生产级操作）| P0 | ⏳ 待开始：终止保护、console/VNC session、快照、磁盘绑定、SSH 信息 |
-| M1-INSTANCE-V（Container/GPU 深度）| P0 | ⏳ 待开始：副本、滚动更新、回滚、历史、GPU 调度原因/利用率 |
+| M1-NETWORK-A（网络 API 面）| P0 ⭐ | 🔄 当前优先：VPC/子网/安全组/LB Core API 契约与 dev/local profile |
+| M1-STORAGE-A（存储 API 面）| P0 | ⏳ 待开始：volumes/filesystems/objects Core API 契约与 dev/local profile |
+| M1-VSTORE-A（vector-stores API）| P0 | ⏳ 待开始：Milvus adapter 边界下的 vector-stores Core API |
+| M1-WKID-A（Workload Identity）| P0 | ⏳ 待开始：实例生命周期绑定 scoped API key |
+| SDK-ALPHA-A（四语言 SDK Alpha）| P0 ⭐ | ⏳ 待开始：生成、import、compile smoke test |
+| MOCK-DEV-A（Core dev/mock profile）| P0 | ⏳ 待开始：状态机和错误语义对齐真实实现 |
 
 **→ 今天该做什么，只看 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)。**
 
@@ -94,7 +97,7 @@ ANI Core 的 Phase 1 有两个交付对象：先交付给 ANI Services 开发团
 ### v1.0.0 后续延期项（不是当前下一阶段）
 
 > ⚠️ **M1-K8S-A 已从延期列表移回 v1.0.0 范围（Sprint 5）**，理由见 Sprint 5 说明。
-> 这里的延期项不是 Sprint 2 之后立刻要做的任务；当前下一阶段仍是 Sprint 2/3 的 Core API 和 SDK 解锁。
+> 这里的延期项不是 Sprint 3 当前优先要做的任务；当前下一阶段仍是网络/存储/向量 API 与 SDK Alpha 解锁。
 
 | 条目 | 理由 |
 |---|---|
@@ -155,14 +158,14 @@ S10 09-26~09-30  v1.0.0 发布
 
 ### 代码依赖关键路径（实际代码状态驱动）
 
-> 以下基于 2026-05-19 代码与文档状态，反映真实依赖而非愿景描述。
+> 以下基于 2026-05-20 代码与文档状态，反映真实依赖而非愿景描述。
 
 ```
 当前代码实际状态：
   ✅ pkg/ports/ 31个接口，pkg/adapters/runtime/ 28个文件 — 架构基础完整
   ✅ auth-service JWT/OIDC/RBAC 完整实现
-  ✅ DB migrations 3个SQL，operations 表已建
-  ⚠️  /api/v1/demo/instances 已有 local/demo profile，`/api/v1/instances` 规范路径仍需在 Sprint 2 收敛为 Services 可依赖的 Core API
+  ✅ DB migrations 4个SQL，operations 表与 instance 深度字段已建
+  ✅ /api/v1/instances Core Alpha path/schema/error/state/RBAC scope 已冻结，dev/local profile 可供 Services P0 依赖
   ⚠️  /api/v1/networks /volumes handler — 仍需 Sprint 3 补真实或 contract-compatible dev profile
   ⚠️  model-service 有实现但属于 Services 层，需要划清边界
   ❌ kb-service — 完全空目录，Sprint 6 从零建
@@ -217,11 +220,11 @@ curl http://localhost:8080/readyz    # → {"status":"ok","checks":{...}}
 
 **解锁：** Sprint 2 的 VM/Container 深度 + Sprint 4 的 operation timeline Console 展示
 
-**归档：** 详细完成记录见 `repo/development-records/README.md`，当前执行入口已切换到 `repo/CURRENT-SPRINT.md` 的 Sprint 2。
+**归档：** 详细完成记录见 `repo/development-records/README.md`，当前执行入口已切换到 `repo/CURRENT-SPRINT.md` 的 Sprint 3。
 
 ---
 
-### Sprint 2：2026-05-19 提前启动 → 2026-06-15（当前）
+### Sprint 2：2026-05-19 提前启动 → 2026-05-20（已完成）
 
 **主题：VM & Container / GPU 容器生产深度**
 
@@ -248,7 +251,7 @@ make test
 
 ---
 
-### Sprint 3：2026-06-16 → 2026-06-30
+### Sprint 3：2026-05-20 提前启动 → 2026-06-30（当前）
 
 **主题：Core API 面扩充（网络 + 存储 + 向量 + Workload Identity）**
 

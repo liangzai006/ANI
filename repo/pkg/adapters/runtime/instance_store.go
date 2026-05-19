@@ -68,6 +68,26 @@ func (s *MetadataInstanceStore) UpsertStatus(ctx context.Context, record ports.W
 	if err != nil {
 		return fmt.Errorf("marshal storage: %w", err)
 	}
+	lifecyclePolicy, err := json.Marshal(record.Lifecycle)
+	if err != nil {
+		return fmt.Errorf("marshal lifecycle policy: %w", err)
+	}
+	sshConnection, err := json.Marshal(firstNonNilSSH(record.SSH))
+	if err != nil {
+		return fmt.Errorf("marshal ssh connection: %w", err)
+	}
+	snapshots, err := json.Marshal(record.Snapshots)
+	if err != nil {
+		return fmt.Errorf("marshal snapshots: %w", err)
+	}
+	containerStatus, err := json.Marshal(firstNonNilContainer(record.Container))
+	if err != nil {
+		return fmt.Errorf("marshal container status: %w", err)
+	}
+	gpuStatus, err := json.Marshal(firstNonNilGPU(record.GPU))
+	if err != nil {
+		return fmt.Errorf("marshal gpu status: %w", err)
+	}
 	now := s.now().UTC()
 	createdAt := firstNonZeroTime(record.CreatedAt, now)
 	updatedAt := firstNonZeroTime(record.UpdatedAt, record.Status.UpdatedAt, now)
@@ -77,12 +97,12 @@ func (s *MetadataInstanceStore) UpsertStatus(ctx context.Context, record ports.W
 			INSERT INTO workload_instances (
 				tenant_id, instance_id, name, workload_kind, provider, audit_id,
 				provider_id, resource_refs, state, endpoint, node_name, reason,
-				networks, storage, created_at, updated_at
+				networks, storage, lifecycle_policy, ssh_connection, snapshots, container_status, gpu_status, created_at, updated_at
 			)
 			VALUES (
 				$1::uuid, $2, $3, $4, NULLIF($5, ''), NULLIF($6, '')::uuid,
 				NULLIF($7, ''), $8::jsonb, $9, NULLIF($10, ''), NULLIF($11, ''),
-				NULLIF($12, ''), $13::jsonb, $14::jsonb, $15, $16
+				NULLIF($12, ''), $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18::jsonb, $19::jsonb, $20, $21
 			)
 			ON CONFLICT (tenant_id, instance_id) DO UPDATE SET
 				name = EXCLUDED.name,
@@ -97,11 +117,16 @@ func (s *MetadataInstanceStore) UpsertStatus(ctx context.Context, record ports.W
 				reason = EXCLUDED.reason,
 				networks = EXCLUDED.networks,
 				storage = EXCLUDED.storage,
+				lifecycle_policy = EXCLUDED.lifecycle_policy,
+				ssh_connection = EXCLUDED.ssh_connection,
+				snapshots = EXCLUDED.snapshots,
+				container_status = EXCLUDED.container_status,
+				gpu_status = EXCLUDED.gpu_status,
 				updated_at = EXCLUDED.updated_at
 		`, record.TenantID, record.InstanceID, record.Name, string(record.Kind), record.Provider,
 			record.AuditID, record.Status.Ref.ProviderID, string(resourceRefs), string(record.Status.State),
 			record.Status.Endpoint, record.Status.NodeName, record.Status.Reason, string(networks), string(storage),
-			createdAt, updatedAt)
+			string(lifecyclePolicy), string(sshConnection), string(snapshots), string(containerStatus), string(gpuStatus), createdAt, updatedAt)
 		if err != nil {
 			return fmt.Errorf("upsert workload instance: %w", err)
 		}
@@ -123,7 +148,7 @@ func (s *MetadataInstanceStore) Get(ctx context.Context, tenantID string, instan
 			SELECT tenant_id::text, instance_id, name, workload_kind, COALESCE(provider, ''),
 				COALESCE(audit_id::text, ''), COALESCE(provider_id, ''), resource_refs,
 				state, COALESCE(endpoint, ''), COALESCE(node_name, ''), COALESCE(reason, ''),
-				networks, storage, created_at, updated_at
+				networks, storage, lifecycle_policy, ssh_connection, snapshots, container_status, gpu_status, created_at, updated_at
 			FROM workload_instances
 			WHERE tenant_id = $1::uuid AND instance_id = $2
 		`, tenantID, instanceID)
@@ -149,7 +174,7 @@ func (s *MetadataInstanceStore) List(ctx context.Context, tenantID string, kind 
 			SELECT tenant_id::text, instance_id, name, workload_kind, COALESCE(provider, ''),
 				COALESCE(audit_id::text, ''), COALESCE(provider_id, ''), resource_refs,
 				state, COALESCE(endpoint, ''), COALESCE(node_name, ''), COALESCE(reason, ''),
-				networks, storage, created_at, updated_at
+				networks, storage, lifecycle_policy, ssh_connection, snapshots, container_status, gpu_status, created_at, updated_at
 			FROM workload_instances
 			WHERE tenant_id = $1::uuid AND ($2 = '' OR workload_kind = $2)
 			ORDER BY updated_at DESC
@@ -183,6 +208,11 @@ func scanWorkloadInstance(row scanner, record *ports.WorkloadInstanceRecord) err
 	var resourceRefsJSON []byte
 	var networksJSON []byte
 	var storageJSON []byte
+	var lifecyclePolicyJSON []byte
+	var sshConnectionJSON []byte
+	var snapshotsJSON []byte
+	var containerStatusJSON []byte
+	var gpuStatusJSON []byte
 	if err := row.Scan(
 		&record.TenantID,
 		&record.InstanceID,
@@ -198,6 +228,11 @@ func scanWorkloadInstance(row scanner, record *ports.WorkloadInstanceRecord) err
 		&record.Status.Reason,
 		&networksJSON,
 		&storageJSON,
+		&lifecyclePolicyJSON,
+		&sshConnectionJSON,
+		&snapshotsJSON,
+		&containerStatusJSON,
+		&gpuStatusJSON,
 		&record.CreatedAt,
 		&record.UpdatedAt,
 	); err != nil {
@@ -221,7 +256,59 @@ func scanWorkloadInstance(row scanner, record *ports.WorkloadInstanceRecord) err
 	if err := json.Unmarshal(storageJSON, &record.Status.Storage); err != nil {
 		return fmt.Errorf("unmarshal storage: %w", err)
 	}
+	if len(lifecyclePolicyJSON) > 0 {
+		if err := json.Unmarshal(lifecyclePolicyJSON, &record.Lifecycle); err != nil {
+			return fmt.Errorf("unmarshal lifecycle policy: %w", err)
+		}
+	}
+	if len(sshConnectionJSON) > 0 && string(sshConnectionJSON) != "{}" {
+		var ssh ports.VMSSHConnectionInfo
+		if err := json.Unmarshal(sshConnectionJSON, &ssh); err != nil {
+			return fmt.Errorf("unmarshal ssh connection: %w", err)
+		}
+		record.SSH = &ssh
+	}
+	if len(snapshotsJSON) > 0 {
+		if err := json.Unmarshal(snapshotsJSON, &record.Snapshots); err != nil {
+			return fmt.Errorf("unmarshal snapshots: %w", err)
+		}
+	}
+	if len(containerStatusJSON) > 0 && string(containerStatusJSON) != "{}" {
+		var container ports.ContainerInstanceStatus
+		if err := json.Unmarshal(containerStatusJSON, &container); err != nil {
+			return fmt.Errorf("unmarshal container status: %w", err)
+		}
+		record.Container = &container
+	}
+	if len(gpuStatusJSON) > 0 && string(gpuStatusJSON) != "{}" {
+		var gpu ports.GPUInstanceStatus
+		if err := json.Unmarshal(gpuStatusJSON, &gpu); err != nil {
+			return fmt.Errorf("unmarshal gpu status: %w", err)
+		}
+		record.GPU = &gpu
+	}
 	return nil
 }
 
 var _ ports.WorkloadInstanceStore = (*MetadataInstanceStore)(nil)
+
+func firstNonNilSSH(ssh *ports.VMSSHConnectionInfo) any {
+	if ssh == nil {
+		return map[string]any{}
+	}
+	return ssh
+}
+
+func firstNonNilContainer(container *ports.ContainerInstanceStatus) any {
+	if container == nil {
+		return map[string]any{}
+	}
+	return container
+}
+
+func firstNonNilGPU(gpu *ports.GPUInstanceStatus) any {
+	if gpu == nil {
+		return map[string]any{}
+	}
+	return gpu
+}
