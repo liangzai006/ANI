@@ -23,7 +23,7 @@ live 模式通过后会写出结构化 JSON，包含：
 - `sealed_object_uri`
 - `object_round_trip_bytes`
 
-为避免把敏感凭据写入批次证据，输出不会包含 ANI bearer token、KMS bearer token、objectstore presigned PUT URL 或 presigned GET URL。该批次只证明 evidence 文件输出能力，不证明 KMS/SM4 live backend、objectstore write/read 或 provider streaming round trip 已在真实 lab 执行成功。
+为避免把敏感凭据写入批次证据，输出不会包含 ANI bearer token、KMS bearer token、objectstore presigned PUT URL 或 presigned GET URL。该批次只证明 evidence 文件输出能力；后续 `M1-ENCRYPT-LIVE-C` 已完成 KMS/SM4 live-gate fixture 下的真实 lab live 结果记录。
 
 ## 关键文件改动
 
@@ -42,8 +42,7 @@ live 模式通过后会写出结构化 JSON，包含：
 - [x] live evidence 包含 tenant、Gateway/KMS 地址、object URI、provider、key、sealed URI 和 round-trip bytes
 - [x] live evidence 不包含 bearer token 或 presigned URL
 - [x] 未请求 evidence 文件时保持原 stdout JSON 行为
-- [ ] 真实 KMS/SM4 backend live 验证
-- [ ] 真实对象存储 + provider streaming live 结果记录
+- [x] 后续 `M1-ENCRYPT-LIVE-C` 已完成真实 lab KMS/SM4 provider streaming 和 objectstore round trip live 结果记录
 
 ## 验证命令
 

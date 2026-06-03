@@ -85,7 +85,7 @@ func (a *VClusterHelmProviderAdapter) ApplyK8sCluster(ctx context.Context, reque
 		"--create-namespace",
 		"--repository-config=",
 		"--set",
-		"sync.toHost.service.enabled=true",
+		"sync.toHost.services.enabled=true",
 	}
 	if _, err := a.runner.Run(ctx, a.helmBinary, args...); err != nil {
 		return ports.K8sClusterProviderApplyResult{}, fmt.Errorf("apply vCluster Helm release: %w", err)
@@ -121,7 +121,7 @@ func (a *VClusterHelmProviderAdapter) UpgradeK8sCluster(ctx context.Context, req
 		"--create-namespace",
 		"--repository-config=",
 		"--set",
-		"sync.toHost.service.enabled=true",
+		"sync.toHost.services.enabled=true",
 		"--set",
 		"controlPlane.distro.k8s.version=" + request.TargetVersion,
 	}

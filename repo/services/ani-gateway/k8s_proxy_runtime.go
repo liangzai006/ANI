@@ -15,46 +15,66 @@ import (
 type gatewayK8sClusterMetadataConnector func(context.Context, string) (ports.MetadataStore, func(), error)
 
 type gatewayK8sClusterRuntimeConfig struct {
-	ProxyMode                        string
-	ProviderMode                     string
-	NodePoolProviderMode             string
-	KubernetesAPIHost                string
-	KubernetesBearerToken            string
-	KubernetesProviderManager        string
-	TargetServer                     string
-	TargetBearerToken                string
-	DatabaseURL                      string
-	MetadataStore                    ports.MetadataStore
-	MetadataConnector                gatewayK8sClusterMetadataConnector
-	HTTPClient                       *http.Client
-	VClusterHelmBinary               string
-	VClusterBinary                   string
-	VClusterChartName                string
-	VClusterChartRepo                string
-	VClusterProxyServerTemplate      string
-	VClusterProxyBearerToken         string
-	VClusterKubeconfigServerTemplate string
-	VClusterHelmRunner               runtimeadapter.VClusterHelmRunner
+	ProxyMode                               string
+	ProviderMode                            string
+	NodePoolProviderMode                    string
+	KubernetesAPIHost                       string
+	KubernetesBearerToken                   string
+	KubernetesProviderManager               string
+	TargetServer                            string
+	TargetBearerToken                       string
+	DatabaseURL                             string
+	MetadataStore                           ports.MetadataStore
+	MetadataConnector                       gatewayK8sClusterMetadataConnector
+	HTTPClient                              *http.Client
+	VClusterHelmBinary                      string
+	VClusterBinary                          string
+	VClusterChartName                       string
+	VClusterChartRepo                       string
+	VClusterProxyServerTemplate             string
+	VClusterProxyBearerToken                string
+	VClusterKubeconfigServerTemplate        string
+	VClusterHelmRunner                      runtimeadapter.VClusterHelmRunner
+	NodePoolMachineVersion                  string
+	NodePoolBootstrapDataSecretNameTemplate string
+	NodePoolBootstrapRefAPIVersion          string
+	NodePoolBootstrapRefKind                string
+	NodePoolBootstrapRefNameTemplate        string
+	NodePoolBootstrapRefNamespace           string
+	NodePoolInfrastructureRefAPIVersion     string
+	NodePoolInfrastructureRefKind           string
+	NodePoolInfrastructureRefNameTemplate   string
+	NodePoolInfrastructureRefNamespace      string
 }
 
 func gatewayK8sClusterRuntimeConfigFromEnv() gatewayK8sClusterRuntimeConfig {
 	return gatewayK8sClusterRuntimeConfig{
-		ProxyMode:                        os.Getenv("K8S_CLUSTER_PROXY_MODE"),
-		ProviderMode:                     os.Getenv("K8S_CLUSTER_PROVIDER_MODE"),
-		NodePoolProviderMode:             os.Getenv("K8S_CLUSTER_NODE_POOL_PROVIDER_MODE"),
-		KubernetesAPIHost:                os.Getenv("KUBERNETES_API_HOST"),
-		KubernetesBearerToken:            os.Getenv("KUBERNETES_BEARER_TOKEN"),
-		KubernetesProviderManager:        os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
-		TargetServer:                     os.Getenv("K8S_CLUSTER_PROXY_TARGET_SERVER"),
-		TargetBearerToken:                os.Getenv("K8S_CLUSTER_PROXY_BEARER_TOKEN"),
-		DatabaseURL:                      os.Getenv("DATABASE_URL"),
-		VClusterHelmBinary:               os.Getenv("VCLUSTER_HELM_BINARY"),
-		VClusterBinary:                   os.Getenv("VCLUSTER_BINARY"),
-		VClusterChartName:                os.Getenv("VCLUSTER_CHART_NAME"),
-		VClusterChartRepo:                os.Getenv("VCLUSTER_CHART_REPO"),
-		VClusterProxyServerTemplate:      os.Getenv("VCLUSTER_PROXY_SERVER_TEMPLATE"),
-		VClusterProxyBearerToken:         os.Getenv("VCLUSTER_PROXY_BEARER_TOKEN"),
-		VClusterKubeconfigServerTemplate: os.Getenv("VCLUSTER_KUBECONFIG_SERVER_TEMPLATE"),
+		ProxyMode:                               os.Getenv("K8S_CLUSTER_PROXY_MODE"),
+		ProviderMode:                            os.Getenv("K8S_CLUSTER_PROVIDER_MODE"),
+		NodePoolProviderMode:                    os.Getenv("K8S_CLUSTER_NODE_POOL_PROVIDER_MODE"),
+		KubernetesAPIHost:                       os.Getenv("KUBERNETES_API_HOST"),
+		KubernetesBearerToken:                   os.Getenv("KUBERNETES_BEARER_TOKEN"),
+		KubernetesProviderManager:               os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
+		TargetServer:                            os.Getenv("K8S_CLUSTER_PROXY_TARGET_SERVER"),
+		TargetBearerToken:                       os.Getenv("K8S_CLUSTER_PROXY_BEARER_TOKEN"),
+		DatabaseURL:                             os.Getenv("DATABASE_URL"),
+		VClusterHelmBinary:                      os.Getenv("VCLUSTER_HELM_BINARY"),
+		VClusterBinary:                          os.Getenv("VCLUSTER_BINARY"),
+		VClusterChartName:                       os.Getenv("VCLUSTER_CHART_NAME"),
+		VClusterChartRepo:                       os.Getenv("VCLUSTER_CHART_REPO"),
+		VClusterProxyServerTemplate:             os.Getenv("VCLUSTER_PROXY_SERVER_TEMPLATE"),
+		VClusterProxyBearerToken:                os.Getenv("VCLUSTER_PROXY_BEARER_TOKEN"),
+		VClusterKubeconfigServerTemplate:        os.Getenv("VCLUSTER_KUBECONFIG_SERVER_TEMPLATE"),
+		NodePoolMachineVersion:                  os.Getenv("K8S_NODE_POOL_MACHINE_VERSION"),
+		NodePoolBootstrapDataSecretNameTemplate: os.Getenv("K8S_NODE_POOL_BOOTSTRAP_DATA_SECRET_NAME_TEMPLATE"),
+		NodePoolBootstrapRefAPIVersion:          os.Getenv("K8S_NODE_POOL_BOOTSTRAP_REF_API_VERSION"),
+		NodePoolBootstrapRefKind:                os.Getenv("K8S_NODE_POOL_BOOTSTRAP_REF_KIND"),
+		NodePoolBootstrapRefNameTemplate:        os.Getenv("K8S_NODE_POOL_BOOTSTRAP_REF_NAME_TEMPLATE"),
+		NodePoolBootstrapRefNamespace:           os.Getenv("K8S_NODE_POOL_BOOTSTRAP_REF_NAMESPACE"),
+		NodePoolInfrastructureRefAPIVersion:     os.Getenv("K8S_NODE_POOL_INFRASTRUCTURE_REF_API_VERSION"),
+		NodePoolInfrastructureRefKind:           os.Getenv("K8S_NODE_POOL_INFRASTRUCTURE_REF_KIND"),
+		NodePoolInfrastructureRefNameTemplate:   os.Getenv("K8S_NODE_POOL_INFRASTRUCTURE_REF_NAME_TEMPLATE"),
+		NodePoolInfrastructureRefNamespace:      os.Getenv("K8S_NODE_POOL_INFRASTRUCTURE_REF_NAMESPACE"),
 	}
 }
 
@@ -186,7 +206,21 @@ func newGatewayK8sClusterNodePoolProvider(cfg gatewayK8sClusterRuntimeConfig) (p
 		if err != nil {
 			return nil, err
 		}
-		return runtimeadapter.NewKubernetesNodePoolProviderAdapter(client), nil
+		return runtimeadapter.NewKubernetesNodePoolProviderAdapter(
+			client,
+			runtimeadapter.WithKubernetesNodePoolProviderConfig(runtimeadapter.KubernetesNodePoolProviderConfig{
+				MachineVersion:                  cfg.NodePoolMachineVersion,
+				BootstrapDataSecretNameTemplate: cfg.NodePoolBootstrapDataSecretNameTemplate,
+				BootstrapRefAPIVersion:          cfg.NodePoolBootstrapRefAPIVersion,
+				BootstrapRefKind:                cfg.NodePoolBootstrapRefKind,
+				BootstrapRefNameTemplate:        cfg.NodePoolBootstrapRefNameTemplate,
+				BootstrapRefNamespace:           cfg.NodePoolBootstrapRefNamespace,
+				InfrastructureRefAPIVersion:     cfg.NodePoolInfrastructureRefAPIVersion,
+				InfrastructureRefKind:           cfg.NodePoolInfrastructureRefKind,
+				InfrastructureRefNameTemplate:   cfg.NodePoolInfrastructureRefNameTemplate,
+				InfrastructureRefNamespace:      cfg.NodePoolInfrastructureRefNamespace,
+			}),
+		), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported K8S_CLUSTER_NODE_POOL_PROVIDER_MODE %q", ports.ErrUnsupported, mode)
 	}

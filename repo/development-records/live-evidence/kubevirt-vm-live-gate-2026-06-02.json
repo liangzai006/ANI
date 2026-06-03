@@ -1,0 +1,23 @@
+{
+  "id": "kubevirt-vm-live-gate",
+  "namespace": "ani-tenant-tenant-a",
+  "profile": "M1-KUBEVIRT-LIVE-A",
+  "status": "passed",
+  "vm": "ani-live-vm",
+  "websocket_sessions": {
+    "console": {
+      "http_status": 101,
+      "received_bytes": 5,
+      "sent_bytes": 1,
+      "subprotocol": "plain.kubevirt.io",
+      "websocket_session_established": true
+    },
+    "vnc": {
+      "http_status": 101,
+      "received_bytes": 12,
+      "sent_bytes": 0,
+      "subprotocol": "plain.kubevirt.io",
+      "websocket_session_established": true
+    }
+  }
+}

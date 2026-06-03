@@ -4,14 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import socket
+import ssl
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode, urlparse
 
 import yaml
 
@@ -29,6 +36,7 @@ REQUIRED_CHECKS = {
     "kubevirt-vm-stopped",
     "kubevirt-vm-deleted",
 }
+KUBEVIRT_WEBSOCKET_SUBPROTOCOL = "plain.kubevirt.io"
 REQUIRED_ENV = {"KUBECONFIG"}
 REQUIRED_DOC_TOKENS = [
     "M1-KUBEVIRT-LIVE-A",
@@ -138,6 +146,23 @@ class LiveRunner:
         return result.stdout
 
 
+@dataclass(frozen=True)
+class KubeconfigClient:
+    server: str
+    tls_server_name: str = ""
+    certificate_authority_data: str = ""
+    insecure_skip_tls_verify: bool = False
+    client_certificate_data: str = ""
+    client_key_data: str = ""
+    token: str = ""
+
+
+class WebSocketProber:
+    def probe(self, config: LiveConfig, namespace: str, vm_name: str, subresource: str) -> dict[str, object]:
+        client = load_kubeconfig_client(config.kubeconfig)
+        return probe_websocket_session(client, namespace, vm_name, subresource)
+
+
 def kubernetes_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     if not normalized:
@@ -166,6 +191,7 @@ def validate_live_config(config: LiveConfig) -> None:
         "container_disk_image": config.container_disk_image,
         "memory": config.memory,
         "wait_timeout": config.wait_timeout,
+        "kubeconfig": config.kubeconfig,
     }
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:
@@ -272,57 +298,273 @@ def subresource_path(namespace: str, vm_name: str, subresource: str) -> str:
     return f"/apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{vm_name}/{subresource}"
 
 
-def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, object]:
-    runner = runner or LiveRunner()
-    namespace = tenant_namespace(config)
-    vm_name = kubernetes_name(config.vm_name)
+def select_named(items: object, name: str, item_kind: str) -> dict[str, Any]:
+    if not isinstance(items, list):
+        fail(f"kubeconfig {item_kind}s must be a list")
+    for item in items:
+        if isinstance(item, dict) and item.get("name") == name:
+            return item
+    fail(f"kubeconfig references missing {item_kind} {name}")
 
-    runner.run(kubectl(config, ["get", "crd", "virtualmachines.kubevirt.io", "-o", "json"]))
-    runner.run(kubectl(config, ["get", "crd", "virtualmachineinstances.kubevirt.io", "-o", "json"]))
-    assert_kubevirt_available(load_json(runner.run(kubectl(config, ["get", "kubevirt", "-A", "-o", "json"])), "kubectl get kubevirt"))
 
-    runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=vm_manifest(config))
-    vm = load_json(
-        runner.run(kubectl(config, ["get", "virtualmachine", vm_name, "-n", namespace, "-o", "json"])),
-        "kubectl get virtualmachine",
+def load_kubeconfig_client(path: str) -> KubeconfigClient:
+    if not path.strip():
+        fail("live mode requires kubeconfig for KubeVirt WebSocket session checks")
+    kubeconfig_path = Path(path)
+    try:
+        document = yaml.safe_load(kubeconfig_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(f"kubeconfig not found: {path}")
+    except OSError:
+        fail(f"kubeconfig unreadable: {path}")
+    except (UnicodeError, yaml.YAMLError):
+        fail(f"kubeconfig malformed: {path}")
+    if not isinstance(document, dict):
+        fail("kubeconfig must be a YAML object")
+
+    current_context = document.get("current-context")
+    if not isinstance(current_context, str) or not current_context.strip():
+        fail("kubeconfig current-context must be set")
+    context_item = select_named(document.get("contexts"), current_context, "context")
+    context = context_item.get("context")
+    if not isinstance(context, dict):
+        fail("kubeconfig current context must be an object")
+    cluster_name = context.get("cluster")
+    user_name = context.get("user")
+    if not isinstance(cluster_name, str) or not cluster_name.strip():
+        fail("kubeconfig current context must reference a cluster")
+    if not isinstance(user_name, str) or not user_name.strip():
+        fail("kubeconfig current context must reference a user")
+
+    cluster_item = select_named(document.get("clusters"), cluster_name, "cluster")
+    user_item = select_named(document.get("users"), user_name, "user")
+    cluster = cluster_item.get("cluster")
+    user = user_item.get("user")
+    if not isinstance(cluster, dict) or not isinstance(user, dict):
+        fail("kubeconfig cluster and user entries must be objects")
+    server = cluster.get("server")
+    if not isinstance(server, str) or not server.strip():
+        fail("kubeconfig cluster server must be set")
+    token = user.get("token")
+    if token is None:
+        token_file = user.get("tokenFile")
+        if isinstance(token_file, str) and token_file.strip():
+            try:
+                token = Path(token_file).read_text(encoding="utf-8").strip()
+            except OSError:
+                fail("kubeconfig tokenFile is unreadable")
+    return KubeconfigClient(
+        server=server.strip(),
+        tls_server_name=str(cluster.get("tls-server-name") or ""),
+        certificate_authority_data=str(cluster.get("certificate-authority-data") or ""),
+        insecure_skip_tls_verify=bool(cluster.get("insecure-skip-tls-verify", False)),
+        client_certificate_data=str(user.get("client-certificate-data") or ""),
+        client_key_data=str(user.get("client-key-data") or ""),
+        token=str(token or ""),
     )
-    assert_named_kind(vm, "VirtualMachine", vm_name)
 
-    runner.run(
-        kubectl(
-            config,
-            ["patch", "virtualmachine", vm_name, "-n", namespace, "--type=merge", "-p", '{"spec":{"running":true}}'],
-        )
-    )
-    runner.run(
-        kubectl(
-            config,
-            [
-                "wait",
-                "--for=condition=Ready",
-                f"virtualmachineinstance/{vm_name}",
-                "-n",
-                namespace,
-                f"--timeout={config.wait_timeout}",
-            ],
-        )
-    )
-    vmi = load_json(
-        runner.run(kubectl(config, ["get", "virtualmachineinstance", vm_name, "-n", namespace, "-o", "json"])),
-        "kubectl get virtualmachineinstance",
-    )
-    assert_vmi_ready(vmi, vm_name)
 
-    for subresource in ("vnc", "console"):
-        runner.run(kubectl(config, ["get", "--raw", subresource_path(namespace, vm_name, subresource)]))
+def websocket_path(namespace: str, vm_name: str, subresource: str) -> str:
+    path = subresource_path(quote(namespace, safe=""), quote(vm_name, safe=""), quote(subresource, safe=""))
+    if subresource == "vnc":
+        path += "?" + urlencode({"preserveSession": "false"})
+    return path
 
-    runner.run(
+
+def websocket_url(client: KubeconfigClient, namespace: str, vm_name: str, subresource: str) -> tuple[str, str, int, str]:
+    parsed = urlparse(client.server)
+    if parsed.scheme not in {"http", "https"}:
+        fail(f"kubeconfig cluster server must use http or https, got {parsed.scheme}")
+    host = parsed.hostname
+    if not host:
+        fail("kubeconfig cluster server must include a host")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    base_path = parsed.path.rstrip("/")
+    path = base_path + websocket_path(namespace, vm_name, subresource)
+    return scheme, host, port, path
+
+
+def decode_pem(data: str, label: str) -> str:
+    try:
+        return base64.b64decode(data).decode("utf-8")
+    except (ValueError, UnicodeError):
+        fail(f"kubeconfig {label} must be valid base64 PEM data")
+
+
+def ssl_context_for(client: KubeconfigClient) -> ssl.SSLContext:
+    if client.insecure_skip_tls_verify:
+        context = ssl._create_unverified_context()
+    elif client.certificate_authority_data:
+        context = ssl.create_default_context(cadata=decode_pem(client.certificate_authority_data, "certificate-authority-data"))
+    else:
+        context = ssl.create_default_context()
+    if client.client_certificate_data or client.client_key_data:
+        if not client.client_certificate_data or not client.client_key_data:
+            fail("kubeconfig client certificate and key must both be set")
+        cert_file = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
+        key_file = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False)
+        try:
+            cert_file.write(decode_pem(client.client_certificate_data, "client-certificate-data"))
+            key_file.write(decode_pem(client.client_key_data, "client-key-data"))
+            cert_file.close()
+            key_file.close()
+            context.load_cert_chain(cert_file.name, key_file.name)
+        finally:
+            cert_file.close()
+            key_file.close()
+            for temporary_path in (cert_file.name, key_file.name):
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+    return context
+
+
+def recv_exact(sock: socket.socket | ssl.SSLSocket, size: int) -> bytes:
+    chunks = []
+    remaining = size
+    while remaining:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("websocket connection closed unexpectedly")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def read_http_response(sock: socket.socket | ssl.SSLSocket) -> tuple[int, dict[str, str]]:
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("websocket handshake closed before response")
+        raw += chunk
+        if len(raw) > 65536:
+            raise RuntimeError("websocket handshake response exceeded limit")
+    header_text = raw.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
+    lines = header_text.split("\r\n")
+    status_parts = lines[0].split()
+    if len(status_parts) < 2 or not status_parts[1].isdigit():
+        raise RuntimeError("websocket handshake returned malformed status line")
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.lower()] = value.strip()
+    return int(status_parts[1]), headers
+
+
+def send_ws_frame(sock: socket.socket | ssl.SSLSocket, payload: bytes, opcode: int = 2) -> None:
+    mask_key = secrets.token_bytes(4)
+    length = len(payload)
+    header = bytearray([0x80 | opcode])
+    if length < 126:
+        header.append(0x80 | length)
+    elif length < 65536:
+        header.extend([0x80 | 126, (length >> 8) & 0xFF, length & 0xFF])
+    else:
+        header.append(0x80 | 127)
+        header.extend(length.to_bytes(8, "big"))
+    masked = bytes(byte ^ mask_key[index % 4] for index, byte in enumerate(payload))
+    sock.sendall(bytes(header) + mask_key + masked)
+
+
+def read_ws_payload(sock: socket.socket | ssl.SSLSocket, timeout_seconds: float) -> bytes:
+    sock.settimeout(timeout_seconds)
+    payloads: list[bytes] = []
+    try:
+        while True:
+            first, second = recv_exact(sock, 2)
+            opcode = first & 0x0F
+            masked = bool(second & 0x80)
+            length = second & 0x7F
+            if length == 126:
+                length = int.from_bytes(recv_exact(sock, 2), "big")
+            elif length == 127:
+                length = int.from_bytes(recv_exact(sock, 8), "big")
+            mask = recv_exact(sock, 4) if masked else b""
+            payload = recv_exact(sock, length) if length else b""
+            if masked:
+                payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+            if opcode in {1, 2, 0}:
+                payloads.append(payload)
+                if payloads:
+                    return b"".join(payloads)
+            if opcode == 8:
+                return b"".join(payloads)
+            if opcode == 9:
+                send_ws_frame(sock, payload, opcode=10)
+    except socket.timeout:
+        return b"".join(payloads)
+
+
+def probe_websocket_session(
+    client: KubeconfigClient,
+    namespace: str,
+    vm_name: str,
+    subresource: str,
+    timeout_seconds: float = 5.0,
+) -> dict[str, object]:
+    scheme, host, port, path = websocket_url(client, namespace, vm_name, subresource)
+    raw_sock = socket.create_connection((host, port), timeout=timeout_seconds)
+    with raw_sock:
+        sock: socket.socket | ssl.SSLSocket = raw_sock
+        if scheme == "wss":
+            server_name = client.tls_server_name or host
+            sock = ssl_context_for(client).wrap_socket(raw_sock, server_hostname=server_name)
+        with sock:
+            sock.settimeout(timeout_seconds)
+            key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+            host_header = f"{host}:{port}" if port not in {80, 443} else host
+            headers = [
+                f"GET {path} HTTP/1.1",
+                f"Host: {host_header}",
+                "Connection: Upgrade",
+                "Upgrade: websocket",
+                "Sec-WebSocket-Version: 13",
+                f"Sec-WebSocket-Key: {key}",
+                f"Sec-WebSocket-Protocol: {KUBEVIRT_WEBSOCKET_SUBPROTOCOL}",
+            ]
+            if client.token:
+                headers.append(f"Authorization: Bearer {client.token}")
+            request = "\r\n".join(headers) + "\r\n\r\n"
+            sock.sendall(request.encode("ascii"))
+            status_code, response_headers = read_http_response(sock)
+            if status_code != 101:
+                raise RuntimeError(f"{subresource} websocket handshake returned HTTP {status_code}")
+            expected_accept = base64.b64encode(
+                hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+            ).decode("ascii")
+            if response_headers.get("sec-websocket-accept") != expected_accept:
+                raise RuntimeError(f"{subresource} websocket handshake returned invalid accept header")
+            selected_protocol = response_headers.get("sec-websocket-protocol", "")
+            if selected_protocol != KUBEVIRT_WEBSOCKET_SUBPROTOCOL:
+                raise RuntimeError(f"{subresource} websocket selected unexpected subprotocol {selected_protocol!r}")
+            sent_bytes = 0
+            if subresource == "console":
+                send_ws_frame(sock, b"\n")
+                sent_bytes = 1
+            received = read_ws_payload(sock, timeout_seconds)
+            try:
+                send_ws_frame(sock, b"", opcode=8)
+            except OSError:
+                pass
+            return {
+                "websocket_session_established": True,
+                "http_status": status_code,
+                "subprotocol": selected_protocol,
+                "sent_bytes": sent_bytes,
+                "received_bytes": len(received),
+            }
+
+
+def cleanup_vm(config: LiveConfig, runner: LiveRunner, namespace: str, vm_name: str) -> None:
+    cleanup_commands = [
         kubectl(
             config,
             ["patch", "virtualmachine", vm_name, "-n", namespace, "--type=merge", "-p", '{"spec":{"running":false}}'],
-        )
-    )
-    runner.run(
+        ),
         kubectl(
             config,
             [
@@ -333,18 +575,77 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
                 namespace,
                 f"--timeout={config.wait_timeout}",
             ],
-        )
-    )
-
-    runner.run(kubectl(config, ["delete", "virtualmachine", vm_name, "-n", namespace, "--ignore-not-found=true"]))
-    runner.run(
+        ),
+        kubectl(config, ["delete", "virtualmachine", vm_name, "-n", namespace, "--ignore-not-found=true"]),
         kubectl(
             config,
             ["wait", "--for=delete", f"virtualmachine/{vm_name}", "-n", namespace, f"--timeout={config.wait_timeout}"],
-        )
-    )
+        ),
+    ]
+    for command in cleanup_commands:
+        try:
+            runner.run(command)
+        except RuntimeError:
+            pass
 
-    return {"status": "passed", "namespace": namespace, "vm": vm_name}
+
+def run_live(
+    config: LiveConfig,
+    runner: LiveRunner | None = None,
+    websocket_prober: WebSocketProber | None = None,
+) -> dict[str, object]:
+    runner = runner or LiveRunner()
+    websocket_prober = websocket_prober or WebSocketProber()
+    namespace = tenant_namespace(config)
+    vm_name = kubernetes_name(config.vm_name)
+
+    runner.run(kubectl(config, ["get", "crd", "virtualmachines.kubevirt.io", "-o", "json"]))
+    runner.run(kubectl(config, ["get", "crd", "virtualmachineinstances.kubevirt.io", "-o", "json"]))
+    assert_kubevirt_available(load_json(runner.run(kubectl(config, ["get", "kubevirt", "-A", "-o", "json"])), "kubectl get kubevirt"))
+
+    try:
+        runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=vm_manifest(config))
+        vm = load_json(
+            runner.run(kubectl(config, ["get", "virtualmachine", vm_name, "-n", namespace, "-o", "json"])),
+            "kubectl get virtualmachine",
+        )
+        assert_named_kind(vm, "VirtualMachine", vm_name)
+
+        runner.run(
+            kubectl(
+                config,
+                ["patch", "virtualmachine", vm_name, "-n", namespace, "--type=merge", "-p", '{"spec":{"running":true}}'],
+            )
+        )
+        runner.run(
+            kubectl(
+                config,
+                [
+                    "wait",
+                    "--for=condition=Ready",
+                    f"virtualmachineinstance/{vm_name}",
+                    "-n",
+                    namespace,
+                    f"--timeout={config.wait_timeout}",
+                ],
+            )
+        )
+        vmi = load_json(
+            runner.run(kubectl(config, ["get", "virtualmachineinstance", vm_name, "-n", namespace, "-o", "json"])),
+            "kubectl get virtualmachineinstance",
+        )
+        assert_vmi_ready(vmi, vm_name)
+
+        websocket_sessions = {}
+        for subresource in ("vnc", "console"):
+            session = websocket_prober.probe(config, namespace, vm_name, subresource)
+            if session.get("websocket_session_established") is not True:
+                fail(f"{subresource} websocket session was not established")
+            websocket_sessions[subresource] = session
+
+        return {"status": "passed", "namespace": namespace, "vm": vm_name, "websocket_sessions": websocket_sessions}
+    finally:
+        cleanup_vm(config, runner, namespace, vm_name)
 
 
 def write_live_evidence(path: Path, evidence: dict[str, object]) -> None:

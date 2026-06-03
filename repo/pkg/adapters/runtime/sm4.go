@@ -24,6 +24,10 @@ func newSM4BlockCipher(key []byte) (cipher.Block, error) {
 	return c, nil
 }
 
+func NewSM4BlockCipher(key []byte) (cipher.Block, error) {
+	return newSM4BlockCipher(key)
+}
+
 func (c *sm4Cipher) BlockSize() int { return sm4BlockSize }
 
 func (c *sm4Cipher) Encrypt(dst []byte, src []byte) {

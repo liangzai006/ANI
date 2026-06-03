@@ -16,36 +16,43 @@ import validate_vcluster_upgrade_live_gate as gate
 class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
         self.posts: list[tuple[str, dict[str, object], str]] = []
+        self.starts: list[list[str]] = []
+        self.waited_urls: list[str] = []
 
-    def run(self, command: list[str]) -> str:
+    def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
+        self.envs.append(env)
         joined = " ".join(command)
+        if command[0] == "kubectl" and "apply" in command:
+            return "persistentvolume/ani-vcluster-upgrade-k8sclu-core-live configured"
         if joined.startswith("helm get values"):
             return json.dumps({"controlPlane": {"distro": {"k8s": {"version": "v1.31.0"}}}})
         if command[0] == "vcluster":
-            return "\n".join(
-                [
-                    "apiVersion: v1",
-                    "clusters:",
-                    "- name: k8sclu-live",
-                    "  cluster:",
-                    "    server: https://k8sclu-live.example",
-                    "users:",
-                    "- name: k8sclu-live",
-                    "  user:",
-                    "    token: tenant-token",
-                ]
-            )
+            return '10:30:00 done vCluster is up and running\n{"major":"1","minor":"31","gitVersion":"v1.31.0"}\n'
         if command[0] == "kubectl":
             return '{"major":"1","minor":"31","gitVersion":"v1.31.0"}'
         raise AssertionError(f"unexpected command: {joined}")
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
+    def post_json(
+        self,
+        url: str,
+        payload: dict[str, object],
+        bearer_token: str,
+        tenant_id: str = "",
+    ) -> dict[str, object]:
         self.posts.append((url, payload, bearer_token))
+        if url.endswith("/k8s-clusters"):
+            return {
+                "id": "k8sclu-core-live",
+                "version": "v1.30.0",
+                "state": "running",
+                "dev_profile": {"mode": "real", "provider": "vcluster", "real_provider": True},
+            }
         if url.endswith("/upgrade"):
             return {
-                "id": "k8sclu-live",
+                "id": "k8sclu-core-live",
                 "version": "v1.31.0",
                 "state": "running",
                 "dev_profile": {"mode": "real", "provider": "vcluster", "real_provider": True},
@@ -53,6 +60,25 @@ class FakeRunner:
         if url.endswith("/proxy"):
             return {"status_code": 200, "headers": {"x-upstream": "vcluster"}, "body": {"gitVersion": "v1.31.0"}}
         raise AssertionError(f"unexpected JSON URL: {url}")
+
+    def start(self, command: list[str], env: dict[str, str] | None = None) -> "FakeProcess":
+        self.starts.append(command)
+        self.envs.append(env)
+        return FakeProcess()
+
+    def wait_url(self, url: str) -> None:
+        self.waited_urls.append(url)
+
+
+class FakeProcess:
+    def __init__(self) -> None:
+        self.terminated = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float | None = None) -> None:
+        return None
 
 
 class VClusterUpgradeLiveGateTest(unittest.TestCase):
@@ -62,10 +88,12 @@ class VClusterUpgradeLiveGateTest(unittest.TestCase):
         gate.validate_contract(document)
 
         check_ids = {check["id"] for check in document["live_checks"]}
+        self.assertIn("core-cluster-register", check_ids)
+        self.assertIn("dev-hostpath-pv", check_ids)
         self.assertIn("core-upgrade-cluster", check_ids)
         self.assertIn("helm-values-target-version", check_ids)
-        self.assertIn("vcluster-kubeconfig-after-upgrade", check_ids)
         self.assertIn("kubectl-version-after-upgrade", check_ids)
+        self.assertIn("local-proxy-after-upgrade", check_ids)
         self.assertIn("core-proxy-version-after-upgrade", check_ids)
 
     def test_contract_gate_rejects_live_check_command_non_string(self) -> None:
@@ -172,16 +200,17 @@ class VClusterUpgradeLiveGateTest(unittest.TestCase):
 
         self.assertIn("malformed doc ANI-DOCS-INDEX.md", str(raised.exception))
 
-    def test_live_gate_runs_core_upgrade_helm_values_kubectl_and_core_proxy(self) -> None:
+    def test_live_gate_runs_core_create_pv_upgrade_helm_values_kubectl_and_core_proxy(self) -> None:
         runner = FakeRunner()
         result = gate.run_live(
             gate.LiveConfig(
                 tenant_id="tenant-a",
-                cluster_id="k8sclu-live",
+                cluster_id="k8sclu-live-upgrade",
                 gateway_url="http://127.0.0.1:3000/api/v1",
                 ani_bearer_token="ani-token",
+                kubeconfig="/tmp/real-lab.kubeconfig",
                 target_version="v1.31.0",
-                vcluster_server="https://k8sclu-live.example",
+                local_proxy_port=18002,
                 work_dir=Path("/tmp"),
             ),
             runner=runner,
@@ -189,21 +218,52 @@ class VClusterUpgradeLiveGateTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["target_version"], "v1.31.0")
+        self.assertEqual(result["core_cluster_id"], "k8sclu-core-live")
         self.assertEqual(
             runner.posts[0],
             (
-                "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-live/upgrade",
-                {"idempotency_key": "live-upgrade-k8sclu-live-v1.31.0", "version": "v1.31.0"},
+                "http://127.0.0.1:3000/api/v1/k8s-clusters",
+                {
+                    "idempotency_key": "live-upgrade-create-k8sclu-live-upgrade",
+                    "name": "k8sclu-live-upgrade",
+                    "version": "v1.30.0",
+                },
+                "ani-token",
+            ),
+        )
+        self.assertEqual(runner.commands[0][0:3], ["kubectl", "--kubeconfig", "/tmp/real-lab.kubeconfig"])
+        self.assertIn("apply", runner.commands[0])
+        self.assertEqual(
+            runner.posts[1],
+            (
+                "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-core-live/upgrade",
+                {"idempotency_key": "live-upgrade-k8sclu-core-live-v1.31.0", "version": "v1.31.0"},
                 "ani-token",
             ),
         )
         self.assertEqual(
-            runner.commands[0],
-            ["helm", "get", "values", "k8sclu-live", "--namespace", "ani-tenant-tenant-a", "-a", "-o", "json"],
+            runner.commands[1],
+            ["helm", "get", "values", "k8sclu-core-live", "--namespace", "ani-tenant-tenant-a", "-a", "-o", "json"],
         )
-        self.assertEqual(runner.commands[1][0], "vcluster")
-        self.assertEqual(runner.commands[2][0:2], ["kubectl", "--kubeconfig"])
-        self.assertEqual(runner.posts[1][1]["path"], "/version")
+        self.assertEqual(
+            runner.commands[2],
+            [
+                "vcluster",
+                "connect",
+                "k8sclu-core-live",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--background-proxy=false",
+                "--",
+                "kubectl",
+                "get",
+                "--raw",
+                "/version",
+            ],
+        )
+        self.assertEqual(runner.starts[0][0:5], ["vcluster", "connect", "k8sclu-core-live", "--namespace", "ani-tenant-tenant-a"])
+        self.assertEqual(runner.waited_urls[0], "http://127.0.0.1:18002/version")
+        self.assertEqual(runner.posts[2][1]["path"], "/version")
 
     def test_cli_live_mode_rejects_missing_gateway_config(self) -> None:
         with patch.object(gate, "run_live") as run_live:
@@ -218,6 +278,7 @@ class VClusterUpgradeLiveGateTest(unittest.TestCase):
             cluster_id="k8sclu-live",
             gateway_url=" http://127.0.0.1:3000/api/v1 ",
             ani_bearer_token="ani-token",
+            kubeconfig="/tmp/real-lab.kubeconfig",
             target_version="v1.31.0",
         )
 
@@ -467,8 +528,9 @@ class VClusterUpgradeLiveGateTest(unittest.TestCase):
     def test_cli_live_mode_writes_evidence_json_when_requested(self) -> None:
         fake_evidence = {
             "status": "passed",
+            "core_cluster_id": "k8sclu-core-live",
             "target_version": "v1.31.0",
-            "kubeconfig": "/tmp/k8sclu-live-upgrade.kubeconfig",
+            "kubectl_version": "v1.31.0",
             "proxy_status": 200,
         }
         with tempfile.TemporaryDirectory() as tmpdir:

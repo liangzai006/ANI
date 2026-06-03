@@ -1,0 +1,13 @@
+{
+  "gateway_url": "http://127.0.0.1:8080/api/v1",
+  "id": "kms-sm4-live-gate",
+  "key_id": "ekey-2499569d-a060-4526-8dbe-e097b5b1b37d",
+  "kms_base_url": "http://127.0.0.1:18004/api/v1/namespaces/ani-system/services/ani-kms-sm4-live-fixture:9305/proxy",
+  "object_round_trip_bytes": 27,
+  "object_uri": "s3://ani-live-validation/model.bin",
+  "profile": "M1-ENCRYPT-LIVE-A",
+  "provider": "kms-sm4-provider",
+  "sealed_object_uri": "kms+sm4://00000000-0000-0000-0000-000000000001/ekey-2499569d-a060-4526-8dbe-e097b5b1b37d/eab35de4d7c18952f2fd35ea",
+  "status": "passed",
+  "tenant_id": "tenant-a"
+}

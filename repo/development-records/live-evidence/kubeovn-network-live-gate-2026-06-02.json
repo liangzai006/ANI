@@ -1,0 +1,37 @@
+{
+  "external_load_balancer": {
+    "curl_results": [
+      {
+        "body_matched": true,
+        "host": "ANI1"
+      },
+      {
+        "body_matched": true,
+        "host": "ANI2"
+      },
+      {
+        "body_matched": true,
+        "host": "ANI3"
+      }
+    ],
+    "dnat_rule_observed": true,
+    "external_ip": "10.10.1.250",
+    "external_ip_on_net1": true,
+    "helper_deployment": "lb-svc-ani-kubeovn-external-lb-smoke",
+    "helper_image": "docker.io/kubeovn/kube-ovn:v1.15.8",
+    "helper_script_configmap": "ani-kubeovn-lb-svc-script",
+    "masquerade_rule_observed": true,
+    "namespace": "default",
+    "service": "ani-kubeovn-external-lb-smoke",
+    "service_status_ip": "10.10.1.250",
+    "status": "passed"
+  },
+  "id": "kubeovn-network-live-gate",
+  "load_balancer": "lb-ani-live-lb",
+  "namespace": "ani-tenant-tenant-a",
+  "profile": "M1-NETWORK-LIVE-A",
+  "security_group": "sg-ani-live-sg",
+  "status": "passed",
+  "subnet": "subnet-ani-live-subnet",
+  "vpc": "vpc-ani-live-net"
+}

@@ -8,6 +8,8 @@
 
 为 `M1-K8S-LIVE-A` vCluster live gate 增加 JSON evidence 输出能力。真实 lab 就绪后，执行者可以在 `validate_vcluster_live_gate.py --live` 后追加 `--evidence-output`，把 Helm/vCluster/kubectl/Core proxy 检查通过后的结果归档到固定 JSON 文件。
 
+2026-06-02 真实执行前对 evidence 形状做了安全收敛：不再归档 kubeconfig 路径或 kubeconfig 内容，只归档 Core cluster ID、vCluster kubectl 版本和 Core proxy HTTP 状态。
+
 该批次只增加证据落盘能力，不改变 live 检查语义，也不代表 Helm 安装、vCluster kubeconfig 或 Core proxy 已经在真实 lab 跑通。
 
 ## 关键文件改动
@@ -30,7 +32,7 @@ python scripts/validate_vcluster_live_gate.py \
   --live \
   --tenant-id tenant-a \
   --cluster-id k8sclu-live \
-  --vcluster-server https://k8sclu-live.example \
+  --namespace ani-tenant-tenant-a-vcluster \
   --evidence-output repo/development-records/live/vcluster-live-gate.json
 ```
 

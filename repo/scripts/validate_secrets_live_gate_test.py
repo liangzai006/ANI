@@ -14,11 +14,17 @@ import validate_secrets_live_gate as gate
 
 class FakeLiveRunner:
     def __init__(self) -> None:
-        self.json_calls: list[tuple[str, dict[str, object], str]] = []
+        self.json_calls: list[tuple[str, dict[str, object], str, str]] = []
         self.commands: list[tuple[list[str], str | None]] = []
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        self.json_calls.append((url, payload, bearer_token))
+    def post_json(
+        self,
+        url: str,
+        payload: dict[str, object],
+        bearer_token: str,
+        tenant_id: str = "",
+    ) -> dict[str, object]:
+        self.json_calls.append((url, payload, bearer_token, tenant_id))
         if url.endswith("/secrets"):
             return {
                 "id": "sec-live",
@@ -56,12 +62,47 @@ class FakeLiveRunner:
             return "pod/ani-secret-live-pod condition met\n"
         if joined.endswith("logs ani-secret-live-pod -n ani-tenant-tenant-a"):
             return "env:p@ssw0rd\nfile:t0ken\n"
+        if "wait --for=condition=Ready vmi/ani-secret-live-vm" in joined:
+            return "virtualmachineinstance.kubevirt.io/ani-secret-live-vm condition met\n"
+        if joined.endswith("get vmi ani-secret-live-vm -n ani-tenant-tenant-a -o json"):
+            return json.dumps(
+                {
+                    "metadata": {"name": "ani-secret-live-vm", "namespace": "ani-tenant-tenant-a"},
+                    "status": {"phase": "Running", "nodeName": "dev-phys-03"},
+                }
+            )
+        if "get pod -n ani-tenant-tenant-a -l kubevirt.io/domain=ani-secret-live-vm -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "virt-launcher-ani-secret-live-vm-abcde",
+                                "namespace": "ani-tenant-tenant-a",
+                            }
+                        }
+                    ]
+                }
+            )
+        if joined.endswith(
+            "logs pod/virt-launcher-ani-secret-live-vm-abcde -n ani-tenant-tenant-a --all-containers=true --tail=500"
+        ):
+            return (
+                "ANI_VM_SECRET_GUEST_PROBE_START\n"
+                "NAME SIZE LABEL\n"
+                "vdb 1M ANISECRET\n"
+                "ANI_VM_SECRET_GUEST_PASSWORD=p@ssw0rd\n"
+                "ANI_VM_SECRET_GUEST_TOKEN=t0ken\n"
+                "ANI_VM_SECRET_GUEST_PROBE_DONE\n"
+            )
         if command[:2] == ["kubectl", "apply"] and input_text:
             if "VirtualMachine" in input_text:
                 return "virtualmachine.kubevirt.io/ani-secret-live-vm serverside-applied\n"
             return "pod/ani-secret-live-pod created\n"
         if joined.endswith("delete pod ani-secret-live-pod -n ani-tenant-tenant-a --ignore-not-found=true"):
             return "pod deleted\n"
+        if joined.endswith("delete vm ani-secret-live-vm -n ani-tenant-tenant-a --ignore-not-found=true --wait=false"):
+            return "virtualmachine.kubevirt.io/ani-secret-live-vm deleted\n"
         raise AssertionError(f"unexpected command: {joined}")
 
 
@@ -77,6 +118,7 @@ class SecretsLiveGateTest(unittest.TestCase):
         self.assertIn("pod-secret-env-visible", check_ids)
         self.assertIn("pod-secret-file-visible", check_ids)
         self.assertIn("kubevirt-vm-secret-volume-accepted", check_ids)
+        self.assertIn("kubevirt-vm-secret-volume-guest-visible", check_ids)
 
     def test_cli_rejects_empty_gate_path_before_loading(self) -> None:
         document = gate.load_gate(gate.DEFAULT_GATE)
@@ -193,9 +235,45 @@ class SecretsLiveGateTest(unittest.TestCase):
         self.assertEqual(result["namespace"], "ani-tenant-tenant-a")
         self.assertEqual(result["pod"], "ani-secret-live-pod")
         self.assertEqual(result["vm"], "ani-secret-live-vm")
+        self.assertEqual(
+            result["vm_guest_secret"],
+            {
+                "guest_secret_volume_visible": True,
+                "launcher_pod": "virt-launcher-ani-secret-live-vm-abcde",
+                "node": "dev-phys-03",
+                "secret_disk_label": "ANISECRET",
+            },
+        )
         self.assertEqual(runner.json_calls[0][0], "http://127.0.0.1:3000/api/v1/secrets")
         self.assertEqual(runner.json_calls[1][0], "http://127.0.0.1:3000/api/v1/secrets/sec-live/bindings")
+        self.assertEqual(runner.json_calls[0][3], "tenant-a")
+        self.assertEqual(runner.json_calls[1][3], "tenant-a")
+        self.assertEqual(runner.json_calls[2][3], "tenant-a")
         self.assertEqual(runner.commands[0][0], ["kubectl", "get", "secret", "sec-live", "-n", "ani-tenant-tenant-a", "-o", "json"])
+
+    def test_vm_secret_manifest_uses_kubevirt_disk_schema_without_read_only_field(self) -> None:
+        manifest = json.loads(gate.vm_manifest("ani-tenant-tenant-a", "ani-secret-live-vm", "sec-live"))
+
+        disks = manifest["spec"]["template"]["spec"]["domain"]["devices"]["disks"]
+        secret_disk = next(disk for disk in disks if disk["name"] == "secret-file")
+        self.assertNotIn("readOnly", secret_disk)
+        volumes = manifest["spec"]["template"]["spec"]["volumes"]
+        self.assertIn({"name": "secret-file", "secret": {"secretName": "sec-live"}}, volumes)
+
+    def test_vm_guest_probe_manifest_attaches_secret_disk_and_cloud_init_probe(self) -> None:
+        manifest = gate.vm_guest_probe_manifest("ani-tenant-tenant-a", "ani-secret-live-vm", "sec-live", "tenant-a")
+        document = gate.yaml.safe_load(manifest)
+
+        volumes = document["spec"]["template"]["spec"]["volumes"]
+        self.assertIn(
+            {"name": "secret-file", "secret": {"secretName": "sec-live", "volumeLabel": "ANISECRET"}},
+            volumes,
+        )
+        self.assertIn("cloudInitNoCloud", volumes[2])
+        user_data = volumes[2]["cloudInitNoCloud"]["userData"]
+        self.assertIn("ANI_VM_SECRET_GUEST_PASSWORD", user_data)
+        self.assertIn("ANI_VM_SECRET_GUEST_TOKEN", user_data)
+        self.assertIn("/dev/vdb", user_data)
 
     def test_cli_live_mode_rejects_missing_gateway_config(self) -> None:
         with patch.object(gate, "run_live") as run_live:
@@ -455,6 +533,7 @@ class SecretsLiveGateTest(unittest.TestCase):
             "namespace": "ani-tenant-tenant-a",
             "pod": "ani-secret-live-pod",
             "vm": "ani-secret-live-vm",
+            "vm_guest_secret": {"guest_secret_volume_visible": True, "secret_disk_label": "ANISECRET"},
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "secrets-live-evidence.json"

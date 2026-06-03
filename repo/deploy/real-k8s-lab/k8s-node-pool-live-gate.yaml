@@ -25,7 +25,19 @@ live_checks:
     pass_condition: response_dev_profile_real_provider
   - id: clusterapi-machinedeployment-scaled
     command: kubectl get machinedeployment {node_pool_name} -n {namespace} -o json
-    pass_condition: spec_replicas_match_scaled_node_count
+    pass_condition: spec_replicas_and_available_status_match_scaled_node_count
+  - id: clusterapi-machinesets-ready
+    command: kubectl get machineset -n {namespace} -o json
+    pass_condition: matching_machineset_replicas_ready_available_and_up_to_date
+  - id: clusterapi-machines-ready
+    command: kubectl get machine -n {namespace} -l ani.kubercloud.io/node-pool-id={node_pool_id} -o json
+    pass_condition: machine_count_node_refs_provider_ids_internal_ips_ready_and_available
+  - id: capk-kubevirtmachines-ready
+    command: kubectl get kubevirtmachine -n {namespace} -o json
+    pass_condition: machine_infrastructure_refs_resolve_to_ready_kubevirtmachines
+  - id: capk-vms-ready
+    command: kubectl get vm,vmi -n {namespace} -o json
+    pass_condition: capk_virtualmachines_and_instances_running_ready
   - id: gpu-workload-scheduled
     command: kubectl apply -f gpu-smoke-pod.yaml && kubectl wait --for=condition=PodScheduled pod/{gpu_smoke_pod}
     pass_condition: gpu_pod_scheduled_on_workload_cluster

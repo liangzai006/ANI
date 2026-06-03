@@ -27,11 +27,11 @@ live_checks:
     command: kubectl patch virtualmachine {vm_name} -n {namespace} --type=merge -p '{"spec":{"running":true}}' && kubectl wait --for=condition=Ready virtualmachineinstance/{vm_name} -n {namespace}
     pass_condition: virtualmachineinstance_ready_or_running
   - id: kubevirt-vnc-subresource
-    command: kubectl get --raw /apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{vm_name}/vnc
-    pass_condition: vnc_subresource_accepts_request
+    command: websocket GET /apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{vm_name}/vnc with Sec-WebSocket-Protocol plain.kubevirt.io
+    pass_condition: vnc_websocket_session_established
   - id: kubevirt-console-subresource
-    command: kubectl get --raw /apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{vm_name}/console
-    pass_condition: console_subresource_accepts_request
+    command: websocket GET /apis/subresources.kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{vm_name}/console with Sec-WebSocket-Protocol plain.kubevirt.io
+    pass_condition: console_websocket_session_established
   - id: kubevirt-vm-stopped
     command: kubectl patch virtualmachine {vm_name} -n {namespace} --type=merge -p '{"spec":{"running":false}}' && kubectl wait --for=delete virtualmachineinstance/{vm_name} -n {namespace}
     pass_condition: virtualmachineinstance_stopped
@@ -43,4 +43,4 @@ readiness_levels:
   contract:
     meaning: Gate definition and local validator exist; no live KubeVirt VM proof.
   live:
-    meaning: KubeVirt CRD/control-plane, VM start/stop lifecycle and console/VNC checks passed against REAL-K8S-LAB-A.
+    meaning: KubeVirt CRD/control-plane, VM start/stop lifecycle and console/VNC WebSocket sessions passed against REAL-K8S-LAB-A.

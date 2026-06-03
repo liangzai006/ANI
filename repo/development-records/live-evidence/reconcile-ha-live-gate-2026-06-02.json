@@ -1,0 +1,13 @@
+{
+  "deleted_pod": "ani-reconcile-worker-a-5bf8fbfcdc-qp5fj",
+  "id": "reconcile-ha-live-gate",
+  "initial_leader": "worker-a",
+  "lease_name": "workload-reconcile-controller",
+  "metrics_kubectl_raw_path": "/api/v1/namespaces/ani-system/services/ani-reconcile-worker-metrics:9205/proxy/metrics",
+  "metrics_url": "kubernetes-raw",
+  "namespace": "ani-system",
+  "new_leader": "worker-b",
+  "profile": "M1-RECONCILE-LIVE-A",
+  "status": "passed",
+  "worker_selector": "app=ani-reconcile-worker"
+}

@@ -1,0 +1,9 @@
+{
+  "core_cluster_id": "k8sclu-5c69b40c-720e-4af3-8fb3-8f12db6293f8",
+  "id": "vcluster-upgrade-live-gate",
+  "kubectl_version": "v1.35.0",
+  "profile": "M1-K8S-LIVE-C",
+  "proxy_status": 200,
+  "status": "passed",
+  "target_version": "v1.35.0"
+}

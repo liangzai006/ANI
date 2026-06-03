@@ -23,9 +23,29 @@ class FakeLiveRunner:
         self.commands.append(command)
         joined = " ".join(command)
         if "get pods" in joined:
-            return (
-                "worker-a ani-reconcile-worker-a\n"
-                "worker-b ani-reconcile-worker-b\n"
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "ani-reconcile-worker-a",
+                                "labels": {
+                                    "app": "ani-reconcile-worker",
+                                    "ani.kubercloud.io/reconcile-identity": "worker-a",
+                                },
+                            }
+                        },
+                        {
+                            "metadata": {
+                                "name": "ani-reconcile-worker-b",
+                                "labels": {
+                                    "app": "ani-reconcile-worker",
+                                    "ani.kubercloud.io/reconcile-identity": "worker-b",
+                                },
+                            }
+                        },
+                    ]
+                }
             )
         if "delete pod ani-reconcile-worker-a" in joined:
             return "pod \"ani-reconcile-worker-a\" deleted\n"
@@ -43,6 +63,29 @@ class FakeLiveRunner:
             "ani_workload_reconcile_successes_total 7\n"
             "ani_workload_reconcile_failures_total 0\n"
         )
+
+
+class KubectlPsqlRunner(gate.LiveRunner):
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str]) -> str:
+        self.commands.append(command)
+        joined = " ".join(command)
+        if "get pods" in joined:
+            return "ani-reconcile-ha-postgres-0\n"
+        if "exec -n ani-system ani-reconcile-ha-postgres-0" in joined:
+            return "worker-a\n"
+        raise AssertionError(f"unexpected command: {joined}")
+
+
+class KubectlMetricsRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str]) -> str:
+        self.commands.append(command)
+        return "ani_workload_reconcile_ticks_total 1\nani_workload_reconcile_successes_total 0\nani_workload_reconcile_failures_total 0\n"
 
 
 class ReconcileHALiveGateTest(unittest.TestCase):
@@ -182,9 +225,63 @@ class ReconcileHALiveGateTest(unittest.TestCase):
         self.assertEqual(result["metrics_url"], "http://127.0.0.1:18080/metrics")
         self.assertEqual(result["initial_leader"], "worker-a")
         self.assertEqual(result["new_leader"], "worker-b")
-        self.assertEqual(runner.commands[0], ["kubectl", "get", "pods", "-n", "ani-system", "-l", "app=ani-reconcile-worker", "-o", "custom-columns=IDENTITY:.metadata.labels.ani\\.kubercloud\\.io/reconcile-identity,NAME:.metadata.name", "--no-headers"])
+        self.assertEqual(runner.commands[0], ["kubectl", "get", "pods", "-n", "ani-system", "-l", "app=ani-reconcile-worker", "-o", "json"])
         self.assertEqual(runner.commands[1], ["kubectl", "delete", "pod", "ani-reconcile-worker-a", "-n", "ani-system"])
         self.assertEqual(runner.metrics_urls, ["http://127.0.0.1:18080/metrics", "http://127.0.0.1:18080/metrics"])
+
+    def test_live_runner_can_query_lease_through_kubectl_exec_psql(self) -> None:
+        runner = KubectlPsqlRunner()
+        config = gate.LiveConfig(
+            database_url="postgres://ani:ani@ani-reconcile-ha-postgres:5432/ani?sslmode=disable",
+            namespace="ani-system",
+            worker_selector="app=ani-reconcile-worker",
+            metrics_url="http://127.0.0.1:18080/metrics",
+            psql_kubectl_namespace="ani-system",
+            psql_kubectl_selector="app=ani-reconcile-ha-postgres",
+        )
+
+        holder = runner.query_lease_holder(config)
+
+        self.assertEqual(holder, "worker-a")
+        self.assertEqual(
+            runner.commands[0],
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                "ani-system",
+                "-l",
+                "app=ani-reconcile-ha-postgres",
+                "-o",
+                "jsonpath={.items[0].metadata.name}",
+            ],
+        )
+        self.assertEqual(runner.commands[1][:6], ["kubectl", "exec", "-n", "ani-system", "ani-reconcile-ha-postgres-0", "--"])
+        self.assertIn("psql", runner.commands[1])
+
+    def test_live_gate_can_fetch_metrics_through_kubectl_raw_service_proxy(self) -> None:
+        runner = KubectlMetricsRunner()
+        config = gate.LiveConfig(
+            database_url="postgres://ani:ani@127.0.0.1:5432/ani",
+            namespace="ani-system",
+            worker_selector="app=ani-reconcile-worker",
+            metrics_url="kubernetes-raw",
+            metrics_kubectl_raw_path="/api/v1/namespaces/ani-system/services/ani-reconcile-worker-metrics:9205/proxy/metrics",
+        )
+
+        metrics = gate.fetch_live_metrics(config, runner)
+
+        self.assertIn("ani_workload_reconcile_ticks_total", metrics)
+        self.assertEqual(
+            runner.commands[0],
+            [
+                "kubectl",
+                "get",
+                "--raw",
+                "/api/v1/namespaces/ani-system/services/ani-reconcile-worker-metrics:9205/proxy/metrics",
+            ],
+        )
 
     def test_cli_live_mode_rejects_missing_database_config(self) -> None:
         with patch.object(gate, "run_live") as run_live:

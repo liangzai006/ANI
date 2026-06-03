@@ -126,6 +126,9 @@ class LiveConfig:
     lease_name: str = "workload-reconcile-controller"
     kubectl_binary: str = "kubectl"
     psql_binary: str = "psql"
+    psql_kubectl_namespace: str = ""
+    psql_kubectl_selector: str = ""
+    metrics_kubectl_raw_path: str = ""
     failover_attempts: int = 12
     failover_sleep_seconds: float = 5.0
 
@@ -145,6 +148,38 @@ class LiveRunner:
             f"WHERE lease_name = '{lease_name}' AND lease_until > now() "
             "ORDER BY updated_at DESC LIMIT 1"
         )
+        if config.psql_kubectl_selector:
+            pod = self.run(
+                [
+                    config.kubectl_binary,
+                    "get",
+                    "pods",
+                    "-n",
+                    config.psql_kubectl_namespace,
+                    "-l",
+                    config.psql_kubectl_selector,
+                    "-o",
+                    "jsonpath={.items[0].metadata.name}",
+                ]
+            ).strip()
+            if not pod:
+                raise RuntimeError("kubectl psql selector did not match a pod")
+            return self.run(
+                [
+                    config.kubectl_binary,
+                    "exec",
+                    "-n",
+                    config.psql_kubectl_namespace,
+                    pod,
+                    "--",
+                    config.psql_binary,
+                    config.database_url,
+                    "-t",
+                    "-A",
+                    "-c",
+                    query,
+                ]
+            ).strip()
         return self.run([config.psql_binary, config.database_url, "-t", "-A", "-c", query]).strip()
 
     def fetch_metrics(self, url: str) -> str:
@@ -173,9 +208,13 @@ def validate_live_config(config: LiveConfig) -> None:
         fail("failover_attempts must be greater than zero")
     if config.failover_sleep_seconds < 0:
         fail("failover_sleep_seconds cannot be negative")
-    for binary in (config.kubectl_binary, config.psql_binary):
-        if shutil.which(binary) is None:
-            fail(f"{binary} is required for --live")
+    if shutil.which(config.kubectl_binary) is None:
+        fail(f"{config.kubectl_binary} is required for --live")
+    if config.psql_kubectl_selector:
+        if not config.psql_kubectl_namespace.strip():
+            fail("psql_kubectl_namespace is required when psql_kubectl_selector is set")
+    elif shutil.which(config.psql_binary) is None:
+        fail(f"{config.psql_binary} is required for --live")
 
 
 def list_worker_pods(config: LiveConfig, runner: LiveRunner) -> dict[str, str]:
@@ -188,15 +227,27 @@ def list_worker_pods(config: LiveConfig, runner: LiveRunner) -> dict[str, str]:
         "-l",
         config.worker_selector,
         "-o",
-        "custom-columns=IDENTITY:.metadata.labels.ani\\.kubercloud\\.io/reconcile-identity,NAME:.metadata.name",
-        "--no-headers",
+        "json",
     ]
     output = runner.run(command)
     pods: dict[str, str] = {}
-    for line in output.splitlines():
-        fields = line.split()
-        if len(fields) >= 2 and fields[0] != "<none>":
-            pods[fields[0]] = fields[1]
+    try:
+        document = json.loads(output)
+    except json.JSONDecodeError as err:
+        fail(f"worker pod list JSON is malformed: {err}")
+    for item in document.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        name = metadata.get("name")
+        labels = metadata.get("labels", {})
+        if not isinstance(labels, dict):
+            continue
+        identity = labels.get("ani.kubercloud.io/reconcile-identity")
+        if isinstance(identity, str) and identity.strip() and isinstance(name, str) and name.strip():
+            pods[identity] = name
     if len(pods) < 2:
         fail("live mode requires at least two reconcile worker pods with reconcile identity labels")
     return pods
@@ -211,6 +262,12 @@ def assert_metrics_exposed(metrics: str) -> None:
     missing = [name for name in required if name not in metrics]
     if missing:
         fail(f"metrics endpoint missing {', '.join(missing)}")
+
+
+def fetch_live_metrics(config: LiveConfig, runner: LiveRunner) -> str:
+    if config.metrics_kubectl_raw_path:
+        return runner.run([config.kubectl_binary, "get", "--raw", config.metrics_kubectl_raw_path])
+    return runner.fetch_metrics(config.metrics_url)
 
 
 def wait_for_new_leader(config: LiveConfig, runner: LiveRunner, initial_leader: str) -> str:
@@ -233,16 +290,17 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
     if not leader_pod:
         fail(f"active leader {initial_leader} does not match observed reconcile worker pods")
 
-    assert_metrics_exposed(runner.fetch_metrics(config.metrics_url))
+    assert_metrics_exposed(fetch_live_metrics(config, runner))
     runner.run([config.kubectl_binary, "delete", "pod", leader_pod, "-n", config.namespace])
     new_leader = wait_for_new_leader(config, runner, initial_leader)
-    assert_metrics_exposed(runner.fetch_metrics(config.metrics_url))
+    assert_metrics_exposed(fetch_live_metrics(config, runner))
     return {
         "status": "passed",
         "namespace": config.namespace,
         "worker_selector": config.worker_selector,
         "lease_name": config.lease_name,
         "metrics_url": config.metrics_url,
+        "metrics_kubectl_raw_path": config.metrics_kubectl_raw_path,
         "initial_leader": initial_leader,
         "new_leader": new_leader,
         "deleted_pod": leader_pod,
@@ -296,7 +354,11 @@ def main() -> int:
     parser.add_argument("--namespace", default=os.getenv("RECONCILE_WORKER_NAMESPACE", "ani-system"))
     parser.add_argument("--worker-selector", default=os.getenv("RECONCILE_WORKER_SELECTOR", "app=ani-reconcile-worker"))
     parser.add_argument("--metrics-url", default=os.getenv("RECONCILE_WORKER_METRICS_URL", ""))
+    parser.add_argument("--metrics-kubectl-raw-path", default=os.getenv("RECONCILE_WORKER_METRICS_KUBECTL_RAW_PATH", ""))
     parser.add_argument("--lease-name", default=os.getenv("WORKLOAD_RECONCILE_LEADER_LEASE_NAME", "workload-reconcile-controller"))
+    parser.add_argument("--psql-binary", default=os.getenv("PSQL_BINARY", "psql"))
+    parser.add_argument("--psql-kubectl-namespace", default=os.getenv("RECONCILE_PSQL_KUBECTL_NAMESPACE", ""))
+    parser.add_argument("--psql-kubectl-selector", default=os.getenv("RECONCILE_PSQL_KUBECTL_SELECTOR", ""))
     parser.add_argument(
         "--evidence-output",
         default=os.getenv("ANI_RECONCILE_HA_LIVE_EVIDENCE_OUTPUT") or None,
@@ -314,7 +376,11 @@ def main() -> int:
             namespace=args.namespace,
             worker_selector=args.worker_selector,
             metrics_url=args.metrics_url,
+            metrics_kubectl_raw_path=args.metrics_kubectl_raw_path,
             lease_name=args.lease_name,
+            psql_binary=args.psql_binary,
+            psql_kubectl_namespace=args.psql_kubectl_namespace,
+            psql_kubectl_selector=args.psql_kubectl_selector,
         )
         validate_live_config(config)
         if args.evidence_output is not None:

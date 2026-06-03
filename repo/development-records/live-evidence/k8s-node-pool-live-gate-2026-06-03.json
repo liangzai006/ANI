@@ -1,0 +1,80 @@
+{
+  "gpu_workload": "ani-node-pool-gpu-smoke",
+  "id": "k8s-node-pool-live-gate",
+  "machine_deployment": "gpu-pool-live",
+  "machine_deployment_create_replica_check": "existing_replicas_2",
+  "namespace": "ani-tenant-00000000-0000-0000-0000-000000000001",
+  "node_pool_id": "k8snp-eb552e12-65fa-4b19-b1fb-3169f82662d9",
+  "profile": "M1-K8S-LIVE-B",
+  "readiness": {
+    "kubevirt_machines": {
+      "count": 2,
+      "names": [
+        "gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx"
+      ],
+      "ready_count": 2
+    },
+    "machine_deployment": {
+      "available_replicas": 2,
+      "name": "gpu-pool-live",
+      "ready_replicas": 2,
+      "replicas": 2,
+      "up_to_date_replicas": 2
+    },
+    "machine_sets": {
+      "available_replicas": 2,
+      "count": 1,
+      "names": [
+        "gpu-pool-live-v89lr"
+      ],
+      "ready_names": [
+        "gpu-pool-live-v89lr"
+      ],
+      "ready_replicas": 2,
+      "spec_replicas": 2,
+      "status_replicas": 2,
+      "up_to_date_replicas": 2
+    },
+    "machines": {
+      "count": 2,
+      "infrastructure_refs": [
+        "gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx"
+      ],
+      "internal_ips": {
+        "gpu-pool-live-v89lr-6256b": [
+          "10.16.0.45"
+        ],
+        "gpu-pool-live-v89lr-jmsbx": [
+          "10.16.0.46"
+        ]
+      },
+      "names": [
+        "gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx"
+      ],
+      "provider_ids": {
+        "gpu-pool-live-v89lr-6256b": "kubevirt://gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx": "kubevirt://gpu-pool-live-v89lr-jmsbx"
+      },
+      "ready_count": 2
+    },
+    "virtual_machines": {
+      "vm_count": 2,
+      "vm_names": [
+        "gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx"
+      ],
+      "vm_ready_count": 2,
+      "vmi_count": 2,
+      "vmi_names": [
+        "gpu-pool-live-v89lr-6256b",
+        "gpu-pool-live-v89lr-jmsbx"
+      ],
+      "vmi_ready_count": 2
+    }
+  },
+  "scaled_replicas": 2,
+  "status": "passed"
+}

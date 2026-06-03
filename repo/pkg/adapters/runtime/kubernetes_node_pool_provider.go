@@ -16,10 +16,32 @@ type KubernetesNodePoolProviderClient interface {
 
 type KubernetesNodePoolProviderAdapter struct {
 	client KubernetesNodePoolProviderClient
+	config KubernetesNodePoolProviderConfig
 	now    func() time.Time
 }
 
 type KubernetesNodePoolProviderOption func(*KubernetesNodePoolProviderAdapter)
+
+type KubernetesNodePoolProviderConfig struct {
+	MachineVersion string
+
+	BootstrapDataSecretNameTemplate string
+	BootstrapRefAPIVersion          string
+	BootstrapRefKind                string
+	BootstrapRefNameTemplate        string
+	BootstrapRefNamespace           string
+
+	InfrastructureRefAPIVersion   string
+	InfrastructureRefKind         string
+	InfrastructureRefNameTemplate string
+	InfrastructureRefNamespace    string
+}
+
+func WithKubernetesNodePoolProviderConfig(config KubernetesNodePoolProviderConfig) KubernetesNodePoolProviderOption {
+	return func(adapter *KubernetesNodePoolProviderAdapter) {
+		adapter.config = config.withDefaults()
+	}
+}
 
 func WithKubernetesNodePoolProviderClock(now func() time.Time) KubernetesNodePoolProviderOption {
 	return func(adapter *KubernetesNodePoolProviderAdapter) {
@@ -30,10 +52,15 @@ func WithKubernetesNodePoolProviderClock(now func() time.Time) KubernetesNodePoo
 }
 
 func NewKubernetesNodePoolProviderAdapter(client KubernetesNodePoolProviderClient, options ...KubernetesNodePoolProviderOption) *KubernetesNodePoolProviderAdapter {
-	adapter := &KubernetesNodePoolProviderAdapter{client: client, now: time.Now}
+	adapter := &KubernetesNodePoolProviderAdapter{
+		client: client,
+		config: KubernetesNodePoolProviderConfig{}.withDefaults(),
+		now:    time.Now,
+	}
 	for _, option := range options {
 		option(adapter)
 	}
+	adapter.config = adapter.config.withDefaults()
 	return adapter
 }
 
@@ -44,7 +71,7 @@ func (a *KubernetesNodePoolProviderAdapter) ApplyK8sClusterNodePool(ctx context.
 	if a.client == nil {
 		return ports.K8sClusterNodePoolProviderResult{}, fmt.Errorf("%w: Kubernetes node pool provider client is required", ports.ErrNotConfigured)
 	}
-	manifest, err := renderKubernetesNodePoolManifest(request, false)
+	manifest, err := renderKubernetesNodePoolManifest(request, a.config, false)
 	if err != nil {
 		return ports.K8sClusterNodePoolProviderResult{}, err
 	}
@@ -68,7 +95,7 @@ func (a *KubernetesNodePoolProviderAdapter) DeleteK8sClusterNodePool(ctx context
 	if a.client == nil {
 		return ports.K8sClusterNodePoolProviderResult{}, fmt.Errorf("%w: Kubernetes node pool provider client is required", ports.ErrNotConfigured)
 	}
-	manifest, err := renderKubernetesNodePoolManifest(request, true)
+	manifest, err := renderKubernetesNodePoolManifest(request, a.config, true)
 	if err != nil {
 		return ports.K8sClusterNodePoolProviderResult{}, err
 	}
@@ -98,12 +125,17 @@ func validateK8sClusterNodePoolProviderRequest(request ports.K8sClusterNodePoolP
 	return nil
 }
 
-func renderKubernetesNodePoolManifest(request ports.K8sClusterNodePoolProviderRequest, deleteIntent bool) (ports.WorkloadManifest, error) {
+func renderKubernetesNodePoolManifest(request ports.K8sClusterNodePoolProviderRequest, config KubernetesNodePoolProviderConfig, deleteIntent bool) (ports.WorkloadManifest, error) {
+	config = config.withDefaults()
+	if err := config.validate(); err != nil {
+		return ports.WorkloadManifest{}, err
+	}
 	replicas := request.NodeCount
 	if deleteIntent {
 		replicas = 0
 	}
 	name := kubernetesNodePoolName(request)
+	namespace := tenantNamespace(request.TenantID)
 	labels := map[string]string{
 		"app.kubernetes.io/managed-by":       "ani-core",
 		"ani.kubercloud.io/tenant-id":        request.TenantID,
@@ -122,30 +154,34 @@ func renderKubernetesNodePoolManifest(request ports.K8sClusterNodePoolProviderRe
 		labels["ani.kubercloud.io/gpu-model"] = request.GPU.Model
 	}
 	annotations := map[string]string{
-		"ani.kubercloud.io/operation": operationOrDefault(request.Operation, "apply"),
+		"ani.kubercloud.io/operation":     operationOrDefault(request.Operation, "apply"),
+		"ani.kubercloud.io/instance-type": request.InstanceType,
+	}
+	if request.GPU.Count > 0 {
+		annotations["ani.kubercloud.io/gpu-count"] = fmt.Sprintf("%d", request.GPU.Count)
+		annotations["ani.kubercloud.io/gpu-resource-name"] = request.GPU.ResourceName
 	}
 	if deleteIntent {
 		annotations["ani.kubercloud.io/delete-intent"] = "true"
 	}
-	machineSpec := map[string]any{
-		"clusterName":  request.ClusterName,
-		"instanceType": request.InstanceType,
+	templateMetadata := map[string]any{
+		"labels":      labels,
+		"annotations": annotations,
 	}
-	if request.GPU.Count > 0 {
-		machineSpec["gpu"] = map[string]any{
-			"vendor":        request.GPU.Vendor,
-			"model":         request.GPU.Model,
-			"count":         request.GPU.Count,
-			"resourceName":  request.GPU.ResourceName,
-			"schedulingKey": firstNonEmpty(request.GPU.ResourceName, request.GPU.Vendor),
-		}
+	machineSpec := map[string]any{
+		"clusterName":       request.ClusterName,
+		"bootstrap":         config.bootstrapRef(request, name, namespace),
+		"infrastructureRef": config.infrastructureRef(request, name, namespace),
+	}
+	if strings.TrimSpace(config.MachineVersion) != "" {
+		machineSpec["version"] = strings.TrimSpace(config.MachineVersion)
 	}
 	doc := map[string]any{
 		"apiVersion": "cluster.x-k8s.io/v1beta1",
 		"kind":       "MachineDeployment",
 		"metadata": map[string]any{
 			"name":        name,
-			"namespace":   tenantNamespace(request.TenantID),
+			"namespace":   namespace,
 			"labels":      labels,
 			"annotations": annotations,
 		},
@@ -158,7 +194,7 @@ func renderKubernetesNodePoolManifest(request ports.K8sClusterNodePoolProviderRe
 				},
 			},
 			"template": map[string]any{
-				"metadata": map[string]any{"labels": labels},
+				"metadata": templateMetadata,
 				"spec":     machineSpec,
 			},
 		},
@@ -173,6 +209,78 @@ func renderKubernetesNodePoolManifest(request ports.K8sClusterNodePoolProviderRe
 		Name:     name,
 		Content:  string(content),
 	}, nil
+}
+
+func (c KubernetesNodePoolProviderConfig) withDefaults() KubernetesNodePoolProviderConfig {
+	if strings.TrimSpace(c.BootstrapDataSecretNameTemplate) == "" {
+		c.BootstrapDataSecretNameTemplate = "{machine_deployment_name}-bootstrap"
+	}
+	if strings.TrimSpace(c.InfrastructureRefAPIVersion) == "" {
+		c.InfrastructureRefAPIVersion = "infrastructure.cluster.x-k8s.io/v1beta1"
+	}
+	if strings.TrimSpace(c.InfrastructureRefKind) == "" {
+		c.InfrastructureRefKind = "ANIMachineTemplate"
+	}
+	if strings.TrimSpace(c.InfrastructureRefNameTemplate) == "" {
+		c.InfrastructureRefNameTemplate = "{machine_deployment_name}"
+	}
+	return c
+}
+
+func (c KubernetesNodePoolProviderConfig) validate() error {
+	if strings.TrimSpace(c.BootstrapRefAPIVersion) == "" && strings.TrimSpace(c.BootstrapRefKind) == "" && strings.TrimSpace(c.BootstrapRefNameTemplate) == "" {
+		return nil
+	}
+	if strings.TrimSpace(c.BootstrapRefAPIVersion) == "" || strings.TrimSpace(c.BootstrapRefKind) == "" || strings.TrimSpace(c.BootstrapRefNameTemplate) == "" {
+		return fmt.Errorf("%w: bootstrap configRef apiVersion, kind, and name template must be configured together", ports.ErrInvalid)
+	}
+	return nil
+}
+
+func (c KubernetesNodePoolProviderConfig) bootstrapRef(request ports.K8sClusterNodePoolProviderRequest, machineDeploymentName string, namespace string) map[string]any {
+	if strings.TrimSpace(c.BootstrapRefAPIVersion) != "" || strings.TrimSpace(c.BootstrapRefKind) != "" || strings.TrimSpace(c.BootstrapRefNameTemplate) != "" {
+		ref := map[string]any{
+			"apiVersion": renderKubernetesNodePoolTemplate(c.BootstrapRefAPIVersion, request, machineDeploymentName, namespace),
+			"kind":       renderKubernetesNodePoolTemplate(c.BootstrapRefKind, request, machineDeploymentName, namespace),
+			"name":       renderKubernetesNodePoolTemplate(firstNonEmpty(c.BootstrapRefNameTemplate, "{machine_deployment_name}"), request, machineDeploymentName, namespace),
+		}
+		if strings.TrimSpace(c.BootstrapRefNamespace) != "" {
+			ref["namespace"] = renderKubernetesNodePoolTemplate(c.BootstrapRefNamespace, request, machineDeploymentName, namespace)
+		}
+		return map[string]any{"configRef": ref}
+	}
+	return map[string]any{
+		"dataSecretName": renderKubernetesNodePoolTemplate(c.BootstrapDataSecretNameTemplate, request, machineDeploymentName, namespace),
+	}
+}
+
+func (c KubernetesNodePoolProviderConfig) infrastructureRef(request ports.K8sClusterNodePoolProviderRequest, machineDeploymentName string, namespace string) map[string]any {
+	ref := map[string]any{
+		"apiVersion": renderKubernetesNodePoolTemplate(c.InfrastructureRefAPIVersion, request, machineDeploymentName, namespace),
+		"kind":       renderKubernetesNodePoolTemplate(c.InfrastructureRefKind, request, machineDeploymentName, namespace),
+		"name":       renderKubernetesNodePoolTemplate(c.InfrastructureRefNameTemplate, request, machineDeploymentName, namespace),
+	}
+	if strings.TrimSpace(c.InfrastructureRefNamespace) != "" {
+		ref["namespace"] = renderKubernetesNodePoolTemplate(c.InfrastructureRefNamespace, request, machineDeploymentName, namespace)
+	}
+	return ref
+}
+
+func renderKubernetesNodePoolTemplate(template string, request ports.K8sClusterNodePoolProviderRequest, machineDeploymentName string, namespace string) string {
+	replacements := map[string]string{
+		"{cluster_id}":              request.ClusterID,
+		"{cluster_name}":            request.ClusterName,
+		"{machine_deployment_name}": machineDeploymentName,
+		"{namespace}":               namespace,
+		"{node_pool_id}":            request.NodePoolID,
+		"{node_pool_name}":          request.Name,
+		"{tenant_id}":               request.TenantID,
+	}
+	result := strings.TrimSpace(template)
+	for token, value := range replacements {
+		result = strings.ReplaceAll(result, token, value)
+	}
+	return result
 }
 
 func kubernetesNodePoolName(request ports.K8sClusterNodePoolProviderRequest) string {

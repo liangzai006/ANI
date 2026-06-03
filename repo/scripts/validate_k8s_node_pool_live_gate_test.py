@@ -15,12 +15,12 @@ import validate_k8s_node_pool_live_gate as gate
 
 class FakeLiveRunner:
     def __init__(self) -> None:
-        self.json_calls: list[tuple[str, str, dict[str, object], str]] = []
+        self.json_calls: list[tuple[str, str, dict[str, object], str, str]] = []
         self.commands: list[tuple[list[str], str | None]] = []
         self.machine_deployment_replicas = 1
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        self.json_calls.append(("POST", url, payload, bearer_token))
+    def post_json(self, url: str, payload: dict[str, object], bearer_token: str, tenant_id: str) -> dict[str, object]:
+        self.json_calls.append(("POST", url, payload, bearer_token, tenant_id))
         if url.endswith("/node-pools"):
             return {
                 "id": "k8snp-live",
@@ -35,8 +35,8 @@ class FakeLiveRunner:
             }
         raise AssertionError(f"unexpected JSON URL: {url}")
 
-    def patch_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        self.json_calls.append(("PATCH", url, payload, bearer_token))
+    def patch_json(self, url: str, payload: dict[str, object], bearer_token: str, tenant_id: str) -> dict[str, object]:
+        self.json_calls.append(("PATCH", url, payload, bearer_token, tenant_id))
         if url.endswith("/node-pools/k8snp-live"):
             self.machine_deployment_replicas = int(payload["node_count"])
             return {
@@ -68,8 +68,121 @@ class FakeLiveRunner:
                     },
                     "spec": {
                         "replicas": self.machine_deployment_replicas,
-                        "template": {"spec": {"gpu": {"count": 1, "resourceName": "nvidia.com/gpu"}}},
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    "ani.kubercloud.io/gpu-vendor": "nvidia",
+                                    "ani.kubercloud.io/gpu-model": "L4",
+                                },
+                                "annotations": {
+                                    "ani.kubercloud.io/gpu-count": "1",
+                                    "ani.kubercloud.io/gpu-resource-name": "nvidia.com/gpu",
+                                },
+                            },
+                            "spec": {
+                                "clusterName": "vc-a",
+                                "bootstrap": {"dataSecretName": "gpu-pool-bootstrap"},
+                                "infrastructureRef": {
+                                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                                    "kind": "ANIMachineTemplate",
+                                    "name": "gpu-pool",
+                                },
+                            },
+                        },
                     },
+                    "status": {
+                        "replicas": self.machine_deployment_replicas,
+                        "readyReplicas": self.machine_deployment_replicas,
+                        "availableReplicas": self.machine_deployment_replicas,
+                        "upToDateReplicas": self.machine_deployment_replicas,
+                        "conditions": [{"type": "Available", "status": "True"}],
+                    },
+                }
+            )
+        if "get machineset -n ani-tenant-tenant-a -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "gpu-pool-ms",
+                                "namespace": "ani-tenant-tenant-a",
+                                "labels": {"ani.kubercloud.io/node-pool-id": "k8snp-live"},
+                                "ownerReferences": [{"kind": "MachineDeployment", "name": "gpu-pool"}],
+                            },
+                            "spec": {"replicas": self.machine_deployment_replicas},
+                            "status": {
+                                "replicas": self.machine_deployment_replicas,
+                                "readyReplicas": self.machine_deployment_replicas,
+                                "availableReplicas": self.machine_deployment_replicas,
+                                "upToDateReplicas": self.machine_deployment_replicas,
+                                "conditions": [{"type": "Ready", "status": "True"}],
+                            },
+                        }
+                    ]
+                }
+            )
+        if "get machine -n ani-tenant-tenant-a -l ani.kubercloud.io/node-pool-id=k8snp-live -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": f"gpu-pool-machine-{index}",
+                                "namespace": "ani-tenant-tenant-a",
+                                "labels": {"ani.kubercloud.io/node-pool-id": "k8snp-live"},
+                            },
+                            "spec": {
+                                "providerID": f"kubevirt://gpu-pool-machine-{index}",
+                                "infrastructureRef": {"kind": "KubevirtMachine", "name": f"gpu-pool-machine-{index}"},
+                            },
+                            "status": {
+                                "nodeRef": {"name": f"gpu-pool-machine-{index}"},
+                                "addresses": [{"type": "InternalIP", "address": f"10.16.0.{40 + index}"}],
+                                "conditions": [
+                                    {"type": "Ready", "status": "True"},
+                                    {"type": "Available", "status": "True"},
+                                ],
+                            },
+                        }
+                        for index in range(1, self.machine_deployment_replicas + 1)
+                    ]
+                }
+            )
+        if "get kubevirtmachine -n ani-tenant-tenant-a -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": f"gpu-pool-machine-{index}", "namespace": "ani-tenant-tenant-a"},
+                            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        }
+                        for index in range(1, self.machine_deployment_replicas + 1)
+                    ]
+                }
+            )
+        if "get vm -n ani-tenant-tenant-a -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": f"gpu-pool-machine-{index}", "namespace": "ani-tenant-tenant-a"},
+                            "status": {"printableStatus": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+                        }
+                        for index in range(1, self.machine_deployment_replicas + 1)
+                    ]
+                }
+            )
+        if "get vmi -n ani-tenant-tenant-a -o json" in joined:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": f"gpu-pool-machine-{index}", "namespace": "ani-tenant-tenant-a"},
+                            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+                        }
+                        for index in range(1, self.machine_deployment_replicas + 1)
+                    ]
                 }
             )
         if command[:2] == ["kubectl", "apply"] and input_text:
@@ -92,6 +205,10 @@ class K8sNodePoolLiveGateTest(unittest.TestCase):
         self.assertIn("clusterapi-machinedeployment-created", check_ids)
         self.assertIn("core-scale-node-pool", check_ids)
         self.assertIn("clusterapi-machinedeployment-scaled", check_ids)
+        self.assertIn("clusterapi-machinesets-ready", check_ids)
+        self.assertIn("clusterapi-machines-ready", check_ids)
+        self.assertIn("capk-kubevirtmachines-ready", check_ids)
+        self.assertIn("capk-vms-ready", check_ids)
         self.assertIn("gpu-workload-scheduled", check_ids)
 
     def test_contract_gate_rejects_live_check_command_non_string(self) -> None:
@@ -221,10 +338,16 @@ class K8sNodePoolLiveGateTest(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["node_pool_id"], "k8snp-live")
         self.assertEqual(result["scaled_replicas"], 3)
+        self.assertEqual(result["readiness"]["machines"]["ready_count"], 3)
+        self.assertEqual(result["readiness"]["kubevirt_machines"]["ready_count"], 3)
+        self.assertEqual(result["readiness"]["virtual_machines"]["vm_ready_count"], 3)
+        self.assertEqual(result["readiness"]["virtual_machines"]["vmi_ready_count"], 3)
         self.assertEqual(runner.json_calls[0][0], "POST")
         self.assertEqual(runner.json_calls[0][1], "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-live/node-pools")
+        self.assertEqual(runner.json_calls[0][4], "tenant-a")
         self.assertEqual(runner.json_calls[1][0], "PATCH")
         self.assertEqual(runner.json_calls[1][1], "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-live/node-pools/k8snp-live")
+        self.assertEqual(runner.json_calls[1][4], "tenant-a")
         self.assertEqual(
             runner.commands[0][0],
             ["kubectl", "get", "machinedeployment", "gpu-pool", "-n", "ani-tenant-tenant-a", "-o", "json"],

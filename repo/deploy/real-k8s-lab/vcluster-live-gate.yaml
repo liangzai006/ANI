@@ -11,16 +11,19 @@ required_tools:
 
 live_checks:
   - id: helm-install
-    command: helm upgrade --install {cluster_id} vcluster --repo https://charts.loft.sh --namespace {namespace} --create-namespace --repository-config= --set sync.toHost.service.enabled=true
+    command: helm upgrade --install {cluster_id} vcluster --repo https://charts.loft.sh --namespace {namespace} --create-namespace --repository-config= --set sync.toHost.services.enabled=true
     pass_condition: command_succeeds
   - id: vcluster-kubeconfig
-    command: vcluster connect {cluster_id} --namespace {namespace} --print
-    pass_condition: stdout_contains_kubeconfig
+    command: vcluster connect {cluster_id} --namespace {namespace} --background-proxy=false -- kubectl get --raw /version
+    pass_condition: vcluster_connect_runs_kubectl_with_generated_kubeconfig
   - id: kubectl-version
-    command: kubectl --kubeconfig {generated_kubeconfig} get --raw /version
+    command: vcluster connect {cluster_id} --namespace {namespace} --background-proxy=false -- kubectl get --raw /version
     pass_condition: json_has_kubernetes_version
+  - id: core-cluster-register
+    command: POST {gateway_url}/k8s-clusters name={cluster_id}
+    pass_condition: http_2xx_response_has_cluster_id
   - id: core-proxy-version
-    command: POST {gateway_url}/k8s-clusters/{cluster_id}/proxy path=/version
+    command: POST {gateway_url}/k8s-clusters/{core_cluster_id}/proxy path=/version
     pass_condition: http_2xx
 
 readiness_levels:

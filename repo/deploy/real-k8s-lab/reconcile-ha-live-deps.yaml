@@ -1,0 +1,305 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ani-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ani-reconcile-ha-postgres-init
+  namespace: ani-system
+data:
+  001-reconcile-ha-live.sql: |
+    CREATE TABLE IF NOT EXISTS workload_instances (
+        tenant_id UUID NOT NULL,
+        instance_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        workload_kind TEXT NOT NULL
+            CHECK (workload_kind IN ('vm','container','gpu_container','inference','notebook','agent_sandbox','batch_job')),
+        provider TEXT,
+        audit_id UUID,
+        provider_id TEXT,
+        resource_refs JSONB NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL
+            CHECK (state IN ('pending','provisioning','running','starting','stopping','stopped','failed','deleting','deleted')),
+        endpoint TEXT,
+        node_name TEXT,
+        reason TEXT,
+        networks JSONB NOT NULL DEFAULT '[]',
+        storage JSONB NOT NULL DEFAULT '[]',
+        lifecycle_policy JSONB NOT NULL DEFAULT '{}',
+        ssh_connection JSONB NOT NULL DEFAULT '{}',
+        snapshots JSONB NOT NULL DEFAULT '[]',
+        container_status JSONB NOT NULL DEFAULT '{}',
+        gpu_status JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id, instance_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workload_instances_reconcile
+        ON workload_instances (state, updated_at);
+
+    CREATE TABLE IF NOT EXISTS control_plane_leases (
+        lease_name TEXT PRIMARY KEY,
+        holder_id TEXT NOT NULL,
+        lease_until TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_control_plane_leases_until
+        ON control_plane_leases (lease_until);
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-reconcile-ha-postgres
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-reconcile-ha-postgres
+  template:
+    metadata:
+      labels:
+        app: ani-reconcile-ha-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: ani
+            - name: POSTGRES_USER
+              value: ani
+            - name: POSTGRES_PASSWORD
+              value: ani_dev_password
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ani"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: init-sql
+          configMap:
+            name: ani-reconcile-ha-postgres-init
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-reconcile-ha-postgres
+  namespace: ani-system
+spec:
+  selector:
+    app: ani-reconcile-ha-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-reconcile-ha-nats
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-reconcile-ha-nats
+  template:
+    metadata:
+      labels:
+        app: ani-reconcile-ha-nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["-js"]
+          ports:
+            - containerPort: 4222
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-reconcile-ha-nats
+  namespace: ani-system
+spec:
+  selector:
+    app: ani-reconcile-ha-nats
+  ports:
+    - name: nats
+      port: 4222
+      targetPort: 4222
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-reconcile-ha-redis
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-reconcile-ha-redis
+  template:
+    metadata:
+      labels:
+        app: ani-reconcile-ha-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server", "--requirepass", "ani_dev_password"]
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-reconcile-ha-redis
+  namespace: ani-system
+spec:
+  selector:
+    app: ani-reconcile-ha-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-reconcile-worker-a
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-reconcile-worker
+      ani.kubercloud.io/reconcile-identity: worker-a
+  template:
+    metadata:
+      labels:
+        app: ani-reconcile-worker
+        ani.kubercloud.io/reconcile-identity: worker-a
+    spec:
+      containers:
+        - name: worker
+          image: registry.k8s.io/pause:3.10
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/ani/bin/reconcile-worker"]
+          ports:
+            - containerPort: 9205
+          env:
+            - name: DATABASE_URL
+              value: postgres://ani:ani_dev_password@ani-reconcile-ha-postgres.ani-system.svc.cluster.local:5432/ani?sslmode=disable
+            - name: NATS_URL
+              value: nats://ani-reconcile-ha-nats.ani-system.svc.cluster.local:4222
+            - name: REDIS_URL
+              value: redis://:ani_dev_password@ani-reconcile-ha-redis.ani-system.svc.cluster.local:6379/0
+            - name: HEALTH_PORT
+              value: "9205"
+            - name: WORKLOAD_RECONCILE_CONTROLLER_ENABLED
+              value: "true"
+            - name: WORKLOAD_RECONCILE_LEADER_ELECTION_ENABLED
+              value: "true"
+            - name: WORKLOAD_RECONCILE_LEADER_IDENTITY
+              value: worker-a
+            - name: WORKLOAD_RECONCILE_LEADER_LEASE_NAME
+              value: workload-reconcile-controller
+            - name: WORKLOAD_RECONCILE_LEADER_LEASE_TTL_SECONDS
+              value: "12"
+            - name: WORKLOAD_RECONCILE_LEADER_RENEW_INTERVAL_SECONDS
+              value: "3"
+            - name: WORKLOAD_RECONCILE_NORMAL_INTERVAL_SECONDS
+              value: "5"
+          volumeMounts:
+            - name: worker-bin
+              mountPath: /opt/ani/bin/reconcile-worker
+      volumes:
+        - name: worker-bin
+          hostPath:
+            path: /opt/ani/reconcile-worker/reconcile-worker
+            type: File
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-reconcile-worker-b
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-reconcile-worker
+      ani.kubercloud.io/reconcile-identity: worker-b
+  template:
+    metadata:
+      labels:
+        app: ani-reconcile-worker
+        ani.kubercloud.io/reconcile-identity: worker-b
+    spec:
+      containers:
+        - name: worker
+          image: registry.k8s.io/pause:3.10
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/ani/bin/reconcile-worker"]
+          ports:
+            - containerPort: 9205
+          env:
+            - name: DATABASE_URL
+              value: postgres://ani:ani_dev_password@ani-reconcile-ha-postgres.ani-system.svc.cluster.local:5432/ani?sslmode=disable
+            - name: NATS_URL
+              value: nats://ani-reconcile-ha-nats.ani-system.svc.cluster.local:4222
+            - name: REDIS_URL
+              value: redis://:ani_dev_password@ani-reconcile-ha-redis.ani-system.svc.cluster.local:6379/0
+            - name: HEALTH_PORT
+              value: "9205"
+            - name: WORKLOAD_RECONCILE_CONTROLLER_ENABLED
+              value: "true"
+            - name: WORKLOAD_RECONCILE_LEADER_ELECTION_ENABLED
+              value: "true"
+            - name: WORKLOAD_RECONCILE_LEADER_IDENTITY
+              value: worker-b
+            - name: WORKLOAD_RECONCILE_LEADER_LEASE_NAME
+              value: workload-reconcile-controller
+            - name: WORKLOAD_RECONCILE_LEADER_LEASE_TTL_SECONDS
+              value: "12"
+            - name: WORKLOAD_RECONCILE_LEADER_RENEW_INTERVAL_SECONDS
+              value: "3"
+            - name: WORKLOAD_RECONCILE_NORMAL_INTERVAL_SECONDS
+              value: "5"
+          volumeMounts:
+            - name: worker-bin
+              mountPath: /opt/ani/bin/reconcile-worker
+      volumes:
+        - name: worker-bin
+          hostPath:
+            path: /opt/ani/reconcile-worker/reconcile-worker
+            type: File
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-reconcile-worker-metrics
+  namespace: ani-system
+spec:
+  selector:
+    app: ani-reconcile-worker
+  ports:
+    - name: metrics
+      port: 9205
+      targetPort: 9205

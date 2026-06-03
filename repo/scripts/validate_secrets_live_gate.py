@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ REQUIRED_CHECKS = {
     "pod-secret-env-visible",
     "pod-secret-file-visible",
     "kubevirt-vm-secret-volume-accepted",
+    "kubevirt-vm-secret-volume-guest-visible",
 }
 REQUIRED_ENV = {"KUBECONFIG", "ANI_GATEWAY_URL", "ANI_BEARER_TOKEN"}
 REQUIRED_DOC_TOKENS = [
@@ -127,21 +129,31 @@ class LiveConfig:
     vm_name: str = "ani-secret-live-vm"
     password_value: str = "ani-live-password"
     token_value: str = "ani-live-token"
+    vm_wait_timeout: str = "180s"
     kubeconfig: str = ""
     kubectl_binary: str = "kubectl"
 
 
 class LiveRunner:
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
+    def post_json(
+        self,
+        url: str,
+        payload: dict[str, object],
+        bearer_token: str,
+        tenant_id: str = "",
+    ) -> dict[str, object]:
         body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "content-type": "application/json",
+            "authorization": "Bearer " + bearer_token,
+        }
+        if tenant_id:
+            headers["x-dev-tenant-id"] = tenant_id
         request = urllib.request.Request(
             url,
             data=body,
             method="POST",
-            headers={
-                "content-type": "application/json",
-                "authorization": "Bearer " + bearer_token,
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -176,6 +188,7 @@ def validate_live_fields(config: LiveConfig) -> None:
         "ani_bearer_token": config.ani_bearer_token,
         "password_value": config.password_value,
         "token_value": config.token_value,
+        "vm_wait_timeout": config.vm_wait_timeout,
     }
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:
@@ -255,7 +268,7 @@ def vm_manifest(namespace: str, vm_name: str, secret_id: str) -> str:
                             "devices": {
                                 "disks": [
                                     {"name": "containerdisk", "disk": {"bus": "virtio"}},
-                                    {"name": "secret-file", "disk": {"bus": "virtio"}, "readOnly": True},
+                                    {"name": "secret-file", "disk": {"bus": "virtio"}},
                                 ]
                             },
                             "resources": {"requests": {"memory": "256Mi"}},
@@ -276,6 +289,187 @@ def vm_manifest(namespace: str, vm_name: str, secret_id: str) -> str:
     )
 
 
+def vm_guest_probe_script() -> str:
+    return """#!/bin/sh
+echo ANI_VM_SECRET_GUEST_PROBE_START >/dev/console
+mkdir -p /mnt/ani-secret
+for dev in /dev/vdb /dev/vdc /dev/vdd /dev/sr0 /dev/sr1 /dev/sr2; do
+  echo ANI_VM_SECRET_GUEST_TRY=$dev >/dev/console
+  mount -o ro $dev /mnt/ani-secret >/dev/console 2>&1 || continue
+  ls -la /mnt/ani-secret >/dev/console 2>&1 || true
+  if [ -f /mnt/ani-secret/password ]; then
+    printf 'ANI_VM_SECRET_GUEST_PASSWORD=%s\\n' "$(cat /mnt/ani-secret/password)" >/dev/console
+  fi
+  if [ -f /mnt/ani-secret/token ]; then
+    printf 'ANI_VM_SECRET_GUEST_TOKEN=%s\\n' "$(cat /mnt/ani-secret/token)" >/dev/console
+  fi
+  umount /mnt/ani-secret >/dev/console 2>&1 || true
+done
+echo ANI_VM_SECRET_GUEST_PROBE_DONE >/dev/console
+"""
+
+
+def vm_guest_probe_manifest(namespace: str, vm_name: str, secret_id: str, tenant_id: str) -> str:
+    return yaml.safe_dump(
+        {
+            "apiVersion": "kubevirt.io/v1",
+            "kind": "VirtualMachine",
+            "metadata": {
+                "name": vm_name,
+                "namespace": namespace,
+                "labels": {
+                    "app.kubernetes.io/part-of": "ani-platform",
+                    "app.kubernetes.io/managed-by": "ani-core",
+                    "ani.kubercloud.io/live-gate": "m1-secrets-live-a",
+                },
+            },
+            "spec": {
+                "running": True,
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "kubevirt.io/domain": vm_name,
+                            "app.kubernetes.io/part-of": "ani-platform",
+                            "ani.kubercloud.io/live-gate": "m1-secrets-live-a",
+                            "ani.kubercloud.io/tenant-id": tenant_id,
+                        }
+                    },
+                    "spec": {
+                        "terminationGracePeriodSeconds": 0,
+                        "domain": {
+                            "devices": {
+                                "disks": [
+                                    {"name": "containerdisk", "disk": {"bus": "virtio"}},
+                                    {"name": "secret-file", "disk": {"bus": "virtio"}},
+                                    {"name": "cloudinitdisk", "disk": {"bus": "virtio"}},
+                                ]
+                            },
+                            "resources": {"requests": {"memory": "256Mi"}},
+                        },
+                        "volumes": [
+                            {
+                                "name": "containerdisk",
+                                "containerDisk": {
+                                    "image": "quay.io/kubevirt/cirros-container-disk-demo:v1.8.2"
+                                },
+                            },
+                            {
+                                "name": "secret-file",
+                                "secret": {"secretName": secret_id, "volumeLabel": "ANISECRET"},
+                            },
+                            {"name": "cloudinitdisk", "cloudInitNoCloud": {"userData": vm_guest_probe_script()}},
+                        ],
+                    },
+                },
+            },
+        },
+        sort_keys=True,
+    )
+
+
+def parse_seconds(timeout: str) -> int:
+    value = timeout.strip()
+    if value.endswith("s"):
+        value = value[:-1]
+    try:
+        seconds = int(value)
+    except ValueError:
+        fail("vm_wait_timeout must be an integer number of seconds, optionally suffixed with s")
+    if seconds <= 0:
+        fail("vm_wait_timeout must be positive")
+    return seconds
+
+
+def find_virt_launcher_pod(config: LiveConfig, runner: LiveRunner, namespace: str, vm_name: str) -> str:
+    raw_pods = runner.run(
+        kubectl(config, ["get", "pod", "-n", namespace, "-l", f"kubevirt.io/domain={vm_name}", "-o", "json"])
+    )
+    try:
+        pods = json.loads(raw_pods)
+    except json.JSONDecodeError as err:
+        fail(f"virt-launcher pod lookup did not return JSON: {err}")
+    items = pods.get("items")
+    if not isinstance(items, list) or not items:
+        fail("KubeVirt guest Secret probe did not create a virt-launcher pod")
+    pod = items[0]
+    metadata = pod.get("metadata", {}) if isinstance(pod, dict) else {}
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str) or not name:
+        fail("virt-launcher pod metadata.name missing")
+    return name
+
+
+def wait_for_guest_secret_probe(config: LiveConfig, runner: LiveRunner, namespace: str, launcher_pod: str) -> str:
+    deadline = time.monotonic() + parse_seconds(config.vm_wait_timeout)
+    logs = ""
+    while time.monotonic() <= deadline:
+        logs = runner.run(
+            kubectl(
+                config,
+                ["logs", f"pod/{launcher_pod}", "-n", namespace, "--all-containers=true", "--tail=500"],
+            )
+        )
+        if "ANI_VM_SECRET_GUEST_PROBE_DONE" in logs:
+            return logs
+        time.sleep(2)
+    fail("KubeVirt guest Secret probe did not finish before timeout")
+
+
+def assert_guest_secret_values(logs: str, password_value: str, token_value: str) -> None:
+    if "ANI_VM_SECRET_GUEST_PROBE_START" not in logs or "ANI_VM_SECRET_GUEST_PROBE_DONE" not in logs:
+        fail("KubeVirt guest Secret probe markers missing from virt-launcher logs")
+    if "ANISECRET" not in logs:
+        fail("KubeVirt guest Secret disk label ANISECRET missing from guest logs")
+    if f"ANI_VM_SECRET_GUEST_PASSWORD={password_value}" not in logs:
+        fail("KubeVirt guest logs do not include expected Secret password value")
+    if f"ANI_VM_SECRET_GUEST_TOKEN={token_value}" not in logs:
+        fail("KubeVirt guest logs do not include expected Secret token value")
+
+
+def run_vm_guest_secret_probe(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    secret_id: str,
+) -> dict[str, object]:
+    runner.run(kubectl(config, ["delete", "vm", config.vm_name, "-n", namespace, "--ignore-not-found=true", "--wait=false"]))
+    try:
+        runner.run(
+            kubectl(config, ["apply", "-f", "-"]),
+            input_text=vm_guest_probe_manifest(namespace, config.vm_name, secret_id, config.tenant_id),
+        )
+        runner.run(
+            kubectl(
+                config,
+                [
+                    "wait",
+                    "--for=condition=Ready",
+                    f"vmi/{config.vm_name}",
+                    "-n",
+                    namespace,
+                    f"--timeout={config.vm_wait_timeout}",
+                ],
+            )
+        )
+        raw_vmi = runner.run(kubectl(config, ["get", "vmi", config.vm_name, "-n", namespace, "-o", "json"]))
+        try:
+            vmi = json.loads(raw_vmi)
+        except json.JSONDecodeError as err:
+            fail(f"kubectl get vmi did not return JSON: {err}")
+        launcher_pod = find_virt_launcher_pod(config, runner, namespace, config.vm_name)
+        logs = wait_for_guest_secret_probe(config, runner, namespace, launcher_pod)
+        assert_guest_secret_values(logs, config.password_value, config.token_value)
+        status = vmi.get("status", {}) if isinstance(vmi, dict) else {}
+        return {
+            "guest_secret_volume_visible": True,
+            "launcher_pod": launcher_pod,
+            "node": status.get("nodeName", ""),
+            "secret_disk_label": "ANISECRET",
+        }
+    finally:
+        runner.run(kubectl(config, ["delete", "vm", config.vm_name, "-n", namespace, "--ignore-not-found=true", "--wait=false"]))
+
+
 def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, object]:
     validate_live_fields(config)
     runner = runner or LiveRunner()
@@ -291,6 +485,7 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
             "data": {"password": config.password_value, "token": config.token_value},
         },
         config.ani_bearer_token,
+        config.tenant_id,
     )
     secret_id = str(secret.get("id") or secret.get("secret_id") or "")
     if not secret_id:
@@ -307,6 +502,7 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
             gateway + f"/secrets/{secret_id}/bindings",
             payload,
             config.ani_bearer_token,
+            config.tenant_id,
         )
         if not binding.get("id") or binding.get("state") != "bound":
             fail("Core secret binding response must be bound")
@@ -336,6 +532,7 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
     )
     if config.vm_name not in vm_apply:
         fail("KubeVirt VM Secret volume manifest was not accepted")
+    guest_probe = run_vm_guest_secret_probe(config, runner, namespace, secret_id)
 
     return {
         "status": "passed",
@@ -345,6 +542,7 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
         "namespace": namespace,
         "pod": config.pod_name,
         "vm": config.vm_name,
+        "vm_guest_secret": guest_probe,
     }
 
 
@@ -399,6 +597,7 @@ def main() -> int:
     parser.add_argument("--vm-name", default=os.getenv("ANI_LIVE_SECRET_VM_NAME", "ani-secret-live-vm"))
     parser.add_argument("--password-value", default=os.getenv("ANI_LIVE_SECRET_PASSWORD", "ani-live-password"))
     parser.add_argument("--token-value", default=os.getenv("ANI_LIVE_SECRET_TOKEN", "ani-live-token"))
+    parser.add_argument("--vm-wait-timeout", default=os.getenv("ANI_LIVE_SECRET_VM_WAIT_TIMEOUT", "180s"))
     parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
     parser.add_argument(
         "--evidence-output",
@@ -421,6 +620,7 @@ def main() -> int:
             vm_name=args.vm_name,
             password_value=args.password_value,
             token_value=args.token_value,
+            vm_wait_timeout=args.vm_wait_timeout,
             kubeconfig=args.kubeconfig,
         )
         validate_live_config(config)

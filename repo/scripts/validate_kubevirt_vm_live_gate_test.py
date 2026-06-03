@@ -59,6 +59,21 @@ class FakeRunner:
         raise AssertionError(f"unexpected command: {joined}")
 
 
+class FakeWebSocketProber:
+    def __init__(self) -> None:
+        self.probes: list[tuple[str, str, str]] = []
+
+    def probe(self, config: gate.LiveConfig, namespace: str, vm_name: str, subresource: str) -> dict[str, object]:
+        self.probes.append((namespace, vm_name, subresource))
+        return {
+            "websocket_session_established": True,
+            "http_status": 101,
+            "subprotocol": gate.KUBEVIRT_WEBSOCKET_SUBPROTOCOL,
+            "sent_bytes": 1 if subresource == "console" else 0,
+            "received_bytes": 12 if subresource == "vnc" else 0,
+        }
+
+
 class KubeVirtVMLiveGateTest(unittest.TestCase):
     def test_contract_gate_defines_vm_start_stop_console_and_delete_checks(self) -> None:
         document = gate.load_gate(gate.DEFAULT_GATE)
@@ -181,6 +196,7 @@ class KubeVirtVMLiveGateTest(unittest.TestCase):
 
     def test_live_gate_creates_starts_checks_console_stops_and_deletes_vm(self) -> None:
         runner = FakeRunner()
+        websocket_prober = FakeWebSocketProber()
         result = gate.run_live(
             gate.LiveConfig(
                 tenant_id="tenant-a",
@@ -188,14 +204,27 @@ class KubeVirtVMLiveGateTest(unittest.TestCase):
                 vm_name="ani-live-vm",
             ),
             runner=runner,
+            websocket_prober=websocket_prober,
         )
 
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["vm"], "ani-live-vm")
         self.assertIn(["kubectl", "get", "crd", "virtualmachines.kubevirt.io", "-o", "json"], runner.commands)
         self.assertTrue(any(command[-2:] == ["-f", "-"] for command in runner.commands))
-        self.assertTrue(any("vnc" in " ".join(command) for command in runner.commands))
-        self.assertTrue(any("console" in " ".join(command) for command in runner.commands))
+        self.assertEqual(
+            websocket_prober.probes,
+            [("ani-tenant-tenant-a", "ani-live-vm", "vnc"), ("ani-tenant-tenant-a", "ani-live-vm", "console")],
+        )
+        self.assertEqual(
+            result["websocket_sessions"]["vnc"],
+            {
+                "websocket_session_established": True,
+                "http_status": 101,
+                "subprotocol": gate.KUBEVIRT_WEBSOCKET_SUBPROTOCOL,
+                "sent_bytes": 0,
+                "received_bytes": 12,
+            },
+        )
         joined_commands = [" ".join(command) for command in runner.commands]
         stop_patch_indexes = [
             index
@@ -207,6 +236,31 @@ class KubeVirtVMLiveGateTest(unittest.TestCase):
         delete_index = next(index for index, command in enumerate(joined_commands) if "delete virtualmachine" in command)
         self.assertLess(stop_patch_index, delete_index)
         self.assertTrue(any("wait --for=delete virtualmachineinstance/ani-live-vm" in command for command in joined_commands))
+
+    def test_live_gate_rejects_missing_websocket_session(self) -> None:
+        class MissingSessionProber(FakeWebSocketProber):
+            def probe(self, config: gate.LiveConfig, namespace: str, vm_name: str, subresource: str) -> dict[str, object]:
+                self.probes.append((namespace, vm_name, subresource))
+                return {"websocket_session_established": False}
+
+        runner = FakeRunner()
+        prober = MissingSessionProber()
+
+        with self.assertRaises(SystemExit) as raised:
+            gate.run_live(
+                gate.LiveConfig(
+                    tenant_id="tenant-a",
+                    namespace="ani-tenant-tenant-a",
+                    vm_name="ani-live-vm",
+                ),
+                runner=runner,
+                websocket_prober=prober,
+            )
+
+        self.assertIn("vnc websocket session was not established", str(raised.exception))
+        joined_commands = [" ".join(command) for command in runner.commands]
+        self.assertTrue(any("patch virtualmachine" in command and '"running":false' in command for command in joined_commands))
+        self.assertTrue(any("delete virtualmachine" in command for command in joined_commands))
 
     def test_cli_live_mode_rejects_missing_tenant_config(self) -> None:
         with patch.object(gate, "run_live") as run_live:
@@ -222,6 +276,7 @@ class KubeVirtVMLiveGateTest(unittest.TestCase):
             container_disk_image="quay.io/containerdisks/cirros:latest",
             memory="256Mi",
             wait_timeout="180s",
+            kubeconfig="/tmp/kubeconfig",
         )
 
         with patch.object(gate.shutil, "which", return_value="/usr/bin/kubectl"):

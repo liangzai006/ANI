@@ -234,21 +234,34 @@ func TestGatewayK8sClusterServiceFromConfigUsesVClusterHelmProvider(t *testing.T
 func TestGatewayK8sClusterServiceFromConfigUsesClusterAPINodePoolProvider(t *testing.T) {
 	runner := &gatewayVClusterHelmRunner{}
 	var nodePoolPath string
+	var nodePoolBody map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		nodePoolPath = r.URL.String()
 		if r.Method != http.MethodPatch {
 			t.Fatalf("method = %s, want PATCH", r.Method)
 		}
+		if err := json.NewDecoder(r.Body).Decode(&nodePoolBody); err != nil {
+			t.Fatalf("request body is not JSON: %v", err)
+		}
 		return jsonResponse(http.StatusOK, `{"kind":"MachineDeployment"}`), nil
 	})
 	service, err := newGatewayK8sClusterService(gatewayK8sClusterRuntimeConfig{
-		ProviderMode:                     "vcluster_helm",
-		NodePoolProviderMode:             "clusterapi_kubernetes_rest",
-		KubernetesAPIHost:                "https://kubernetes.example.test",
-		KubernetesProviderManager:        "ani-test",
-		VClusterHelmRunner:               runner,
-		VClusterKubeconfigServerTemplate: "https://{cluster_id}.{namespace}.svc:443",
-		HTTPClient:                       &http.Client{Transport: transport},
+		ProviderMode:                          "vcluster_helm",
+		NodePoolProviderMode:                  "clusterapi_kubernetes_rest",
+		KubernetesAPIHost:                     "https://kubernetes.example.test",
+		KubernetesProviderManager:             "ani-test",
+		NodePoolMachineVersion:                "v1.36.1",
+		NodePoolBootstrapRefAPIVersion:        "bootstrap.cluster.x-k8s.io/v1beta1",
+		NodePoolBootstrapRefKind:              "KubeadmConfigTemplate",
+		NodePoolBootstrapRefNameTemplate:      "{cluster_name}-{node_pool_name}",
+		NodePoolBootstrapRefNamespace:         "{namespace}",
+		NodePoolInfrastructureRefAPIVersion:   "infrastructure.cluster.x-k8s.io/v1alpha1",
+		NodePoolInfrastructureRefKind:         "KubevirtMachineTemplate",
+		NodePoolInfrastructureRefNameTemplate: "{cluster_name}-{node_pool_name}",
+		NodePoolInfrastructureRefNamespace:    "{namespace}",
+		VClusterHelmRunner:                    runner,
+		VClusterKubeconfigServerTemplate:      "https://{cluster_id}.{namespace}.svc:443",
+		HTTPClient:                            &http.Client{Transport: transport},
 	})
 	if err != nil {
 		t.Fatalf("newGatewayK8sClusterService() error = %v", err)
@@ -281,6 +294,21 @@ func TestGatewayK8sClusterServiceFromConfigUsesClusterAPINodePoolProvider(t *tes
 	}
 	if !strings.Contains(nodePoolPath, "/apis/cluster.x-k8s.io/v1beta1/namespaces/ani-tenant-tenant-a/machinedeployments/gpu-pool") {
 		t.Fatalf("path = %q, want Cluster API MachineDeployment path", nodePoolPath)
+	}
+	spec := nodePoolBody["spec"].(map[string]any)
+	template := spec["template"].(map[string]any)
+	machineSpec := template["spec"].(map[string]any)
+	if machineSpec["version"] != "v1.36.1" {
+		t.Fatalf("machine version = %v, want configured CAPI machine version", machineSpec["version"])
+	}
+	bootstrap := machineSpec["bootstrap"].(map[string]any)
+	configRef := bootstrap["configRef"].(map[string]any)
+	if configRef["kind"] != "KubeadmConfigTemplate" || configRef["name"] != "vc-nodepool-gpu-pool" || configRef["namespace"] != "ani-tenant-tenant-a" {
+		t.Fatalf("bootstrap configRef = %+v, want configured CAPK bootstrap ref", configRef)
+	}
+	infraRef := machineSpec["infrastructureRef"].(map[string]any)
+	if infraRef["kind"] != "KubevirtMachineTemplate" || infraRef["apiVersion"] != "infrastructure.cluster.x-k8s.io/v1alpha1" || infraRef["name"] != "vc-nodepool-gpu-pool" || infraRef["namespace"] != "ani-tenant-tenant-a" {
+		t.Fatalf("infrastructureRef = %+v, want configured CAPK infrastructure ref", infraRef)
 	}
 	if !nodePool.RealProvider || nodePool.Provider != "clusterapi" {
 		t.Fatalf("node pool provider evidence = %+v, want clusterapi real provider", nodePool)

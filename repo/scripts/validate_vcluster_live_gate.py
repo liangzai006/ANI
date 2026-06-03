@@ -22,7 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = ROOT.parent
 DEFAULT_GATE = ROOT / "deploy/real-k8s-lab/vcluster-live-gate.yaml"
-REQUIRED_CHECKS = {"helm-install", "vcluster-kubeconfig", "kubectl-version", "core-proxy-version"}
+REQUIRED_CHECKS = {"helm-install", "vcluster-kubeconfig", "kubectl-version", "core-cluster-register", "core-proxy-version"}
 REQUIRED_ENV = {"KUBECONFIG", "ANI_GATEWAY_URL", "ANI_BEARER_TOKEN"}
 REQUIRED_DOC_TOKENS = ["M1-K8S-LIVE-A", "validate-vcluster-live-gate", "vCluster", "live proxy"]
 PROFILE = "M1-K8S-LIVE-A"
@@ -108,6 +108,8 @@ class LiveConfig:
     cluster_id: str
     gateway_url: str
     ani_bearer_token: str
+    kubeconfig: str = ""
+    namespace: str = ""
     vcluster_server: str = ""
     helm_binary: str = "helm"
     vcluster_binary: str = "vcluster"
@@ -147,10 +149,18 @@ class CommandRunner:
         except urllib.error.HTTPError as err:
             detail = err.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Core proxy request failed: HTTP {err.code}: {detail}") from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"Core proxy request failed: {err.reason}") from err
 
 
 def tenant_namespace(tenant_id: str) -> str:
     return "ani-tenant-" + tenant_id
+
+
+def live_namespace(config: LiveConfig) -> str:
+    if config.namespace.strip():
+        return config.namespace.strip()
+    return tenant_namespace(config.tenant_id)
 
 
 def validate_live_config(config: LiveConfig) -> None:
@@ -159,6 +169,7 @@ def validate_live_config(config: LiveConfig) -> None:
         "cluster_id": config.cluster_id,
         "gateway_url": config.gateway_url,
         "ani_bearer_token": config.ani_bearer_token,
+        "kubeconfig": config.kubeconfig,
     }
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:
@@ -181,11 +192,11 @@ def helm_install_command(config: LiveConfig) -> list[str]:
         "--repo",
         config.chart_repo,
         "--namespace",
-        tenant_namespace(config.tenant_id),
+        live_namespace(config),
         "--create-namespace",
         "--repository-config=",
         "--set",
-        "sync.toHost.service.enabled=true",
+        "sync.toHost.services.enabled=true",
     ]
 
 
@@ -195,12 +206,19 @@ def vcluster_connect_command(config: LiveConfig) -> list[str]:
         "connect",
         config.cluster_id,
         "--namespace",
-        tenant_namespace(config.tenant_id),
-        "--print",
+        live_namespace(config),
+        "--background-proxy=false",
     ]
     if config.vcluster_server.strip():
         command.extend(["--server", config.vcluster_server.strip()])
+    command.extend(["--", config.kubectl_binary, "get", "--raw", "/version"])
     return command
+
+
+def host_kube_env(config: LiveConfig) -> dict[str, str]:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = config.kubeconfig
+    return env
 
 
 def kubeconfig_path(config: LiveConfig) -> Path:
@@ -209,39 +227,69 @@ def kubeconfig_path(config: LiveConfig) -> Path:
     return Path(tempfile.gettempdir()) / f"{config.cluster_id}.kubeconfig"
 
 
+def parse_version_output(output: str) -> dict[str, object]:
+    json_start = output.find("{")
+    if json_start < 0:
+        fail("vcluster kubectl /version did not return JSON")
+    try:
+        value, _ = json.JSONDecoder().raw_decode(output[json_start:])
+    except json.JSONDecodeError as err:
+        fail(f"vcluster kubectl /version did not return JSON: {err}")
+    if not isinstance(value, dict):
+        fail("vcluster kubectl /version response must be a JSON object")
+    return value
+
+
+def create_core_cluster(config: LiveConfig, runner: CommandRunner, version: dict[str, object]) -> str:
+    payload = {
+        "idempotency_key": f"live-core-{config.cluster_id}",
+        "name": config.cluster_id,
+        "version": str(version.get("gitVersion") or version.get("major") or ""),
+    }
+    response = runner.post_json(
+        config.gateway_url.rstrip("/") + "/k8s-clusters",
+        payload,
+        config.ani_bearer_token,
+    )
+    status_code = int(response.get("status_code", 0))
+    if status_code < 200 or status_code >= 300:
+        fail(f"Core cluster create returned HTTP {status_code}")
+    body = response.get("body", {})
+    if not isinstance(body, dict) or not isinstance(body.get("id"), str) or not body["id"].strip():
+        fail("Core cluster create response missing id")
+    return body["id"].strip()
+
+
 def run_live(config: LiveConfig, runner: CommandRunner | None = None) -> dict[str, object]:
     runner = runner or CommandRunner()
-    runner.run(helm_install_command(config))
-    kubeconfig = runner.run(vcluster_connect_command(config))
-    if "apiVersion:" not in kubeconfig or "clusters:" not in kubeconfig:
-        fail("vcluster connect did not print a kubeconfig")
-
-    path = kubeconfig_path(config)
-    path.write_text(kubeconfig, encoding="utf-8")
-    version_output = runner.run([config.kubectl_binary, "--kubeconfig", str(path), "get", "--raw", "/version"])
-    try:
-        version = json.loads(version_output)
-    except json.JSONDecodeError as err:
-        fail(f"kubectl /version did not return JSON: {err}")
+    runner.run(helm_install_command(config), env=host_kube_env(config))
+    version_output = runner.run(vcluster_connect_command(config), env=host_kube_env(config))
+    version = parse_version_output(version_output)
     if not isinstance(version, dict) or not (version.get("gitVersion") or version.get("major")):
-        fail("kubectl /version response missing Kubernetes version")
+        fail("vcluster kubectl /version response missing Kubernetes version")
+    core_cluster_id = create_core_cluster(config, runner, version)
 
     payload = {
-        "idempotency_key": f"live-proxy-{config.cluster_id}-version",
+        "idempotency_key": f"live-proxy-{core_cluster_id}-version",
         "method": "GET",
         "path": "/version",
         "query": {},
         "body": {},
     }
     proxy_response = runner.post_json(
-        config.gateway_url.rstrip("/") + f"/k8s-clusters/{config.cluster_id}/proxy",
+        config.gateway_url.rstrip("/") + f"/k8s-clusters/{core_cluster_id}/proxy",
         payload,
         config.ani_bearer_token,
     )
     status_code = int(proxy_response.get("status_code", 0))
     if status_code < 200 or status_code >= 300:
         fail(f"Core proxy returned HTTP {status_code}")
-    return {"status": "passed", "kubeconfig": str(path), "proxy_status": status_code}
+    return {
+        "status": "passed",
+        "core_cluster_id": core_cluster_id,
+        "kubectl_version": str(version.get("gitVersion") or version.get("major")),
+        "proxy_status": status_code,
+    }
 
 
 def write_live_evidence(path: Path, evidence: dict[str, object]) -> None:
@@ -288,10 +336,15 @@ def main() -> int:
     parser.add_argument("--gate", default=str(DEFAULT_GATE), help="vCluster live gate YAML")
     parser.add_argument("--live", action="store_true", help="run live Helm/vCluster/kubectl/Core proxy checks")
     parser.add_argument("--tenant-id", default=os.getenv("ANI_LIVE_TENANT_ID", "tenant-a"))
+    parser.add_argument("--namespace", default=os.getenv("ANI_LIVE_NAMESPACE", ""))
     parser.add_argument("--cluster-id", default=os.getenv("ANI_LIVE_K8S_CLUSTER_ID", "k8sclu-live"))
     parser.add_argument("--gateway-url", default=os.getenv("ANI_GATEWAY_URL", ""))
     parser.add_argument("--ani-bearer-token", default=os.getenv("ANI_BEARER_TOKEN", ""))
+    parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
     parser.add_argument("--vcluster-server", default=os.getenv("VCLUSTER_LIVE_SERVER", ""))
+    parser.add_argument("--helm-binary", default=os.getenv("ANI_HELM_BINARY", "helm"))
+    parser.add_argument("--vcluster-binary", default=os.getenv("ANI_VCLUSTER_BINARY", "vcluster"))
+    parser.add_argument("--kubectl-binary", default=os.getenv("ANI_KUBECTL_BINARY", "kubectl"))
     parser.add_argument(
         "--evidence-output",
         default=os.getenv("ANI_VCLUSTER_LIVE_EVIDENCE_OUTPUT") or None,
@@ -309,7 +362,12 @@ def main() -> int:
             cluster_id=args.cluster_id,
             gateway_url=args.gateway_url,
             ani_bearer_token=args.ani_bearer_token,
+            kubeconfig=args.kubeconfig,
+            namespace=args.namespace,
             vcluster_server=args.vcluster_server,
+            helm_binary=args.helm_binary,
+            vcluster_binary=args.vcluster_binary,
+            kubectl_binary=args.kubectl_binary,
         )
         validate_live_config(config)
         if args.evidence_output is not None:

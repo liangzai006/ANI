@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = ROOT.parent
 DEFAULT_GATE = ROOT / "deploy/real-k8s-lab/kubeovn-network-live-gate.yaml"
+DEFAULT_EXTERNAL_LB_DEPS = ROOT / "deploy/real-k8s-lab/kubeovn-lb-external-deps.yaml"
+DEFAULT_EXTERNAL_LB_SCRIPT_CONFIGMAP = ROOT / "deploy/real-k8s-lab/kubeovn-lb-svc-script-configmap.yaml"
 REQUIRED_CHECKS = {
     "kubeovn-crds-ready",
     "kubeovn-vpc-created",
@@ -128,6 +131,27 @@ class LiveConfig:
     kubectl_binary: str = "kubectl"
 
 
+@dataclass(frozen=True)
+class ExternalLBConfig:
+    namespace: str = "default"
+    service_name: str = "ani-kubeovn-external-lb-smoke"
+    helper_deployment: str = "lb-svc-ani-kubeovn-external-lb-smoke"
+    helper_label: str = "app=lb-svc-ani-kubeovn-external-lb-smoke"
+    external_ip: str = "10.10.1.250"
+    expected_body: str = "ani-kubeovn-external-lb-ok"
+    deps_manifest: str = str(DEFAULT_EXTERNAL_LB_DEPS)
+    script_configmap_manifest: str = str(DEFAULT_EXTERNAL_LB_SCRIPT_CONFIGMAP)
+    script_configmap_name: str = "ani-kubeovn-lb-svc-script"
+    helper_image: str = "docker.io/kubeovn/kube-ovn:v1.15.8"
+    controller_namespace: str = "kube-system"
+    controller_deployment: str = "kube-ovn-controller"
+    kubeconfig: str = ""
+    kubectl_binary: str = "kubectl"
+    ssh_binary: str = "ssh"
+    curl_hosts: tuple[str, ...] = ()
+    reconcile_stamp: str = "external-lb-live-gate"
+
+
 class LiveRunner:
     def run(self, command: list[str], input_text: str | None = None) -> str:
         result = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False)
@@ -159,6 +183,18 @@ def kubectl(config: LiveConfig, args: list[str]) -> list[str]:
     return command
 
 
+def external_kubectl(config: ExternalLBConfig, args: list[str]) -> list[str]:
+    command = [config.kubectl_binary]
+    if config.kubeconfig.strip():
+        command.extend(["--kubeconfig", config.kubeconfig.strip()])
+    command.extend(args)
+    return command
+
+
+def kubectl_patch_json(config: ExternalLBConfig, args: list[str], patch: object) -> list[str]:
+    return external_kubectl(config, [*args, "-p", json.dumps(patch, separators=(",", ":"))])
+
+
 def validate_live_config(config: LiveConfig) -> None:
     required = {
         "tenant_id": config.tenant_id,
@@ -176,6 +212,49 @@ def validate_live_config(config: LiveConfig) -> None:
         fail(f"{', '.join(whitespace)} must not contain surrounding whitespace")
     if shutil.which(config.kubectl_binary) is None:
         fail(f"{config.kubectl_binary} is required for --live")
+
+
+def validate_external_lb_config(config: ExternalLBConfig) -> None:
+    required = {
+        "namespace": config.namespace,
+        "service_name": config.service_name,
+        "helper_deployment": config.helper_deployment,
+        "helper_label": config.helper_label,
+        "external_ip": config.external_ip,
+        "expected_body": config.expected_body,
+        "deps_manifest": config.deps_manifest,
+        "script_configmap_manifest": config.script_configmap_manifest,
+        "script_configmap_name": config.script_configmap_name,
+        "helper_image": config.helper_image,
+        "controller_namespace": config.controller_namespace,
+        "controller_deployment": config.controller_deployment,
+        "reconcile_stamp": config.reconcile_stamp,
+    }
+    missing = [name for name, value in required.items() if not value.strip()]
+    if missing:
+        fail(f"external LB live mode requires {', '.join(missing)}")
+    whitespace = [name for name, value in required.items() if value != value.strip()]
+    if whitespace:
+        fail(f"{', '.join(whitespace)} must not contain surrounding whitespace")
+    if not config.curl_hosts:
+        fail("external LB live mode requires at least one curl host")
+    if any(not host.strip() for host in config.curl_hosts):
+        fail("external LB curl hosts must not be empty")
+    if any(host != host.strip() for host in config.curl_hosts):
+        fail("external LB curl hosts must not contain surrounding whitespace")
+    for label, manifest in (
+        ("external LB deps manifest", config.deps_manifest),
+        ("external LB script ConfigMap manifest", config.script_configmap_manifest),
+    ):
+        path = Path(manifest)
+        if not path.exists():
+            fail(f"{label} missing: {manifest}")
+        if path.is_dir():
+            fail(f"{label} must be a file: {manifest}")
+    if shutil.which(config.kubectl_binary) is None:
+        fail(f"{config.kubectl_binary} is required for external LB live mode")
+    if shutil.which(config.ssh_binary) is None:
+        fail(f"{config.ssh_binary} is required for external LB live mode")
 
 
 def vpc_manifest(config: LiveConfig) -> str:
@@ -264,6 +343,21 @@ def service_manifest(config: LiveConfig) -> str:
     )
 
 
+def namespace_manifest(config: LiveConfig) -> str:
+    namespace = tenant_namespace(config)
+    return yaml.safe_dump(
+        {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+                "name": namespace,
+                "labels": provider_labels(config.tenant_id, "namespace", namespace),
+            },
+        },
+        sort_keys=True,
+    )
+
+
 def provider_labels(tenant_id: str, resource_kind: str, resource_id: str) -> dict[str, str]:
     return {
         "app.kubernetes.io/part-of": "ani-platform",
@@ -303,6 +397,272 @@ def assert_service(document: dict[str, Any], expected_name: str) -> None:
         fail(f"Service {expected_name} type must be LoadBalancer")
 
 
+def wait_for_runner(
+    label: str,
+    attempts: int,
+    interval_seconds: float,
+    probe: Any,
+) -> Any:
+    last_error: Exception | None = None
+    for _ in range(attempts):
+        try:
+            value = probe()
+            if value:
+                return value
+        except Exception as err:  # noqa: BLE001 - surfaced through gate error below.
+            last_error = err
+        time.sleep(interval_seconds)
+    if last_error is not None:
+        fail(f"{label} did not become ready: {last_error}")
+    fail(f"{label} did not become ready")
+
+
+def patch_controller_enable_lb_svc(config: ExternalLBConfig, runner: LiveRunner) -> None:
+    raw = runner.run(
+        external_kubectl(
+            config,
+            [
+                "-n",
+                config.controller_namespace,
+                "get",
+                "deploy",
+                config.controller_deployment,
+                "-o",
+                "json",
+            ],
+        )
+    )
+    deploy = load_json(raw, "kubectl get kube-ovn-controller")
+    containers = deploy.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+    if not isinstance(containers, list) or not containers:
+        fail("kube-ovn-controller deployment must have containers")
+    args = containers[0].get("args", []) if isinstance(containers[0], dict) else []
+    if not isinstance(args, list):
+        fail("kube-ovn-controller args must be a list")
+    if "--enable-lb-svc=true" in args:
+        return
+    if "--enable-lb-svc=false" in args:
+        index = args.index("--enable-lb-svc=false")
+        patch = [{"op": "replace", "path": f"/spec/template/spec/containers/0/args/{index}", "value": "--enable-lb-svc=true"}]
+    else:
+        patch = [{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--enable-lb-svc=true"}]
+    runner.run(
+        kubectl_patch_json(
+            config,
+            [
+                "-n",
+                config.controller_namespace,
+                "patch",
+                "deploy",
+                config.controller_deployment,
+                "--type=json",
+            ],
+            patch,
+        )
+    )
+
+
+def patch_external_helper(config: ExternalLBConfig, runner: LiveRunner) -> None:
+    patch = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "ani.kubercloud.io/script-reload": config.reconcile_stamp,
+                    }
+                },
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "lb-svc-script",
+                            "configMap": {
+                                "name": config.script_configmap_name,
+                                "defaultMode": 0o755,
+                            },
+                        }
+                    ],
+                    "containers": [
+                        {
+                            "name": "lb-svc",
+                            "image": config.helper_image,
+                            "volumeMounts": [
+                                {
+                                    "name": "lb-svc-script",
+                                    "mountPath": "/kube-ovn/lb-svc.sh",
+                                    "subPath": "lb-svc.sh",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        }
+    }
+    runner.run(
+        kubectl_patch_json(
+            config,
+            [
+                "-n",
+                config.namespace,
+                "patch",
+                "deploy",
+                config.helper_deployment,
+                "--type=strategic",
+            ],
+            patch,
+        )
+    )
+
+
+def service_external_ip(service: dict[str, Any]) -> str:
+    ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
+    if isinstance(ingress, list) and ingress and isinstance(ingress[0], dict):
+        value = ingress[0].get("ip", "")
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def ensure_external_service_status(config: ExternalLBConfig, runner: LiveRunner) -> None:
+    raw = runner.run(
+        external_kubectl(config, ["-n", config.namespace, "get", "svc", config.service_name, "-o", "json"])
+    )
+    service = load_json(raw, "kubectl get external LB service")
+    if service_external_ip(service) == config.external_ip:
+        return
+    patch = {"status": {"loadBalancer": {"ingress": [{"ip": config.external_ip}]}}}
+    runner.run(
+        kubectl_patch_json(
+            config,
+            [
+                "-n",
+                config.namespace,
+                "patch",
+                "svc",
+                config.service_name,
+                "--subresource=status",
+                "--type=merge",
+            ],
+            patch,
+        )
+    )
+
+
+def assert_external_nat(config: ExternalLBConfig, raw: str) -> dict[str, object]:
+    has_eip = config.external_ip in raw and "inet " in raw
+    has_dnat = config.external_ip in raw and "DNAT" in raw and "--dport 80" in raw
+    has_masquerade = "MASQUERADE" in raw
+    if not has_eip:
+        fail("external LB helper must hold the external IP on net1")
+    if not has_dnat:
+        fail("external LB helper must contain DNAT rule for external IP port 80")
+    if not has_masquerade:
+        fail("external LB helper must contain MASQUERADE rule")
+    return {
+        "external_ip_on_net1": True,
+        "dnat_rule_observed": True,
+        "masquerade_rule_observed": True,
+    }
+
+
+def external_nat_probe(config: ExternalLBConfig, runner: LiveRunner) -> str:
+    raw = runner.run(
+        external_kubectl(
+            config,
+            [
+                "-n",
+                config.namespace,
+                "exec",
+                f"deploy/{config.helper_deployment}",
+                "--",
+                "bash",
+                "-lc",
+                "ip -4 addr show dev net1; ip route show table 100; iptables-save -t nat",
+            ],
+        )
+    )
+    if config.external_ip in raw and "DNAT" in raw and "MASQUERADE" in raw:
+        return raw
+    return ""
+
+
+def run_external_lb_live(config: ExternalLBConfig, runner: LiveRunner | None = None) -> dict[str, object]:
+    runner = runner or LiveRunner()
+    patch_controller_enable_lb_svc(config, runner)
+    runner.run(
+        external_kubectl(
+            config,
+            ["-n", config.controller_namespace, "rollout", "status", f"deploy/{config.controller_deployment}", "--timeout=180s"],
+        )
+    )
+    runner.run(external_kubectl(config, ["apply", "-f", config.script_configmap_manifest]))
+    runner.run(external_kubectl(config, ["apply", "-f", config.deps_manifest]))
+    runner.run(
+        external_kubectl(
+            config,
+            ["-n", config.namespace, "rollout", "status", f"deploy/{config.service_name}", "--timeout=180s"],
+        )
+    )
+
+    wait_for_runner(
+        "external LB helper deployment",
+        30,
+        2.0,
+        lambda: runner.run(
+            external_kubectl(config, ["-n", config.namespace, "get", "deploy", config.helper_deployment, "-o", "json"])
+        ),
+    )
+    patch_external_helper(config, runner)
+    ensure_external_service_status(config, runner)
+    runner.run(
+        external_kubectl(
+            config,
+            ["-n", config.namespace, "delete", "pod", "-l", config.helper_label, "--ignore-not-found"],
+        )
+    )
+    runner.run(
+        external_kubectl(
+            config,
+            ["-n", config.namespace, "rollout", "status", f"deploy/{config.helper_deployment}", "--timeout=180s"],
+        )
+    )
+
+    nat_raw = wait_for_runner(
+        "external LB NAT rules",
+        30,
+        2.0,
+        lambda: external_nat_probe(config, runner),
+    )
+    nat_evidence = assert_external_nat(config, nat_raw)
+    service = load_json(
+        runner.run(external_kubectl(config, ["-n", config.namespace, "get", "svc", config.service_name, "-o", "json"])),
+        "kubectl get external LB service",
+    )
+    observed_external_ip = service_external_ip(service)
+    if observed_external_ip != config.external_ip:
+        fail(f"external LB service status IP must be {config.external_ip}")
+
+    curl_results = []
+    for host in config.curl_hosts:
+        body = runner.run([config.ssh_binary, host, f"curl -s --max-time 5 http://{config.external_ip}/"]).strip()
+        if body != config.expected_body:
+            fail(f"external LB curl from {host} returned {body!r}")
+        curl_results.append({"host": host, "body_matched": True})
+
+    return {
+        "status": "passed",
+        "namespace": config.namespace,
+        "service": config.service_name,
+        "external_ip": config.external_ip,
+        "service_status_ip": observed_external_ip,
+        "helper_deployment": config.helper_deployment,
+        "helper_image": config.helper_image,
+        "helper_script_configmap": config.script_configmap_name,
+        **nat_evidence,
+        "curl_results": curl_results,
+    }
+
+
 def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, object]:
     runner = runner or LiveRunner()
     namespace = tenant_namespace(config)
@@ -317,6 +677,7 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
     if auth.strip() != "yes":
         fail("kubectl auth can-i create vpcs.kubeovn.io must return yes")
 
+    runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=namespace_manifest(config))
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=vpc_manifest(config))
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=subnet_manifest(config))
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=networkpolicy_manifest(config))
@@ -400,6 +761,30 @@ def main() -> int:
     parser.add_argument("--cidr", default=os.getenv("ANI_LIVE_SUBNET_CIDR", "10.244.80.0/24"))
     parser.add_argument("--gateway", default=os.getenv("ANI_LIVE_SUBNET_GATEWAY", "10.244.80.1"))
     parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
+    parser.add_argument("--external-lb-live", action="store_true", help="also prove external Kube-OVN LoadBalancer reachability")
+    parser.add_argument("--external-lb-namespace", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_NAMESPACE", "default"))
+    parser.add_argument("--external-lb-service-name", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_SERVICE", "ani-kubeovn-external-lb-smoke"))
+    parser.add_argument("--external-lb-helper-deployment", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_HELPER_DEPLOY", "lb-svc-ani-kubeovn-external-lb-smoke"))
+    parser.add_argument("--external-lb-helper-label", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_HELPER_LABEL", "app=lb-svc-ani-kubeovn-external-lb-smoke"))
+    parser.add_argument("--external-lb-ip", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_IP", "10.10.1.250"))
+    parser.add_argument("--external-lb-expected-body", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_EXPECTED_BODY", "ani-kubeovn-external-lb-ok"))
+    parser.add_argument("--external-lb-deps-manifest", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_DEPS", str(DEFAULT_EXTERNAL_LB_DEPS)))
+    parser.add_argument(
+        "--external-lb-script-configmap-manifest",
+        default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_SCRIPT_CONFIGMAP", str(DEFAULT_EXTERNAL_LB_SCRIPT_CONFIGMAP)),
+    )
+    parser.add_argument("--external-lb-script-configmap-name", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_SCRIPT_CONFIGMAP_NAME", "ani-kubeovn-lb-svc-script"))
+    parser.add_argument("--external-lb-helper-image", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_HELPER_IMAGE", "docker.io/kubeovn/kube-ovn:v1.15.8"))
+    parser.add_argument("--external-lb-controller-namespace", default=os.getenv("ANI_KUBEOVN_CONTROLLER_NAMESPACE", "kube-system"))
+    parser.add_argument("--external-lb-controller-deployment", default=os.getenv("ANI_KUBEOVN_CONTROLLER_DEPLOYMENT", "kube-ovn-controller"))
+    parser.add_argument("--external-lb-ssh-binary", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_SSH_BINARY", "ssh"))
+    parser.add_argument(
+        "--external-lb-curl-host",
+        action="append",
+        default=None,
+        help="SSH host alias used to curl the external LB IP; repeat for each real server",
+    )
+    parser.add_argument("--external-lb-reconcile-stamp", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_RECONCILE_STAMP", "external-lb-live-gate"))
     parser.add_argument(
         "--evidence-output",
         default=os.getenv("ANI_KUBEOVN_NETWORK_LIVE_EVIDENCE_OUTPUT") or None,
@@ -424,9 +809,33 @@ def main() -> int:
             kubeconfig=args.kubeconfig,
         )
         validate_live_config(config)
+        external_config = None
+        if args.external_lb_live:
+            external_config = ExternalLBConfig(
+                namespace=args.external_lb_namespace,
+                service_name=args.external_lb_service_name,
+                helper_deployment=args.external_lb_helper_deployment,
+                helper_label=args.external_lb_helper_label,
+                external_ip=args.external_lb_ip,
+                expected_body=args.external_lb_expected_body,
+                deps_manifest=args.external_lb_deps_manifest,
+                script_configmap_manifest=args.external_lb_script_configmap_manifest,
+                script_configmap_name=args.external_lb_script_configmap_name,
+                helper_image=args.external_lb_helper_image,
+                controller_namespace=args.external_lb_controller_namespace,
+                controller_deployment=args.external_lb_controller_deployment,
+                kubeconfig=args.kubeconfig,
+                kubectl_binary=config.kubectl_binary,
+                ssh_binary=args.external_lb_ssh_binary,
+                curl_hosts=tuple(args.external_lb_curl_host or ()),
+                reconcile_stamp=args.external_lb_reconcile_stamp,
+            )
+            validate_external_lb_config(external_config)
         if args.evidence_output is not None:
             validate_evidence_output(args.evidence_output)
         result = run_live(config)
+        if external_config is not None:
+            result["external_load_balancer"] = run_external_lb_live(external_config)
         if args.evidence_output is not None:
             write_live_evidence(Path(args.evidence_output), result)
             print(f"M1-NETWORK-LIVE-A live checks valid; evidence written to {args.evidence_output}")

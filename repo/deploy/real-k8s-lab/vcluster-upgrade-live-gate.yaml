@@ -17,20 +17,26 @@ required_endpoints:
   - vcluster_helm_release
 
 live_checks:
+  - id: core-cluster-register
+    command: POST {gateway_url}/k8s-clusters name={cluster_name} version={initial_version}
+    pass_condition: http_2xx_response_has_cluster_id
+  - id: dev-hostpath-pv
+    command: kubectl --kubeconfig {kubeconfig} apply -f {generated_hostpath_pv_manifest}
+    pass_condition: command_succeeds
   - id: core-upgrade-cluster
-    command: POST {gateway_url}/k8s-clusters/{cluster_id}/upgrade version={target_version}
+    command: POST {gateway_url}/k8s-clusters/{core_cluster_id}/upgrade version={target_version}
     pass_condition: response_dev_profile_real_provider_and_version_matches_target
   - id: helm-values-target-version
-    command: helm get values {cluster_id} --namespace {namespace} -a -o json
+    command: helm get values {core_cluster_id} --namespace {namespace} -a -o json
     pass_condition: controlPlane.distro.k8s.version_matches_target
-  - id: vcluster-kubeconfig-after-upgrade
-    command: vcluster connect {cluster_id} --namespace {namespace} --print
-    pass_condition: stdout_contains_kubeconfig_after_upgrade
   - id: kubectl-version-after-upgrade
-    command: kubectl --kubeconfig {generated_kubeconfig} get --raw /version
-    pass_condition: json_git_version_matches_target
+    command: vcluster connect {core_cluster_id} --namespace {namespace} --background-proxy=false -- kubectl get --raw /version
+    pass_condition: vcluster_connect_runs_kubectl_with_generated_kubeconfig
+  - id: local-proxy-after-upgrade
+    command: vcluster connect {core_cluster_id} --namespace {namespace} --background-proxy=false -- kubectl proxy --address=127.0.0.1 --port={local_proxy_port} --accept-hosts=.*
+    pass_condition: http_2xx_after_upgrade
   - id: core-proxy-version-after-upgrade
-    command: POST {gateway_url}/k8s-clusters/{cluster_id}/proxy path=/version
+    command: POST {gateway_url}/k8s-clusters/{core_cluster_id}/proxy path=/version
     pass_condition: http_2xx_after_upgrade
 
 readiness_levels:

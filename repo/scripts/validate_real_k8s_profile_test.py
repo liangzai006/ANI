@@ -200,6 +200,14 @@ live_checks:
 
         self.assertIn("vcluster-live-gate manifest live check pass_condition unsupported: not_a_real_condition", str(raised.exception))
 
+    def test_contract_validation_supports_vcluster_connect_generated_kubeconfig_condition(self) -> None:
+        for condition in (
+            "vcluster_connect_runs_kubectl_with_generated_kubeconfig",
+            "http_2xx_response_has_cluster_id",
+            "guest_console_logs_include_secret_volume_values",
+        ):
+            self.assertIn(condition, gate.SUPPORTED_CONTRACT_GATE_MANIFEST_PASS_CONDITIONS)
+
     def test_contract_validation_rejects_gate_manifest_missing_validator_required_live_check(self) -> None:
         profile = gate.load_profile(gate.PROFILE)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,7 +234,10 @@ live_checks:
             with self.assertRaises(SystemExit) as raised:
                 gate.validate_contract(profile)
 
-        self.assertIn("vcluster-live-gate manifest missing validator required live checks: vcluster-kubeconfig", str(raised.exception))
+        self.assertIn(
+            "vcluster-live-gate manifest missing validator required live checks: core-cluster-register, vcluster-kubeconfig",
+            str(raised.exception),
+        )
 
     def test_contract_validation_rejects_gate_profile_missing_validator_required_env(self) -> None:
         profile = gate.load_profile(gate.PROFILE)

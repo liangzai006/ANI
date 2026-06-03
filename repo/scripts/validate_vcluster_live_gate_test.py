@@ -16,31 +16,40 @@ import validate_vcluster_live_gate as gate
 class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
         self.posts: list[tuple[str, dict[str, object], str]] = []
 
     def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
+        self.envs.append(env)
         if command[0] == "vcluster":
-            return "\n".join(
-                [
-                    "apiVersion: v1",
-                    "clusters:",
-                    "- name: k8sclu-live",
-                    "  cluster:",
-                    "    server: https://k8sclu-live.example",
-                    "users:",
-                    "- name: k8sclu-live",
-                    "  user:",
-                    "    token: tenant-token",
-                ]
-            )
+            return '{"major":"1","minor":"35","gitVersion":"v1.35.0"}'
         if command[0] == "kubectl":
             return '{"major":"1","minor":"30"}'
         return "ok"
 
     def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
         self.posts.append((url, payload, bearer_token))
+        if url.endswith("/k8s-clusters"):
+            return {
+                "status_code": 201,
+                "headers": {},
+                "body": {
+                    "id": "k8sclu-core-live",
+                    "state": "running",
+                    "tenant_id": "tenant-a",
+                },
+            }
         return {"status_code": 200, "headers": {"x-upstream": "vcluster"}, "body": {"kind": "Status"}}
+
+
+class VClusterCommandRunner(FakeRunner):
+    def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
+        self.commands.append(command)
+        self.envs.append(env)
+        if command[0] == "vcluster":
+            return '10:30:00 done vCluster is up and running\n{"major":"1","minor":"35","gitVersion":"v1.35.0"}\n'
+        return "ok"
 
 
 class VClusterLiveGateTest(unittest.TestCase):
@@ -189,7 +198,7 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "--create-namespace",
                 "--repository-config=",
                 "--set",
-                "sync.toHost.service.enabled=true",
+                "sync.toHost.services.enabled=true",
             ],
         )
         self.assertEqual(
@@ -200,19 +209,34 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "k8sclu-live",
                 "--namespace",
                 "ani-tenant-tenant-a",
-                "--print",
+                "--background-proxy=false",
                 "--server",
                 "https://k8sclu-live.example",
+                "--",
+                "kubectl",
+                "get",
+                "--raw",
+                "/version",
             ],
         )
-        self.assertEqual(runner.commands[2][0:2], ["kubectl", "--kubeconfig"])
-        self.assertEqual(runner.commands[2][3:], ["get", "--raw", "/version"])
         self.assertEqual(
             runner.posts[0],
             (
-                "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-live/proxy",
+                "http://127.0.0.1:3000/api/v1/k8s-clusters",
                 {
-                    "idempotency_key": "live-proxy-k8sclu-live-version",
+                    "idempotency_key": "live-core-k8sclu-live",
+                    "name": "k8sclu-live",
+                    "version": "v1.35.0",
+                },
+                "ani-token",
+            ),
+        )
+        self.assertEqual(
+            runner.posts[1],
+            (
+                "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-core-live/proxy",
+                {
+                    "idempotency_key": "live-proxy-k8sclu-core-live-version",
                     "method": "GET",
                     "path": "/version",
                     "query": {},
@@ -221,6 +245,51 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "ani-token",
             ),
         )
+
+    def test_live_gate_uses_vcluster_connect_to_run_kubectl_version_without_printing_kubeconfig(self) -> None:
+        runner = VClusterCommandRunner()
+        result = gate.run_live(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                cluster_id="k8sclu-live",
+                gateway_url="http://127.0.0.1:3000/api/v1",
+                ani_bearer_token="ani-token",
+                kubeconfig="/tmp/real-lab.kubeconfig",
+            ),
+            runner=runner,
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertNotIn("kubeconfig", result)
+        self.assertEqual(
+            runner.commands[1],
+            [
+                "vcluster",
+                "connect",
+                "k8sclu-live",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--background-proxy=false",
+                "--",
+                "kubectl",
+                "get",
+                "--raw",
+                "/version",
+            ],
+        )
+
+    def test_command_runner_reports_core_proxy_connection_errors_without_traceback(self) -> None:
+        runner = gate.CommandRunner()
+        with patch.object(gate.urllib.request, "urlopen", side_effect=gate.urllib.error.URLError("refused")):
+            with self.assertRaises(RuntimeError) as raised:
+                runner.post_json(
+                    "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-live/proxy",
+                    {"path": "/version"},
+                    "ani-token",
+                )
+
+        self.assertIn("Core proxy request failed", str(raised.exception))
+        self.assertIn("refused", str(raised.exception))
 
     def test_cli_live_mode_rejects_missing_gateway_before_running_commands(self) -> None:
         with patch.object(gate, "run_live") as run_live:
@@ -239,12 +308,102 @@ class VClusterLiveGateTest(unittest.TestCase):
                     gate.main()
         run_live.assert_not_called()
 
+    def test_cli_live_mode_forwards_custom_tool_binaries(self) -> None:
+        captured_config: gate.LiveConfig | None = None
+
+        def capture_run_live(config: gate.LiveConfig) -> dict[str, object]:
+            nonlocal captured_config
+            captured_config = config
+            return {"status": "passed"}
+
+        with patch.object(gate, "validate_live_config"):
+            with patch.object(gate, "run_live", side_effect=capture_run_live):
+                with patch(
+                    "sys.argv",
+                    [
+                        "validate_vcluster_live_gate.py",
+                        "--live",
+                        "--tenant-id",
+                        "tenant-a",
+                        "--cluster-id",
+                        "k8sclu-live",
+                        "--gateway-url",
+                        "http://127.0.0.1:3000/api/v1",
+                        "--ani-bearer-token",
+                        "ani-token",
+                        "--helm-binary",
+                        "/opt/homebrew/bin/helm",
+                        "--vcluster-binary",
+                        "/tmp/vcluster",
+                        "--kubectl-binary",
+                        "/opt/homebrew/bin/kubectl",
+                    ],
+                ):
+                    gate.main()
+
+        self.assertIsNotNone(captured_config)
+        self.assertEqual("/opt/homebrew/bin/helm", captured_config.helm_binary)
+        self.assertEqual("/tmp/vcluster", captured_config.vcluster_binary)
+        self.assertEqual("/opt/homebrew/bin/kubectl", captured_config.kubectl_binary)
+
+    def test_cli_live_mode_forwards_namespace_override(self) -> None:
+        captured_config: gate.LiveConfig | None = None
+
+        def capture_run_live(config: gate.LiveConfig) -> dict[str, object]:
+            nonlocal captured_config
+            captured_config = config
+            return {"status": "passed"}
+
+        with patch.object(gate, "validate_live_config"):
+            with patch.object(gate, "run_live", side_effect=capture_run_live):
+                with patch(
+                    "sys.argv",
+                    [
+                        "validate_vcluster_live_gate.py",
+                        "--live",
+                        "--tenant-id",
+                        "tenant-a",
+                        "--namespace",
+                        "ani-tenant-tenant-a-vcluster",
+                        "--cluster-id",
+                        "k8sclu-live",
+                        "--gateway-url",
+                        "http://127.0.0.1:3000/api/v1",
+                        "--ani-bearer-token",
+                        "ani-token",
+                    ],
+                ):
+                    gate.main()
+
+        self.assertIsNotNone(captured_config)
+        self.assertEqual("ani-tenant-tenant-a-vcluster", captured_config.namespace)
+
+    def test_live_gate_passes_host_kubeconfig_to_helm_and_vcluster_commands(self) -> None:
+        runner = FakeRunner()
+        gate.run_live(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                namespace="ani-tenant-tenant-a-vcluster",
+                cluster_id="k8sclu-live",
+                gateway_url="http://127.0.0.1:3000/api/v1",
+                ani_bearer_token="ani-token",
+                kubeconfig="/tmp/real-lab.kubeconfig",
+            ),
+            runner=runner,
+        )
+
+        self.assertEqual("/tmp/real-lab.kubeconfig", runner.envs[0]["KUBECONFIG"])
+        self.assertEqual("/tmp/real-lab.kubeconfig", runner.envs[1]["KUBECONFIG"])
+        self.assertIn("ani-tenant-tenant-a-vcluster", runner.commands[0])
+        self.assertIn("ani-tenant-tenant-a-vcluster", runner.commands[1])
+
     def test_live_config_rejects_required_field_surrounding_whitespace(self) -> None:
         config = gate.LiveConfig(
             tenant_id="tenant-a",
             cluster_id="k8sclu-live",
             gateway_url=" http://127.0.0.1:3000/api/v1 ",
             ani_bearer_token="ani-token",
+            kubeconfig="/tmp/real-lab.kubeconfig",
         )
 
         with patch.object(gate.shutil, "which", return_value="/usr/bin/tool"):
@@ -477,7 +636,7 @@ class VClusterLiveGateTest(unittest.TestCase):
         write_live_evidence.assert_not_called()
 
     def test_cli_live_mode_writes_evidence_json_when_requested(self) -> None:
-        fake_evidence = {"status": "passed", "kubeconfig": "/tmp/k8sclu-live.kubeconfig", "proxy_status": 200}
+        fake_evidence = {"status": "passed", "kubectl_version": "v1.35.0", "proxy_status": 200}
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "vcluster-live-evidence.json"
 

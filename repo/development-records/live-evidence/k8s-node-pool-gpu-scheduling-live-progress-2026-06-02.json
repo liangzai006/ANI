@@ -1,0 +1,82 @@
+{
+  "id": "k8s-node-pool-gpu-scheduling-live-progress",
+  "profile": "M1-K8S-LIVE-B",
+  "status": "partial_progress_gpu_ready_capi_pending",
+  "observed_at": "2026-06-02T20:28:05Z",
+  "gate": "validate-k8s-node-pool-live-gate",
+  "checks_now_proven": [
+    "gpu-workload-scheduled"
+  ],
+  "checks_still_not_proven": [
+    "clusterapi-machinedeployment-created",
+    "clusterapi-machinedeployment-scaled"
+  ],
+  "gpu_nodes": [
+    {
+      "node": "kubercloud",
+      "role": "control-plane",
+      "kernel": "6.8.0-117-generic",
+      "driver_version": "580.159.03",
+      "nvidia_container_toolkit": "1.19.1",
+      "device_plugin": "nvcr.io/nvidia/k8s-device-plugin:v0.19.2",
+      "nvidia.com/gpu_allocatable": "2",
+      "node_specific_smoke_pod": "ani-node-pool-gpu-smoke-ani1",
+      "node_specific_runtime_check": "container nvidia-smi succeeded on kubercloud"
+    },
+    {
+      "node": "dev-phys-02",
+      "role": "worker",
+      "kernel": "6.8.0-117-generic",
+      "driver_version": "580.159.03",
+      "nvidia_container_toolkit": "1.19.1",
+      "device_plugin": "nvcr.io/nvidia/k8s-device-plugin:v0.19.2",
+      "nvidia.com/gpu_allocatable": "2"
+    },
+    {
+      "node": "dev-phys-03",
+      "role": "worker",
+      "kernel": "6.8.0-117-generic",
+      "driver_version": "580.159.03",
+      "nvidia_container_toolkit": "1.19.1",
+      "device_plugin": "nvcr.io/nvidia/k8s-device-plugin:v0.19.2",
+      "nvidia.com/gpu_allocatable": "2"
+    }
+  ],
+  "gpu_smoke_pod": {
+    "namespace": "ani-tenant-tenant-a",
+    "name": "ani-node-pool-gpu-smoke",
+    "requested_resource": {
+      "nvidia.com/gpu": 1
+    },
+    "pod_scheduled": true,
+    "phase": "Running",
+    "node": "dev-phys-03",
+    "runtime_check": "container nvidia-smi succeeded",
+    "runtime_driver_version": "580.159.03",
+    "runtime_cuda_version": "13.0",
+    "visible_gpu": "NVIDIA GeForce RTX 4090"
+  },
+  "gpu_smoke_pod_control_plane": {
+    "namespace": "ani-tenant-tenant-a",
+    "name": "ani-node-pool-gpu-smoke-ani1",
+    "requested_resource": {
+      "nvidia.com/gpu": 1
+    },
+    "pod_scheduled": true,
+    "phase": "Running",
+    "node": "kubercloud",
+    "runtime_check": "container nvidia-smi succeeded",
+    "runtime_driver_version": "580.159.03",
+    "runtime_cuda_version": "13.0",
+    "visible_gpu": "NVIDIA GeForce RTX 4090"
+  },
+  "cluster_api": {
+    "machinedeployment_resource_available": false,
+    "clusterctl_available_on_control_plane": false,
+    "cluster_api_crds_present": false,
+    "current_provider_infrastructure_ref_kind": "ANIMachineTemplate",
+    "current_provider_infrastructure_ref_real_provider_present": false,
+    "remaining_gap": "Cluster API core plus a real infrastructure provider compatible with the provider manifest are still required before node pool create/scale can be proven."
+  },
+  "conclusion": "The GPU scheduling dependency for M1-K8S-LIVE-B is now proven across all three REAL-K8S-LAB-A servers, including the control-plane node. The full node pool live gate remains incomplete because Cluster API MachineDeployment and a compatible infrastructure provider are still absent."
+}

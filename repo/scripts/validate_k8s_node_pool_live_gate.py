@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -26,6 +27,10 @@ REQUIRED_CHECKS = {
     "clusterapi-machinedeployment-created",
     "core-scale-node-pool",
     "clusterapi-machinedeployment-scaled",
+    "clusterapi-machinesets-ready",
+    "clusterapi-machines-ready",
+    "capk-kubevirtmachines-ready",
+    "capk-vms-ready",
     "gpu-workload-scheduled",
 }
 REQUIRED_ENV = {"KUBECONFIG", "ANI_GATEWAY_URL", "ANI_BEARER_TOKEN", "ANI_LIVE_K8S_CLUSTER_ID"}
@@ -134,10 +139,19 @@ class LiveConfig:
     workload_kubeconfig: str = ""
     kubectl_binary: str = "kubectl"
     gpu_smoke_pod_name: str = "ani-node-pool-gpu-smoke"
+    readiness_timeout_seconds: int = 600
+    readiness_poll_seconds: int = 10
 
 
 class LiveRunner:
-    def request_json(self, method: str, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
+    def request_json(
+        self,
+        method: str,
+        url: str,
+        payload: dict[str, object],
+        bearer_token: str,
+        tenant_id: str,
+    ) -> dict[str, object]:
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -146,6 +160,7 @@ class LiveRunner:
             headers={
                 "content-type": "application/json",
                 "authorization": "Bearer " + bearer_token,
+                "x-dev-tenant-id": tenant_id,
             },
         )
         try:
@@ -156,11 +171,11 @@ class LiveRunner:
             detail = err.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"{method} {url} returned HTTP {err.code}: {detail}") from err
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        return self.request_json("POST", url, payload, bearer_token)
+    def post_json(self, url: str, payload: dict[str, object], bearer_token: str, tenant_id: str) -> dict[str, object]:
+        return self.request_json("POST", url, payload, bearer_token, tenant_id)
 
-    def patch_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        return self.request_json("PATCH", url, payload, bearer_token)
+    def patch_json(self, url: str, payload: dict[str, object], bearer_token: str, tenant_id: str) -> dict[str, object]:
+        return self.request_json("PATCH", url, payload, bearer_token, tenant_id)
 
     def run(self, command: list[str], input_text: str | None = None) -> str:
         result = subprocess.run(
@@ -213,6 +228,10 @@ def validate_live_fields(config: LiveConfig) -> None:
         fail("gpu_count cannot be negative")
     if config.gpu_count > 0 and not config.gpu_resource_name.strip():
         fail("gpu_resource_name is required when gpu_count is greater than zero")
+    if config.readiness_timeout_seconds < 0:
+        fail("readiness_timeout_seconds cannot be negative")
+    if config.readiness_poll_seconds <= 0:
+        fail("readiness_poll_seconds must be greater than zero")
 
 
 def validate_live_config(config: LiveConfig) -> None:
@@ -228,6 +247,114 @@ def kubectl(config: LiveConfig, args: list[str], *, workload: bool = False) -> l
         command.extend(["--kubeconfig", kubeconfig.strip()])
     command.extend(args)
     return command
+
+
+def load_kubernetes_json(config: LiveConfig, runner: LiveRunner, args: list[str], description: str) -> dict[str, Any]:
+    raw = runner.run(kubectl(config, args))
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as err:
+        fail(f"{description} did not return JSON: {err}")
+    if not isinstance(document, dict):
+        fail(f"{description} must return a JSON object")
+    return document
+
+
+def list_items(document: dict[str, Any], description: str) -> list[dict[str, Any]]:
+    items = document.get("items")
+    if not isinstance(items, list):
+        fail(f"{description} must include items")
+    typed_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            fail(f"{description} items must be objects")
+        typed_items.append(item)
+    return typed_items
+
+
+def object_name(document: dict[str, Any]) -> str:
+    metadata = document.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("name") or "")
+
+
+def condition_true(document: dict[str, Any], condition_type: str) -> bool:
+    status = document.get("status", {})
+    conditions = status.get("conditions", []) if isinstance(status, dict) else []
+    if not isinstance(conditions, list):
+        return False
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+        if condition.get("type") == condition_type and str(condition.get("status")) == "True":
+            return True
+    return False
+
+
+def status_int(document: dict[str, Any], field: str) -> int:
+    status = document.get("status", {})
+    if not isinstance(status, dict):
+        return 0
+    try:
+        return int(status.get(field, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def phase_or_status(document: dict[str, Any]) -> str:
+    status = document.get("status", {})
+    if not isinstance(status, dict):
+        return ""
+    return str(status.get("phase") or status.get("printableStatus") or "")
+
+
+def vm_ready(document: dict[str, Any]) -> bool:
+    return condition_true(document, "Ready") or phase_or_status(document) in {"Running", "Ready"}
+
+
+def vmi_ready(document: dict[str, Any]) -> bool:
+    return condition_true(document, "Ready") and phase_or_status(document) == "Running"
+
+
+def owner_machine_name(machine: dict[str, Any]) -> str:
+    metadata = machine.get("metadata", {})
+    owners = metadata.get("ownerReferences", []) if isinstance(metadata, dict) else []
+    if not isinstance(owners, list):
+        return ""
+    for owner in owners:
+        if not isinstance(owner, dict):
+            continue
+        if owner.get("kind") == "MachineSet":
+            return str(owner.get("name") or "")
+    return ""
+
+
+def has_owner(document: dict[str, Any], kind: str, name: str) -> bool:
+    metadata = document.get("metadata", {})
+    owners = metadata.get("ownerReferences", []) if isinstance(metadata, dict) else []
+    if not isinstance(owners, list):
+        return False
+    for owner in owners:
+        if not isinstance(owner, dict):
+            continue
+        if owner.get("kind") == kind and owner.get("name") == name:
+            return True
+    return False
+
+
+def has_label(document: dict[str, Any], key: str, value: str) -> bool:
+    metadata = document.get("metadata", {})
+    labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+    return isinstance(labels, dict) and labels.get(key) == value
+
+
+def machine_infrastructure_ref_name(machine: dict[str, Any]) -> str:
+    spec = machine.get("spec", {})
+    infrastructure_ref = spec.get("infrastructureRef", {}) if isinstance(spec, dict) else {}
+    if not isinstance(infrastructure_ref, dict):
+        return ""
+    return str(infrastructure_ref.get("name") or "")
 
 
 def gpu_workload_manifest(namespace: str, pod_name: str, gpu_resource_name: str) -> str:
@@ -264,17 +391,20 @@ def assert_real_node_pool_response(response: dict[str, Any]) -> str:
 
 
 def load_machine_deployment(config: LiveConfig, runner: LiveRunner, namespace: str, name: str) -> dict[str, Any]:
-    raw = runner.run(kubectl(config, ["get", "machinedeployment", name, "-n", namespace, "-o", "json"]))
+    return load_kubernetes_json(config, runner, ["get", "machinedeployment", name, "-n", namespace, "-o", "json"], "kubectl get machinedeployment")
+
+
+def machine_deployment_spec_replicas(document: dict[str, Any]) -> int:
+    spec = document.get("spec", {})
+    if not isinstance(spec, dict):
+        fail("MachineDeployment spec must be an object")
     try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as err:
-        fail(f"kubectl get machinedeployment did not return JSON: {err}")
-    if not isinstance(document, dict):
-        fail("kubectl get machinedeployment must return a JSON object")
-    return document
+        return int(spec.get("replicas", -1))
+    except (TypeError, ValueError):
+        fail("MachineDeployment spec.replicas must be an integer")
 
 
-def assert_machine_deployment(document: dict[str, Any], expected_replicas: int, node_pool_id: str, config: LiveConfig) -> None:
+def assert_machine_deployment(document: dict[str, Any], expected_replicas: int | None, node_pool_id: str, config: LiveConfig) -> None:
     metadata = document.get("metadata", {})
     if not isinstance(metadata, dict):
         fail("MachineDeployment metadata must be an object")
@@ -284,14 +414,267 @@ def assert_machine_deployment(document: dict[str, Any], expected_replicas: int, 
     spec = document.get("spec", {})
     if not isinstance(spec, dict):
         fail("MachineDeployment spec must be an object")
-    if int(spec.get("replicas", -1)) != expected_replicas:
+    if expected_replicas is not None and machine_deployment_spec_replicas(document) != expected_replicas:
         fail(f"MachineDeployment replicas must be {expected_replicas}")
     template = spec.get("template", {})
+    template_metadata = template.get("metadata", {}) if isinstance(template, dict) else {}
+    template_labels = template_metadata.get("labels", {}) if isinstance(template_metadata, dict) else {}
+    template_annotations = template_metadata.get("annotations", {}) if isinstance(template_metadata, dict) else {}
+    if not isinstance(template_labels, dict):
+        fail("MachineDeployment template.metadata.labels must be an object")
+    if not isinstance(template_annotations, dict):
+        fail("MachineDeployment template.metadata.annotations must be an object")
     machine_spec = template.get("spec", {}) if isinstance(template, dict) else {}
+    if not isinstance(machine_spec, dict):
+        fail("MachineDeployment template.spec must be an object")
+    for required_field in ("bootstrap", "clusterName", "infrastructureRef"):
+        if required_field not in machine_spec:
+            fail(f"MachineDeployment template.spec.{required_field} is required for Cluster API")
     if config.gpu_count > 0:
-        gpu = machine_spec.get("gpu") if isinstance(machine_spec, dict) else None
-        if not isinstance(gpu, dict) or int(gpu.get("count", -1)) != config.gpu_count:
-            fail("MachineDeployment template.spec.gpu must preserve GPU intent")
+        if template_labels.get("ani.kubercloud.io/gpu-vendor") != config.gpu_vendor:
+            fail("MachineDeployment template metadata must preserve GPU vendor intent")
+        if template_labels.get("ani.kubercloud.io/gpu-model") != config.gpu_model:
+            fail("MachineDeployment template metadata must preserve GPU model intent")
+        if str(template_annotations.get("ani.kubercloud.io/gpu-count", "")) != str(config.gpu_count):
+            fail("MachineDeployment template metadata must preserve GPU count intent")
+        if template_annotations.get("ani.kubercloud.io/gpu-resource-name") != config.gpu_resource_name:
+            fail("MachineDeployment template metadata must preserve GPU resource intent")
+
+
+def assert_machine_deployment_ready(document: dict[str, Any], expected_replicas: int) -> None:
+    if not condition_true(document, "Available"):
+        fail("MachineDeployment must have Available condition True")
+    for field in ("replicas", "readyReplicas", "availableReplicas", "upToDateReplicas"):
+        if status_int(document, field) != expected_replicas:
+            fail(f"MachineDeployment status.{field} must be {expected_replicas}")
+
+
+def assert_machine_sets_ready(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    machine_deployment_name: str,
+    node_pool_id: str,
+    expected_replicas: int,
+) -> dict[str, object]:
+    document = load_kubernetes_json(config, runner, ["get", "machineset", "-n", namespace, "-o", "json"], "kubectl get machineset")
+    items = [
+        item
+        for item in list_items(document, "MachineSet list")
+        if has_label(item, "ani.kubercloud.io/node-pool-id", node_pool_id) or has_owner(item, "MachineDeployment", machine_deployment_name)
+    ]
+    if not items:
+        fail("no MachineSet found for node pool")
+    ready_names: list[str] = []
+    spec_replicas = status_replicas = ready_replicas = available_replicas = up_to_date_replicas = 0
+    for item in items:
+        spec = item.get("spec", {})
+        if not isinstance(spec, dict):
+            fail("MachineSet spec must be an object")
+        try:
+            spec_replicas += int(spec.get("replicas", 0) or 0)
+        except (TypeError, ValueError):
+            fail("MachineSet spec.replicas must be an integer")
+        status_replicas += status_int(item, "replicas")
+        ready_replicas += status_int(item, "readyReplicas")
+        available_replicas += status_int(item, "availableReplicas")
+        up_to_date_replicas += status_int(item, "upToDateReplicas")
+        if condition_true(item, "Ready") or status_int(item, "readyReplicas") > 0:
+            ready_names.append(object_name(item))
+    totals = {
+        "spec_replicas": spec_replicas,
+        "status_replicas": status_replicas,
+        "ready_replicas": ready_replicas,
+        "available_replicas": available_replicas,
+        "up_to_date_replicas": up_to_date_replicas,
+    }
+    for label, count in totals.items():
+        if count != expected_replicas:
+            fail(f"MachineSet aggregate {label} must be {expected_replicas}")
+    return {
+        "count": len(items),
+        "names": [object_name(item) for item in items],
+        **totals,
+        "ready_names": ready_names,
+    }
+
+
+def machine_internal_ips(machine: dict[str, Any]) -> list[str]:
+    status = machine.get("status", {})
+    addresses = status.get("addresses", []) if isinstance(status, dict) else []
+    if not isinstance(addresses, list):
+        return []
+    ips: list[str] = []
+    for address in addresses:
+        if not isinstance(address, dict):
+            continue
+        if address.get("type") == "InternalIP" and address.get("address"):
+            ips.append(str(address["address"]))
+    return ips
+
+
+def assert_machines_ready(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    node_pool_id: str,
+    expected_replicas: int,
+) -> tuple[list[dict[str, Any]], dict[str, object]]:
+    document = load_kubernetes_json(
+        config,
+        runner,
+        ["get", "machine", "-n", namespace, "-l", f"ani.kubercloud.io/node-pool-id={node_pool_id}", "-o", "json"],
+        "kubectl get machine",
+    )
+    machines = list_items(document, "Machine list")
+    if len(machines) != expected_replicas:
+        fail(f"Machine count must be {expected_replicas}")
+    ready_names: list[str] = []
+    internal_ips: dict[str, list[str]] = {}
+    provider_ids: dict[str, str] = {}
+    infrastructure_refs: list[str] = []
+    for machine in machines:
+        name = object_name(machine)
+        if not name:
+            fail("Machine metadata.name is required")
+        if not condition_true(machine, "Ready"):
+            fail(f"Machine {name} must have Ready condition True")
+        if not condition_true(machine, "Available"):
+            fail(f"Machine {name} must have Available condition True")
+        status = machine.get("status", {})
+        node_ref = status.get("nodeRef", {}) if isinstance(status, dict) else {}
+        if not isinstance(node_ref, dict) or not node_ref.get("name"):
+            fail(f"Machine {name} must have status.nodeRef")
+        spec = machine.get("spec", {})
+        provider_id = str(spec.get("providerID") or "") if isinstance(spec, dict) else ""
+        if not provider_id:
+            fail(f"Machine {name} must have spec.providerID")
+        ips = machine_internal_ips(machine)
+        if not ips:
+            fail(f"Machine {name} must have an InternalIP")
+        infra_ref_name = machine_infrastructure_ref_name(machine)
+        if not infra_ref_name:
+            fail(f"Machine {name} must have spec.infrastructureRef.name")
+        ready_names.append(name)
+        internal_ips[name] = ips
+        provider_ids[name] = provider_id
+        infrastructure_refs.append(infra_ref_name)
+    return machines, {
+        "count": len(machines),
+        "ready_count": len(ready_names),
+        "names": ready_names,
+        "internal_ips": internal_ips,
+        "provider_ids": provider_ids,
+        "infrastructure_refs": infrastructure_refs,
+    }
+
+
+def assert_kubevirt_machines_ready(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    infrastructure_ref_names: list[str],
+) -> dict[str, object]:
+    document = load_kubernetes_json(config, runner, ["get", "kubevirtmachine", "-n", namespace, "-o", "json"], "kubectl get kubevirtmachine")
+    expected = set(infrastructure_ref_names)
+    items = [item for item in list_items(document, "KubevirtMachine list") if object_name(item) in expected]
+    if len(items) != len(expected):
+        fail("KubevirtMachine count must match Machine infrastructure refs")
+    ready_names: list[str] = []
+    for item in items:
+        name = object_name(item)
+        if not condition_true(item, "Ready"):
+            fail(f"KubevirtMachine {name} must have Ready condition True")
+        ready_names.append(name)
+    return {"count": len(items), "ready_count": len(ready_names), "names": ready_names}
+
+
+def assert_vms_ready(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    expected_names: list[str],
+) -> dict[str, object]:
+    expected = set(expected_names)
+    vm_document = load_kubernetes_json(config, runner, ["get", "vm", "-n", namespace, "-o", "json"], "kubectl get vm")
+    vmi_document = load_kubernetes_json(config, runner, ["get", "vmi", "-n", namespace, "-o", "json"], "kubectl get vmi")
+    vms = [item for item in list_items(vm_document, "VirtualMachine list") if object_name(item) in expected]
+    vmis = [item for item in list_items(vmi_document, "VirtualMachineInstance list") if object_name(item) in expected]
+    if len(vms) != len(expected):
+        fail("VirtualMachine count must match KubevirtMachine names")
+    if len(vmis) != len(expected):
+        fail("VirtualMachineInstance count must match KubevirtMachine names")
+    ready_vms: list[str] = []
+    ready_vmis: list[str] = []
+    for vm in vms:
+        name = object_name(vm)
+        if not vm_ready(vm):
+            fail(f"VirtualMachine {name} must be Running/Ready")
+        ready_vms.append(name)
+    for vmi in vmis:
+        name = object_name(vmi)
+        if not vmi_ready(vmi):
+            fail(f"VirtualMachineInstance {name} must be Running and Ready")
+        ready_vmis.append(name)
+    return {
+        "vm_count": len(vms),
+        "vm_ready_count": len(ready_vms),
+        "vm_names": ready_vms,
+        "vmi_count": len(vmis),
+        "vmi_ready_count": len(ready_vmis),
+        "vmi_names": ready_vmis,
+    }
+
+
+def observe_node_pool_readiness(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    machine_deployment_name: str,
+    node_pool_id: str,
+    expected_replicas: int,
+) -> dict[str, object]:
+    machine_deployment = load_machine_deployment(config, runner, namespace, machine_deployment_name)
+    assert_machine_deployment(machine_deployment, expected_replicas, node_pool_id, config)
+    assert_machine_deployment_ready(machine_deployment, expected_replicas)
+    machine_sets = assert_machine_sets_ready(config, runner, namespace, machine_deployment_name, node_pool_id, expected_replicas)
+    machines, machine_summary = assert_machines_ready(config, runner, namespace, node_pool_id, expected_replicas)
+    infrastructure_ref_names = [machine_infrastructure_ref_name(machine) for machine in machines]
+    kubevirt_machine_summary = assert_kubevirt_machines_ready(config, runner, namespace, infrastructure_ref_names)
+    vm_summary = assert_vms_ready(config, runner, namespace, infrastructure_ref_names)
+    return {
+        "machine_deployment": {
+            "name": machine_deployment_name,
+            "replicas": expected_replicas,
+            "ready_replicas": status_int(machine_deployment, "readyReplicas"),
+            "available_replicas": status_int(machine_deployment, "availableReplicas"),
+            "up_to_date_replicas": status_int(machine_deployment, "upToDateReplicas"),
+        },
+        "machine_sets": machine_sets,
+        "machines": machine_summary,
+        "kubevirt_machines": kubevirt_machine_summary,
+        "virtual_machines": vm_summary,
+    }
+
+
+def wait_for_node_pool_readiness(
+    config: LiveConfig,
+    runner: LiveRunner,
+    namespace: str,
+    machine_deployment_name: str,
+    node_pool_id: str,
+    expected_replicas: int,
+) -> dict[str, object]:
+    deadline = time.monotonic() + max(config.readiness_timeout_seconds, 0)
+    last_error: SystemExit | None = None
+    while True:
+        try:
+            return observe_node_pool_readiness(config, runner, namespace, machine_deployment_name, node_pool_id, expected_replicas)
+        except SystemExit as err:
+            last_error = err
+            if time.monotonic() >= deadline:
+                raise last_error
+            time.sleep(max(config.readiness_poll_seconds, 1))
 
 
 def run_gpu_workload_check(config: LiveConfig, runner: LiveRunner, namespace: str) -> None:
@@ -334,10 +717,17 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
             "gpu": gpu,
         },
         config.ani_bearer_token,
+        config.tenant_id,
     )
     node_pool_id = assert_real_node_pool_response(created)
     machine_deployment = load_machine_deployment(config, runner, namespace, machine_deployment_name)
-    assert_machine_deployment(machine_deployment, config.initial_node_count, node_pool_id, config)
+    observed_create_replicas = machine_deployment_spec_replicas(machine_deployment)
+    create_replica_check = "matched_create_request"
+    create_expected_replicas: int | None = config.initial_node_count
+    if observed_create_replicas != config.initial_node_count:
+        create_expected_replicas = None
+        create_replica_check = f"existing_replicas_{observed_create_replicas}"
+    assert_machine_deployment(machine_deployment, create_expected_replicas, node_pool_id, config)
 
     updated = runner.patch_json(
         gateway + f"/k8s-clusters/{config.cluster_id}/node-pools/{node_pool_id}",
@@ -348,18 +738,20 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, 
             "gpu": gpu,
         },
         config.ani_bearer_token,
+        config.tenant_id,
     )
     assert_real_node_pool_response(updated)
-    scaled = load_machine_deployment(config, runner, namespace, machine_deployment_name)
-    assert_machine_deployment(scaled, config.scaled_node_count, node_pool_id, config)
+    readiness = wait_for_node_pool_readiness(config, runner, namespace, machine_deployment_name, node_pool_id, config.scaled_node_count)
     run_gpu_workload_check(config, runner, namespace)
 
     return {
         "status": "passed",
         "node_pool_id": node_pool_id,
         "machine_deployment": machine_deployment_name,
+        "machine_deployment_create_replica_check": create_replica_check,
         "namespace": namespace,
         "scaled_replicas": config.scaled_node_count,
+        "readiness": readiness,
         "gpu_workload": config.gpu_smoke_pod_name if config.gpu_count > 0 else "",
     }
 
@@ -421,6 +813,8 @@ def main() -> int:
     parser.add_argument("--gpu-resource-name", default=os.getenv("ANI_LIVE_NODE_POOL_GPU_RESOURCE", "nvidia.com/gpu"))
     parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
     parser.add_argument("--workload-kubeconfig", default=os.getenv("ANI_WORKLOAD_KUBECONFIG", ""))
+    parser.add_argument("--readiness-timeout-seconds", type=int, default=int(os.getenv("ANI_LIVE_NODE_POOL_READINESS_TIMEOUT_SECONDS", "600")))
+    parser.add_argument("--readiness-poll-seconds", type=int, default=int(os.getenv("ANI_LIVE_NODE_POOL_READINESS_POLL_SECONDS", "10")))
     parser.add_argument(
         "--evidence-output",
         default=os.getenv("ANI_K8S_NODE_POOL_LIVE_EVIDENCE_OUTPUT") or None,
@@ -448,6 +842,8 @@ def main() -> int:
             gpu_resource_name=args.gpu_resource_name,
             kubeconfig=args.kubeconfig,
             workload_kubeconfig=args.workload_kubeconfig,
+            readiness_timeout_seconds=args.readiness_timeout_seconds,
+            readiness_poll_seconds=args.readiness_poll_seconds,
         )
         validate_live_config(config)
         if args.evidence_output is not None:

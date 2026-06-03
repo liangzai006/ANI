@@ -10,8 +10,8 @@ This file provides mandatory guidance for Claude Code / Codex / Cursor / GPT cod
 
 ```text
 本仓库范围：仅 ANI Core（基础设施平台底座）。ANI Services 已冻结并移交外部产品团队，本仓库不再开发任何 Services 代码。
-当前阶段：以 repo/CURRENT-SPRINT.md 为准；当前为 Phase 1 / Sprint 5 收敛中
-当前重心：真实 live gate 推进（物理服务器 2026-05-29 到位）+ guard 冻结
+当前阶段：以 repo/CURRENT-SPRINT.md 为准
+当前重心：以 repo/CURRENT-SPRINT.md 为准
 当前不是 Phase 2：Phase 2 是 2026-10 以后延期能力
 下一步入口：repo/CURRENT-SPRINT.md
 文档导航：ANI-DOCS-INDEX.md

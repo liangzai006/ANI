@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ani-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-kms-sm4-live-fixture
+  namespace: ani-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ani-kms-sm4-live-fixture
+  template:
+    metadata:
+      labels:
+        app: ani-kms-sm4-live-fixture
+    spec:
+      nodeName: dev-phys-03
+      containers:
+        - name: fixture
+          image: registry.k8s.io/pause:3.10
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/ani/bin/kms-sm4-live-fixture"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          ports:
+            - containerPort: 9305
+          env:
+            - name: LISTEN_ADDR
+              value: ":9305"
+            - name: OBJECTSTORE_ROOT
+              value: /var/lib/ani/kms-sm4-live-objectstore
+          volumeMounts:
+            - name: fixture-bin
+              mountPath: /opt/ani/bin/kms-sm4-live-fixture
+            - name: objectstore
+              mountPath: /var/lib/ani/kms-sm4-live-objectstore
+      volumes:
+        - name: fixture-bin
+          hostPath:
+            path: /opt/ani/kms-sm4-live-fixture/kms-sm4-live-fixture
+            type: File
+        - name: objectstore
+          hostPath:
+            path: /var/lib/ani/kms-sm4-live-objectstore
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-kms-sm4-live-fixture
+  namespace: ani-system
+spec:
+  selector:
+    app: ani-kms-sm4-live-fixture
+  ports:
+    - name: http
+      port: 9305
+      targetPort: 9305

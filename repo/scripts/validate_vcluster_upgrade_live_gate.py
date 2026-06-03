@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -22,10 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = ROOT.parent
 DEFAULT_GATE = ROOT / "deploy/real-k8s-lab/vcluster-upgrade-live-gate.yaml"
 REQUIRED_CHECKS = {
+    "core-cluster-register",
+    "dev-hostpath-pv",
     "core-upgrade-cluster",
     "helm-values-target-version",
-    "vcluster-kubeconfig-after-upgrade",
     "kubectl-version-after-upgrade",
+    "local-proxy-after-upgrade",
     "core-proxy-version-after-upgrade",
 }
 REQUIRED_ENV = {"KUBECONFIG", "ANI_GATEWAY_URL", "ANI_BEARER_TOKEN"}
@@ -122,8 +125,11 @@ class LiveConfig:
     cluster_id: str
     gateway_url: str
     ani_bearer_token: str
+    kubeconfig: str = ""
     target_version: str = "v1.31.0"
+    initial_version: str = "v1.30.0"
     vcluster_server: str = ""
+    local_proxy_port: int = 18002
     helm_binary: str = "helm"
     vcluster_binary: str = "vcluster"
     kubectl_binary: str = "kubectl"
@@ -131,23 +137,48 @@ class LiveConfig:
 
 
 class LiveRunner:
-    def run(self, command: list[str]) -> str:
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
+    def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
+        result = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(f"{' '.join(command)} failed: {detail}")
         return result.stdout
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
+    def start(self, command: list[str], env: dict[str, str] | None = None) -> subprocess.Popen[str]:
+        return subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def wait_url(self, url: str) -> None:
+        deadline = time.monotonic() + 60
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=3) as response:
+                    if 200 <= response.status < 300:
+                        return
+            except (OSError, urllib.error.URLError) as err:
+                last_error = err
+            time.sleep(1)
+        raise RuntimeError(f"waiting for {url} failed: {last_error}")
+
+    def post_json(
+        self,
+        url: str,
+        payload: dict[str, object],
+        bearer_token: str,
+        tenant_id: str = "",
+    ) -> dict[str, object]:
         body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "content-type": "application/json",
+            "authorization": "Bearer " + bearer_token,
+        }
+        if tenant_id:
+            headers["x-dev-tenant-id"] = tenant_id
         request = urllib.request.Request(
             url,
             data=body,
             method="POST",
-            headers={
-                "content-type": "application/json",
-                "authorization": "Bearer " + bearer_token,
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -168,6 +199,7 @@ def validate_live_config(config: LiveConfig) -> None:
         "cluster_id": config.cluster_id,
         "gateway_url": config.gateway_url,
         "ani_bearer_token": config.ani_bearer_token,
+        "kubeconfig": config.kubeconfig,
         "target_version": config.target_version,
     }
     missing = [name for name, value in required.items() if not value.strip()]
@@ -181,12 +213,12 @@ def validate_live_config(config: LiveConfig) -> None:
             fail(f"{binary} is required for --live")
 
 
-def helm_values_command(config: LiveConfig) -> list[str]:
+def helm_values_command(config: LiveConfig, cluster_id: str) -> list[str]:
     return [
         config.helm_binary,
         "get",
         "values",
-        config.cluster_id,
+        cluster_id,
         "--namespace",
         tenant_namespace(config.tenant_id),
         "-a",
@@ -195,24 +227,55 @@ def helm_values_command(config: LiveConfig) -> list[str]:
     ]
 
 
-def vcluster_connect_command(config: LiveConfig) -> list[str]:
+def vcluster_connect_command(config: LiveConfig, cluster_id: str) -> list[str]:
     command = [
         config.vcluster_binary,
         "connect",
-        config.cluster_id,
+        cluster_id,
         "--namespace",
         tenant_namespace(config.tenant_id),
-        "--print",
+        "--background-proxy=false",
     ]
     if config.vcluster_server.strip():
         command.extend(["--server", config.vcluster_server.strip()])
+    command.extend(["--", config.kubectl_binary, "get", "--raw", "/version"])
     return command
 
 
-def kubeconfig_path(config: LiveConfig) -> Path:
+def local_proxy_command(config: LiveConfig, cluster_id: str) -> list[str]:
+    command = [
+        config.vcluster_binary,
+        "connect",
+        cluster_id,
+        "--namespace",
+        tenant_namespace(config.tenant_id),
+        "--background-proxy=false",
+    ]
+    if config.vcluster_server.strip():
+        command.extend(["--server", config.vcluster_server.strip()])
+    command.extend(
+        [
+            "--",
+            config.kubectl_binary,
+            "proxy",
+            "--address=127.0.0.1",
+            f"--port={config.local_proxy_port}",
+            "--accept-hosts=.*",
+        ]
+    )
+    return command
+
+
+def kubeconfig_path(config: LiveConfig, cluster_id: str) -> Path:
     if config.work_dir is not None:
-        return config.work_dir / f"{config.cluster_id}-upgrade.kubeconfig"
-    return Path(tempfile.gettempdir()) / f"{config.cluster_id}-upgrade.kubeconfig"
+        return config.work_dir / f"{cluster_id}-upgrade.kubeconfig"
+    return Path(tempfile.gettempdir()) / f"{cluster_id}-upgrade.kubeconfig"
+
+
+def host_kube_env(config: LiveConfig) -> dict[str, str]:
+    env = os.environ.copy()
+    env["KUBECONFIG"] = config.kubeconfig
+    return env
 
 
 def nested_value(document: dict[str, Any], path: list[str]) -> Any:
@@ -234,6 +297,18 @@ def assert_core_upgrade_response(response: dict[str, Any], target_version: str) 
         fail("Core upgrade response state must be running or upgrading")
 
 
+def assert_core_create_response(response: dict[str, Any]) -> str:
+    cluster_id = response.get("id")
+    if not isinstance(cluster_id, str) or not cluster_id.strip():
+        fail("Core create response missing cluster id")
+    profile = response.get("dev_profile", {})
+    if not isinstance(profile, dict) or profile.get("mode") != "real" or not profile.get("real_provider"):
+        fail("Core create response must be provider-backed real dev profile")
+    if response.get("state") not in {"running", "creating"}:
+        fail("Core create response state must be running or creating")
+    return cluster_id.strip()
+
+
 def assert_helm_values_target_version(raw_values: str, target_version: str) -> None:
     try:
         values = json.loads(raw_values)
@@ -246,11 +321,21 @@ def assert_helm_values_target_version(raw_values: str, target_version: str) -> N
         fail(f"helm values target version = {actual!r}, want {target_version!r}")
 
 
-def assert_kubernetes_version(raw_version: str, target_version: str) -> None:
+def parse_json_object_from_output(output: str, label: str) -> dict[str, Any]:
+    json_start = output.find("{")
+    if json_start < 0:
+        fail(f"{label} did not return JSON")
     try:
-        version = json.loads(raw_version)
+        value, _ = json.JSONDecoder().raw_decode(output[json_start:])
     except json.JSONDecodeError as err:
-        fail(f"kubectl /version did not return JSON: {err}")
+        fail(f"{label} did not return JSON: {err}")
+    if not isinstance(value, dict):
+        fail(f"{label} response must be a JSON object")
+    return value
+
+
+def assert_kubernetes_version(raw_version: str, target_version: str) -> None:
+    version = parse_json_object_from_output(raw_version, "kubectl /version")
     if not isinstance(version, dict) or not (version.get("gitVersion") or version.get("major")):
         fail("kubectl /version response missing Kubernetes version")
     git_version = str(version.get("gitVersion") or "")
@@ -258,43 +343,108 @@ def assert_kubernetes_version(raw_version: str, target_version: str) -> None:
         fail(f"kubectl gitVersion = {git_version}, want prefix {target_version}")
 
 
+def upgrade_hostpath_pv_manifest(config: LiveConfig, cluster_id: str) -> str:
+    namespace = tenant_namespace(config.tenant_id)
+    pv_name = "ani-vcu-" + cluster_id
+    pvc_name = "data-" + cluster_id + "-0"
+    path = "/var/local/ani-pv/vcluster-upgrade/" + cluster_id
+    return "\n".join(
+        [
+            "apiVersion: v1",
+            "kind: PersistentVolume",
+            "metadata:",
+            f"  name: {pv_name}",
+            "  labels:",
+            "    app.kubernetes.io/part-of: ani-platform",
+            "    app.kubernetes.io/managed-by: ani-core",
+            "    ani.kubercloud.io/live-gate: m1-k8s-live-c",
+            "spec:",
+            "  capacity:",
+            "    storage: 20Gi",
+            "  accessModes:",
+            "    - ReadWriteOnce",
+            "  persistentVolumeReclaimPolicy: Retain",
+            "  volumeMode: Filesystem",
+            "  claimRef:",
+            f"    namespace: {namespace}",
+            f"    name: {pvc_name}",
+            "  hostPath:",
+            f"    path: {path}",
+            "    type: DirectoryOrCreate",
+            "",
+        ]
+    )
+
+
+def apply_upgrade_hostpath_pv(config: LiveConfig, cluster_id: str, runner: LiveRunner) -> None:
+    manifest_path = kubeconfig_path(config, cluster_id).with_suffix(".pv.yaml")
+    manifest_path.write_text(upgrade_hostpath_pv_manifest(config, cluster_id), encoding="utf-8")
+    runner.run([config.kubectl_binary, "--kubeconfig", config.kubeconfig, "apply", "-f", str(manifest_path)], env=host_kube_env(config))
+
+
 def run_live(config: LiveConfig, runner: LiveRunner | None = None) -> dict[str, object]:
     runner = runner or LiveRunner()
+    create_response = runner.post_json(
+        config.gateway_url.rstrip("/") + "/k8s-clusters",
+        {
+            "idempotency_key": f"live-upgrade-create-{config.cluster_id}",
+            "name": config.cluster_id,
+            "version": config.initial_version,
+        },
+        config.ani_bearer_token,
+        config.tenant_id,
+    )
+    core_cluster_id = assert_core_create_response(create_response)
+    apply_upgrade_hostpath_pv(config, core_cluster_id, runner)
+
     upgrade_payload = {
-        "idempotency_key": f"live-upgrade-{config.cluster_id}-{config.target_version}",
+        "idempotency_key": f"live-upgrade-{core_cluster_id}-{config.target_version}",
         "version": config.target_version,
     }
     upgrade_response = runner.post_json(
-        config.gateway_url.rstrip("/") + f"/k8s-clusters/{config.cluster_id}/upgrade",
+        config.gateway_url.rstrip("/") + f"/k8s-clusters/{core_cluster_id}/upgrade",
         upgrade_payload,
         config.ani_bearer_token,
+        config.tenant_id,
     )
     assert_core_upgrade_response(upgrade_response, config.target_version)
 
-    assert_helm_values_target_version(runner.run(helm_values_command(config)), config.target_version)
-    kubeconfig = runner.run(vcluster_connect_command(config))
-    if "apiVersion:" not in kubeconfig or "clusters:" not in kubeconfig:
-        fail("vcluster connect did not print a kubeconfig after upgrade")
-    path = kubeconfig_path(config)
-    path.write_text(kubeconfig, encoding="utf-8")
-    version_output = runner.run([config.kubectl_binary, "--kubeconfig", str(path), "get", "--raw", "/version"])
+    assert_helm_values_target_version(runner.run(helm_values_command(config, core_cluster_id), env=host_kube_env(config)), config.target_version)
+    version_output = runner.run(vcluster_connect_command(config, core_cluster_id), env=host_kube_env(config))
     assert_kubernetes_version(version_output, config.target_version)
 
-    proxy_response = runner.post_json(
-        config.gateway_url.rstrip("/") + f"/k8s-clusters/{config.cluster_id}/proxy",
-        {
-            "idempotency_key": f"live-upgrade-proxy-{config.cluster_id}-{config.target_version}",
-            "method": "GET",
-            "path": "/version",
-            "query": {},
-            "body": {},
-        },
-        config.ani_bearer_token,
-    )
-    status_code = int(proxy_response.get("status_code", 0))
-    if status_code < 200 or status_code >= 300:
-        fail(f"Core proxy returned HTTP {status_code} after upgrade")
-    return {"status": "passed", "target_version": config.target_version, "kubeconfig": str(path), "proxy_status": status_code}
+    proxy_process = runner.start(local_proxy_command(config, core_cluster_id), env=host_kube_env(config))
+    try:
+        runner.wait_url(f"http://127.0.0.1:{config.local_proxy_port}/version")
+        proxy_response = runner.post_json(
+            config.gateway_url.rstrip("/") + f"/k8s-clusters/{core_cluster_id}/proxy",
+            {
+                "idempotency_key": f"live-upgrade-proxy-{core_cluster_id}-{config.target_version}",
+                "method": "GET",
+                "path": "/version",
+                "query": {},
+                "body": {},
+            },
+            config.ani_bearer_token,
+            config.tenant_id,
+        )
+        status_code = int(proxy_response.get("status_code", 0))
+        if status_code < 200 or status_code >= 300:
+            fail(f"Core proxy returned HTTP {status_code} after upgrade")
+    finally:
+        proxy_process.terminate()
+        try:
+            proxy_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proxy_process.kill()
+            proxy_process.wait(timeout=5)
+    return {
+        "status": "passed",
+        "core_cluster_id": core_cluster_id,
+        "target_version": config.target_version,
+        "kubectl_version": config.target_version,
+        "proxy_status": status_code,
+    }
 
 
 def write_live_evidence(path: Path, evidence: dict[str, object]) -> None:
@@ -344,8 +494,14 @@ def main() -> int:
     parser.add_argument("--cluster-id", default=os.getenv("ANI_LIVE_K8S_CLUSTER_ID", "k8sclu-live"))
     parser.add_argument("--gateway-url", default=os.getenv("ANI_GATEWAY_URL", ""))
     parser.add_argument("--ani-bearer-token", default=os.getenv("ANI_BEARER_TOKEN", ""))
+    parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
+    parser.add_argument("--initial-version", default=os.getenv("ANI_LIVE_K8S_INITIAL_VERSION", "v1.30.0"))
     parser.add_argument("--target-version", default=os.getenv("ANI_LIVE_K8S_UPGRADE_TARGET_VERSION", "v1.31.0"))
     parser.add_argument("--vcluster-server", default=os.getenv("VCLUSTER_LIVE_SERVER", ""))
+    parser.add_argument("--local-proxy-port", type=int, default=int(os.getenv("ANI_VCLUSTER_UPGRADE_LOCAL_PROXY_PORT", "18002")))
+    parser.add_argument("--helm-binary", default=os.getenv("ANI_HELM_BINARY", "helm"))
+    parser.add_argument("--vcluster-binary", default=os.getenv("ANI_VCLUSTER_BINARY", "vcluster"))
+    parser.add_argument("--kubectl-binary", default=os.getenv("ANI_KUBECTL_BINARY", "kubectl"))
     parser.add_argument(
         "--evidence-output",
         default=os.getenv("ANI_VCLUSTER_UPGRADE_LIVE_EVIDENCE_OUTPUT") or None,
@@ -363,8 +519,14 @@ def main() -> int:
             cluster_id=args.cluster_id,
             gateway_url=args.gateway_url,
             ani_bearer_token=args.ani_bearer_token,
+            kubeconfig=args.kubeconfig,
             target_version=args.target_version,
+            initial_version=args.initial_version,
             vcluster_server=args.vcluster_server,
+            local_proxy_port=args.local_proxy_port,
+            helm_binary=args.helm_binary,
+            vcluster_binary=args.vcluster_binary,
+            kubectl_binary=args.kubectl_binary,
         )
         validate_live_config(config)
         if args.evidence_output is not None:

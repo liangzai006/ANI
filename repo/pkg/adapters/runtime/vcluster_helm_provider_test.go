@@ -38,7 +38,7 @@ func TestVClusterHelmProviderAdapterRunsHelmUpgradeInstall(t *testing.T) {
 		"--create-namespace",
 		"--repository-config=",
 		"--set",
-		"sync.toHost.service.enabled=true",
+		"sync.toHost.services.enabled=true",
 	}
 	if runner.binary != "helm" || !reflect.DeepEqual(runner.args, wantArgs) {
 		t.Fatalf("helm call = %s %#v, want helm %#v", runner.binary, runner.args, wantArgs)
@@ -178,7 +178,7 @@ func TestVClusterHelmProviderAdapterRunsHelmUpgradeForClusterVersion(t *testing.
 		"--create-namespace",
 		"--repository-config=",
 		"--set",
-		"sync.toHost.service.enabled=true",
+		"sync.toHost.services.enabled=true",
 		"--set",
 		"controlPlane.distro.k8s.version=v1.31.0",
 	}

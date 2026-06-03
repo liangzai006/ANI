@@ -8,7 +8,7 @@
 
 新增 K8s node pool provider 代码边界：`ports.K8sClusterNodePoolProvider` 表达 node pool create/update/delete intent，local K8s cluster service 只有在 node pool provider 真正 apply 后才把 node pool 标记为 real provider。
 
-新增 `KubernetesNodePoolProviderAdapter`，将 node pool intent 渲染为 Cluster API `MachineDeployment` manifest，并通过已有 Kubernetes REST apply 通道提交。GPU intent 会以 labels 和 machine spec 中的 `gpu` 字段保留，便于后续 live 调度验证。
+新增 `KubernetesNodePoolProviderAdapter`，将 node pool intent 渲染为 Cluster API `MachineDeployment` manifest，并通过已有 Kubernetes REST apply 通道提交。2026-06-02 在 `M1-K8S-LIVE-J` 中已按真实 Cluster API `v1beta1` schema 校正 manifest：`template.spec` 只保留 CAPI 合法字段，GPU/规格 intent 通过 MachineDeployment 与 template metadata labels/annotations 保留，便于后续 live 调度验证。
 
 Gateway 新增 `K8S_CLUSTER_NODE_POOL_PROVIDER_MODE=clusterapi_kubernetes_rest` runtime 选择，可与现有 `K8S_CLUSTER_PROVIDER_MODE=vcluster_helm` 组合。该批次不是真实节点池 live 扩缩容或 GPU 调度验证；真实 lab 仍需后续 live gate 或执行记录证明。
 
@@ -26,7 +26,7 @@ Gateway 新增 `K8S_CLUSTER_NODE_POOL_PROVIDER_MODE=clusterapi_kubernetes_rest` 
 
 - [x] 先写失败测试并确认 RED：node pool provider port/adapter/Gateway config 不存在
 - [x] Local service 只有 node pool provider apply 后才标记 node pool real provider
-- [x] Kubernetes adapter 渲染 Cluster API `MachineDeployment`，包含 replicas、tenant namespace、clusterName、instanceType 和 GPU intent
+- [x] Kubernetes adapter 渲染 Cluster API `MachineDeployment`，包含 replicas、tenant namespace、clusterName、CAPI `bootstrap` / `infrastructureRef`，并通过合法 metadata 保留 instance type 与 GPU intent
 - [x] Gateway runtime 可组合 `vcluster_helm` cluster provider 与 `clusterapi_kubernetes_rest` node pool provider
 - [ ] 真实节点池 live 扩缩容验证
 - [ ] GPU 节点池真实调度验证

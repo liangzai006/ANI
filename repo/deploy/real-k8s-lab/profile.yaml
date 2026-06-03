@@ -93,7 +93,7 @@ components:
         pass_condition: at_least_one_storageclass
   kube_ovn:
     required: true
-    purpose: VPC, Subnet, NetworkPolicy and Service/LB real provider validation.
+    purpose: VPC, Subnet, NetworkPolicy, Service/LB and external LoadBalancer reachability validation.
     live_checks:
       - id: kubeovn-vpc-crd
         command: kubectl get crd vpcs.kubeovn.io -o json

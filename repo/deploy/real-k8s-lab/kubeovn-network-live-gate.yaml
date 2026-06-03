@@ -3,15 +3,18 @@ status: contract
 description: >
   Sprint 5 Kube-OVN network live validation gate for proving the real lab can
   create and observe Kube-OVN Vpc/Subnet plus Kubernetes NetworkPolicy and
-  Service/LB resources used by ANI network provider rendering.
+  Service/LB resources used by ANI network provider rendering, including the
+  REAL-K8S-LAB-A external LoadBalancer IP reachability path.
 
 required_tools:
   - kubectl
+  - ssh
 
 required_endpoints:
   - kubernetes_api
   - kube_ovn_crds
   - networking_k8s_api
+  - external_load_balancer_lan
 
 live_checks:
   - id: kubeovn-crds-ready
@@ -29,9 +32,12 @@ live_checks:
   - id: service-lb-created
     command: kubectl apply -f service-lb.yaml && kubectl get service {load_balancer_name} -n {namespace} -o json
     pass_condition: service_type_load_balancer_or_observable
+  - id: external-lb-reachable
+    command: python scripts/validate_kubeovn_network_live_gate.py --live --external-lb-live --external-lb-curl-host ANI1 --external-lb-curl-host ANI2 --external-lb-curl-host ANI3 --evidence-output <path>
+    pass_condition: external_load_balancer_ip_reachable_from_all_real_lab_nodes
 
 readiness_levels:
   contract:
     meaning: Gate definition and local validator exist; no live Kube-OVN resource proof.
   live:
-    meaning: Kube-OVN CRD checks plus Vpc/Subnet, NetworkPolicy and Service/LB checks passed against REAL-K8S-LAB-A.
+    meaning: Kube-OVN CRD checks plus Vpc/Subnet, NetworkPolicy, Service/LB and external LoadBalancer IP reachability checks passed against REAL-K8S-LAB-A.

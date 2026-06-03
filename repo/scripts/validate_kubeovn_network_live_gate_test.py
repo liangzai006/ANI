@@ -16,6 +16,7 @@ import validate_kubeovn_network_live_gate as gate
 class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.applied_manifests: list[str] = []
 
     def run(self, command: list[str], input_text: str | None = None) -> str:
         self.commands.append(command)
@@ -47,7 +48,72 @@ class FakeRunner:
         if "apply -f -" in joined:
             if not input_text or "apiVersion" not in input_text:
                 raise AssertionError("apply command must receive a manifest")
+            self.applied_manifests.append(input_text)
             return "created\n"
+        raise AssertionError(f"unexpected command: {joined}")
+
+
+class FakeExternalLBRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+        self.service_status_ip = ""
+
+    def run(self, command: list[str], input_text: str | None = None) -> str:
+        self.commands.append(command)
+        joined = " ".join(command)
+        if "get deploy kube-ovn-controller" in joined:
+            return json.dumps(
+                {
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "containers": [
+                                    {"args": ["/kube-ovn/start-controller.sh", "--enable-lb-svc=false"]}
+                                ]
+                            }
+                        }
+                    }
+                }
+            )
+        if "patch deploy kube-ovn-controller" in joined:
+            return "patched\n"
+        if "rollout status deploy/kube-ovn-controller" in joined:
+            return "rolled out\n"
+        if "apply -f" in joined:
+            return "configured\n"
+        if "rollout status deploy/ani-kubeovn-external-lb-smoke" in joined:
+            return "rolled out\n"
+        if "get deploy lb-svc-ani-kubeovn-external-lb-smoke" in joined:
+            return '{"kind":"Deployment","metadata":{"name":"lb-svc-ani-kubeovn-external-lb-smoke"}}'
+        if "patch deploy lb-svc-ani-kubeovn-external-lb-smoke" in joined:
+            return "patched\n"
+        if "get svc ani-kubeovn-external-lb-smoke" in joined:
+            ingress = [{"ip": self.service_status_ip}] if self.service_status_ip else []
+            return json.dumps(
+                {
+                    "kind": "Service",
+                    "metadata": {"name": "ani-kubeovn-external-lb-smoke"},
+                    "status": {"loadBalancer": {"ingress": ingress}},
+                }
+            )
+        if "patch svc ani-kubeovn-external-lb-smoke" in joined:
+            self.service_status_ip = "10.10.1.250"
+            return "patched\n"
+        if "delete pod -l app=lb-svc-ani-kubeovn-external-lb-smoke" in joined:
+            return "deleted\n"
+        if "rollout status deploy/lb-svc-ani-kubeovn-external-lb-smoke" in joined:
+            return "rolled out\n"
+        if "exec deploy/lb-svc-ani-kubeovn-external-lb-smoke" in joined:
+            return "\n".join(
+                [
+                    "inet 10.10.1.250/22 scope global net1",
+                    "10.99.242.146 via 10.16.0.1 dev eth0",
+                    "-A PREROUTING -d 10.10.1.250/32 -p tcp -m tcp --dport 80 -j DNAT --to-destination 10.99.242.146:8080",
+                    "-A POSTROUTING -d 10.99.242.146/32 -j MASQUERADE",
+                ]
+            )
+        if command[:2] == ["ssh", "ANI1"] or command[:2] == ["ssh", "ANI2"] or command[:2] == ["ssh", "ANI3"]:
+            return "ani-kubeovn-external-lb-ok\n"
         raise AssertionError(f"unexpected command: {joined}")
 
 
@@ -187,7 +253,62 @@ class KubeOVNNetworkLiveGateTest(unittest.TestCase):
         self.assertEqual(result["subnet"], "subnet-ani-live-subnet")
         self.assertIn(["kubectl", "get", "crd", "vpcs.kubeovn.io", "-o", "json"], runner.commands)
         apply_commands = [command for command in runner.commands if command[-2:] == ["-f", "-"]]
-        self.assertEqual(len(apply_commands), 4)
+        self.assertEqual(len(apply_commands), 5)
+
+    def test_external_lb_live_gate_patches_helper_and_proves_curl_results(self) -> None:
+        runner = FakeExternalLBRunner()
+
+        result = gate.run_external_lb_live(
+            gate.ExternalLBConfig(
+                kubeconfig="/tmp/kubeconfig",
+                deps_manifest=str(gate.DEFAULT_EXTERNAL_LB_DEPS),
+                script_configmap_manifest=str(gate.DEFAULT_EXTERNAL_LB_SCRIPT_CONFIGMAP),
+                curl_hosts=("ANI1", "ANI2", "ANI3"),
+                reconcile_stamp="test-stamp",
+            ),
+            runner=runner,
+        )
+
+        self.assertEqual("passed", result["status"])
+        self.assertEqual("10.10.1.250", result["external_ip"])
+        self.assertTrue(result["dnat_rule_observed"])
+        self.assertEqual(
+            [{"host": "ANI1", "body_matched": True}, {"host": "ANI2", "body_matched": True}, {"host": "ANI3", "body_matched": True}],
+            result["curl_results"],
+        )
+        joined_commands = [" ".join(command) for command in runner.commands]
+        self.assertTrue(any("patch deploy kube-ovn-controller" in command for command in joined_commands))
+        self.assertTrue(any("patch deploy lb-svc-ani-kubeovn-external-lb-smoke" in command for command in joined_commands))
+
+    def test_external_lb_config_requires_curl_hosts(self) -> None:
+        with patch.object(gate.shutil, "which", return_value="/usr/bin/tool"):
+            with self.assertRaises(SystemExit) as raised:
+                gate.validate_external_lb_config(
+                    gate.ExternalLBConfig(
+                        deps_manifest=str(gate.DEFAULT_EXTERNAL_LB_DEPS),
+                        script_configmap_manifest=str(gate.DEFAULT_EXTERNAL_LB_SCRIPT_CONFIGMAP),
+                    )
+                )
+
+        self.assertIn("external LB live mode requires at least one curl host", str(raised.exception))
+
+    def test_live_gate_creates_tenant_namespace_before_namespaced_resources(self) -> None:
+        runner = FakeRunner()
+
+        gate.run_live(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                vpc_name="ani-live-net",
+                subnet_name="ani-live-subnet",
+                security_group_name="ani-live-sg",
+                load_balancer_name="ani-live-lb",
+                namespace="ani-tenant-tenant-a",
+            ),
+            runner=runner,
+        )
+
+        self.assertIn("kind: Namespace", runner.applied_manifests[0])
+        self.assertIn("name: ani-tenant-tenant-a", runner.applied_manifests[0])
 
     def test_cli_live_mode_rejects_missing_tenant_config(self) -> None:
         with patch.object(gate, "run_live") as run_live:
