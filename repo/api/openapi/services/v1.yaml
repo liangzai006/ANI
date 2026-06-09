@@ -200,6 +200,214 @@ components:
         input_tokens:  { type: integer }
         output_tokens: { type: integer }
 
+    GpuContainer:
+      type: object
+      required: [id, name, image, gpu_type, gpu_count, status, created_at]
+      properties:
+        id:           { type: string, format: uuid }
+        name:         { type: string }
+        display_name: { type: string, nullable: true }
+        image:        { type: string }
+        gpu_type:     { type: string }
+        gpu_count:    { type: integer, minimum: 1 }
+        cpu_cores:    { type: number, nullable: true }
+        memory_gb:    { type: number, nullable: true }
+        storage_gb:   { type: number, nullable: true }
+        status:       { type: string, enum: [pending, running, stopped, failed, deleted] }
+        endpoint_url: { type: string, nullable: true }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time, nullable: true }
+
+    CreateGpuContainerRequest:
+      type: object
+      required: [idempotency_key, name, image, gpu_type, gpu_count]
+      properties:
+        idempotency_key: { type: string, format: uuid, description: "客户端生成UUID，防重复提交" }
+        name:         { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,62}$' }
+        display_name: { type: string, maxLength: 128 }
+        image:        { type: string }
+        gpu_type:     { type: string }
+        gpu_count:    { type: integer, minimum: 1, default: 1 }
+        cpu_cores:    { type: number }
+        memory_gb:    { type: number }
+        storage_gb:   { type: number }
+        env:
+          type: object
+          additionalProperties: { type: string }
+
+    PatchGpuContainerRequest:
+      type: object
+      required: [idempotency_key]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        display_name: { type: string, maxLength: 128 }
+        replicas:     { type: integer, minimum: 1 }
+        env:
+          type: object
+          additionalProperties: { type: string }
+
+    GpuContainerMetrics:
+      type: object
+      properties:
+        gpu_utilization_pct: { type: number }
+        gpu_memory_used_mb:  { type: number }
+        gpu_memory_total_mb: { type: number }
+        cpu_utilization_pct: { type: number }
+        memory_used_mb:      { type: number }
+        timestamp:           { type: string, format: date-time }
+
+    GpuContainerVersion:
+      type: object
+      required: [id, container_id, image, created_at]
+      properties:
+        id:           { type: string, format: uuid }
+        container_id: { type: string, format: uuid }
+        image:        { type: string }
+        is_current:   { type: boolean }
+        created_at:   { type: string, format: date-time }
+
+    AvailableGpu:
+      type: object
+      required: [gpu_type, available_count, total_count]
+      properties:
+        gpu_type:        { type: string }
+        available_count: { type: integer }
+        total_count:     { type: integer }
+        node_name:       { type: string, nullable: true }
+
+    Sandbox:
+      type: object
+      required: [id, name, image, status, created_at, expires_at]
+      properties:
+        id:           { type: string, format: uuid }
+        name:         { type: string }
+        image:        { type: string }
+        status:       { type: string, enum: [pending, running, paused, expired, deleted] }
+        endpoint_url: { type: string, nullable: true }
+        created_at:   { type: string, format: date-time }
+        expires_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time, nullable: true }
+
+    CreateSandboxRequest:
+      type: object
+      required: [idempotency_key, name, image]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        name:        { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,62}$' }
+        image:       { type: string }
+        ttl_hours:   { type: integer, minimum: 1, maximum: 720, default: 24 }
+        cpu_cores:   { type: number }
+        memory_gb:   { type: number }
+        env:
+          type: object
+          additionalProperties: { type: string }
+
+    PatchSandboxRequest:
+      type: object
+      required: [idempotency_key]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        env:
+          type: object
+          additionalProperties: { type: string }
+
+    ExtendSandboxRequest:
+      type: object
+      required: [idempotency_key, extend_hours]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        extend_hours: { type: integer, minimum: 1, maximum: 720 }
+
+    SecurityEvent:
+      type: object
+      required: [id, sandbox_id, event_type, severity, occurred_at]
+      properties:
+        id:          { type: string, format: uuid }
+        sandbox_id:  { type: string, format: uuid }
+        event_type:  { type: string }
+        severity:    { type: string, enum: [info, warning, critical] }
+        description: { type: string, nullable: true }
+        occurred_at: { type: string, format: date-time }
+
+    SecurityOverview:
+      type: object
+      required: [sandbox_id, total_events, critical_count, warning_count]
+      properties:
+        sandbox_id:     { type: string, format: uuid }
+        total_events:   { type: integer }
+        critical_count: { type: integer }
+        warning_count:  { type: integer }
+        last_event_at:  { type: string, format: date-time, nullable: true }
+
+    TenantMember:
+      type: object
+      required: [id, user_id, email, role, joined_at]
+      properties:
+        id:        { type: string, format: uuid }
+        user_id:   { type: string, format: uuid }
+        email:     { type: string, format: email }
+        name:      { type: string, nullable: true }
+        role:      { type: string }
+        joined_at: { type: string, format: date-time }
+
+    InviteMemberRequest:
+      type: object
+      required: [idempotency_key, email, role]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role:  { type: string }
+
+    TenantRole:
+      type: object
+      required: [id, name, permissions]
+      properties:
+        id:          { type: string }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        permissions: { type: array, items: { type: string } }
+
+    SsoConfig:
+      type: object
+      properties:
+        enabled:      { type: boolean }
+        provider:     { type: string, enum: [oidc, saml], nullable: true }
+        issuer_url:   { type: string, format: uri, nullable: true }
+        client_id:    { type: string, nullable: true }
+        redirect_url: { type: string, format: uri, nullable: true }
+        updated_at:   { type: string, format: date-time, nullable: true }
+
+    UpdateSsoConfigRequest:
+      type: object
+      required: [idempotency_key]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        enabled:       { type: boolean }
+        provider:      { type: string, enum: [oidc, saml] }
+        issuer_url:    { type: string, format: uri }
+        client_id:     { type: string }
+        client_secret: { type: string }
+        redirect_url:  { type: string, format: uri }
+
+    Webhook:
+      type: object
+      required: [id, url, events, active, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        url:        { type: string, format: uri }
+        events:     { type: array, items: { type: string } }
+        active:     { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    CreateWebhookRequest:
+      type: object
+      required: [idempotency_key, url, events]
+      properties:
+        idempotency_key: { type: string, format: uuid }
+        url:    { type: string, format: uri }
+        events: { type: array, items: { type: string }, minItems: 1 }
+        secret: { type: string }
+
 paths:
   /models:
     get:
@@ -231,8 +439,9 @@ paths:
         content:
           application/json:
             schema:
-              required: [name, display_name]
+              required: [idempotency_key, name, display_name]
               properties:
+                idempotency_key: { type: string, format: uuid, description: "客户端生成UUID，防重复提交" }
                 name:
                   type: string
                   pattern: '^[a-z0-9][a-z0-9.-]{0,62}$'
@@ -316,8 +525,9 @@ paths:
         content:
           application/json:
             schema:
-              required: [version, format, storage_path, checksum_sha256, size_bytes]
+              required: [idempotency_key, version, format, storage_path, checksum_sha256, size_bytes]
               properties:
+                idempotency_key: { type: string, format: uuid }
                 version:         { type: string }
                 format:          { type: string, enum: [safetensors, gguf, pytorch] }
                 storage_path:    { type: string }
@@ -353,8 +563,9 @@ paths:
         content:
           application/json:
             schema:
-              required: [name, model]
+              required: [idempotency_key, name, model]
               properties:
+                idempotency_key:   { type: string, format: uuid }
                 name:              { type: string }
                 model:             { type: string }
                 replicas:          { type: integer, default: 1 }
@@ -414,8 +625,9 @@ paths:
         content:
           application/json:
             schema:
-              required: [name]
+              required: [idempotency_key, name]
               properties:
+                idempotency_key: { type: string, format: uuid }
                 name:            { type: string }
                 description:     { type: string }
                 embedding_model: { type: string, default: "bge-m3" }
@@ -547,7 +759,465 @@ paths:
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
 
+  /gpu-containers:
+    get:
+      operationId: listGpuContainers
+      summary: GPU容器列表
+      tags: [GpuContainers]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, running, stopped, failed, deleted] } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: GPU容器列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CursorPage'
+                  - properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/GpuContainer' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createGpuContainer
+      summary: 创建GPU容器
+      tags: [GpuContainers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGpuContainerRequest' }
+      responses:
+        "202":
+          description: GPU容器创建任务已提交
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GpuContainer' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /gpu-containers/available-gpus:
+    get:
+      operationId: listAvailableGpus
+      summary: 查询可用GPU资源
+      tags: [GpuContainers]
+      responses:
+        "200":
+          description: 可用GPU列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AvailableGpu' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+
+  /gpu-containers/{container_id}:
+    get:
+      operationId: getGpuContainer
+      summary: 获取GPU容器详情
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: GPU容器详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GpuContainer' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: patchGpuContainer
+      summary: 更新GPU容器配置
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchGpuContainerRequest' }
+      responses:
+        "200":
+          description: 更新后的GPU容器
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GpuContainer' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteGpuContainer
+      summary: 删除GPU容器
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: 删除任务已提交 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /gpu-containers/{container_id}/metrics:
+    get:
+      operationId: getGpuContainerMetrics
+      summary: 获取GPU容器监控指标
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: 当前指标
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GpuContainerMetrics' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /gpu-containers/{container_id}/versions:
+    get:
+      operationId: listGpuContainerVersions
+      summary: GPU容器版本历史
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: 版本列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/GpuContainerVersion' } }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /gpu-containers/{container_id}/rollback:
+    post:
+      operationId: rollbackGpuContainer
+      summary: 回滚GPU容器到指定版本
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required: [idempotency_key, version_id]
+              properties:
+                idempotency_key: { type: string, format: uuid }
+                version_id:      { type: string, format: uuid }
+      responses:
+        "202": { description: 回滚任务已提交 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /gpu-containers/{container_id}/rebuild:
+    post:
+      operationId: rebuildGpuContainer
+      summary: 重建GPU容器
+      tags: [GpuContainers]
+      parameters:
+        - { name: container_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required: [idempotency_key]
+              properties:
+                idempotency_key: { type: string, format: uuid }
+                image:           { type: string }
+      responses:
+        "202": { description: 重建任务已提交 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /sandboxes:
+    get:
+      operationId: listSandboxes
+      summary: Sandbox列表
+      tags: [Sandboxes]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, running, paused, expired, deleted] } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Sandbox列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CursorPage'
+                  - properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Sandbox' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createSandbox
+      summary: 创建Sandbox
+      tags: [Sandboxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSandboxRequest' }
+      responses:
+        "202":
+          description: Sandbox创建任务已提交
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /sandboxes/{sandbox_id}:
+    get:
+      operationId: getSandbox
+      summary: 获取Sandbox详情
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Sandbox详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: patchSandbox
+      summary: 更新Sandbox配置
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PatchSandboxRequest' }
+      responses:
+        "200":
+          description: 更新后的Sandbox
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteSandbox
+      summary: 删除Sandbox
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: 删除任务已提交 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /sandboxes/{sandbox_id}/extend:
+    post:
+      operationId: extendSandbox
+      summary: 延期Sandbox有效期
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExtendSandboxRequest' }
+      responses:
+        "200":
+          description: 延期后的Sandbox
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /sandboxes/{sandbox_id}/pause:
+    post:
+      operationId: pauseSandbox
+      summary: 暂停Sandbox
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required: [idempotency_key]
+              properties:
+                idempotency_key: { type: string, format: uuid }
+      responses:
+        "202": { description: 暂停任务已提交 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /sandboxes/{sandbox_id}/security-events:
+    get:
+      operationId: listSandboxSecurityEvents
+      summary: Sandbox安全事件列表
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: severity, in: query, schema: { type: string, enum: [info, warning, critical] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200":
+          description: 安全事件列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SecurityEvent' } }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /sandboxes/{sandbox_id}/security-overview:
+    get:
+      operationId: getSandboxSecurityOverview
+      summary: Sandbox安全概览
+      tags: [Sandboxes]
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: 安全概览
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityOverview' }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /tenant/members:
+    get:
+      operationId: listTenantMembers
+      summary: 租户成员列表
+      tags: [Tenant]
+      responses:
+        "200":
+          description: 成员列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TenantMember' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: inviteTenantMember
+      summary: 邀请成员加入租户
+      tags: [Tenant]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InviteMemberRequest' }
+      responses:
+        "202":
+          description: 邀请已发送
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantMember' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /tenant/members/{member_id}:
+    delete:
+      operationId: removeTenantMember
+      summary: 移除租户成员
+      tags: [Tenant]
+      parameters:
+        - { name: member_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: 已移除 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /tenant/roles:
+    get:
+      operationId: listTenantRoles
+      summary: 角色列表
+      tags: [Tenant]
+      responses:
+        "200":
+          description: 角色列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TenantRole' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+
+  /tenant/sso:
+    get:
+      operationId: getSsoConfig
+      summary: 获取SSO配置
+      tags: [Tenant]
+      responses:
+        "200":
+          description: SSO配置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SsoConfig' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    put:
+      operationId: updateSsoConfig
+      summary: 更新SSO配置
+      tags: [Tenant]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateSsoConfigRequest' }
+      responses:
+        "200":
+          description: 更新后的SSO配置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SsoConfig' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+
+  /tenant/webhooks:
+    get:
+      operationId: listWebhooks
+      summary: Webhook列表
+      tags: [Tenant]
+      responses:
+        "200":
+          description: Webhook列表
+          content:
+            application/json:
+              schema:
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: createWebhook
+      summary: 创建Webhook
+      tags: [Tenant]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWebhookRequest' }
+      responses:
+        "201":
+          description: Webhook已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /tenant/webhooks/{webhook_id}:
+    delete:
+      operationId: deleteWebhook
+      summary: 删除Webhook
+      tags: [Tenant]
+      parameters:
+        - { name: webhook_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: 已删除 }
+        "404": { $ref: '#/components/responses/NotFound' }
+
 tags:
   - { name: Models, description: "模型仓库" }
   - { name: InferenceServices, description: "推理服务" }
   - { name: KnowledgeBases, description: "知识库服务" }
+  - { name: GpuContainers, description: "GPU容器" }
+  - { name: Sandboxes, description: "Sandbox" }
+  - { name: Tenant, description: "租户管理（成员/角色/SSO/Webhook）" }

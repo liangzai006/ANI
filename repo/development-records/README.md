@@ -43,6 +43,7 @@
 | 批次 | 内容摘要 | 文件 |
 |---|---|---|
 | CORE-HISTORICAL-DOC-MARKER-COMPAT-A | Core 历史文档 marker 兼容：Sprint 8/9/10 doc validators 接受当前 Sprint 11 入口文档中的历史门禁/已完成归档表达，同时继续拒绝 stale current marker | core-historical-doc-marker-compat-a.md |
+| ANI-14-SERVICES-API-ALIGNMENT-A | Services API 对齐工作流建立：GAP-REPORT（108 HTML 接口 vs YAML，发现 GPU容器/Sandbox/租户管理完全缺失）；扩展 services/v1.yaml（21→31 paths，新增 GPU容器/Sandbox/租户管理 schemas，所有 POST/PUT/PATCH 幂等键合规）；生成 SERVICES-TEAM-TASKS.md（21个任务）、CORE-TEAM-TASKS.md（3个任务）、TASK-DEPENDENCY-MAP.md（4批次分层并行）；make validate-architecture 通过 | GAP-REPORT-2026-06-09.md、SERVICES-TEAM-TASKS.md、CORE-TEAM-TASKS.md、TASK-DEPENDENCY-MAP.md |
 
 ### Sprint 10 Delivery（2026-06）
 
