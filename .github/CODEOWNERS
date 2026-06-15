@@ -1,0 +1,52 @@
+# CODEOWNERS — ANI Monorepo
+#
+# 规则：从上到下匹配，最后一条匹配规则生效（GitHub 规范）。
+# 格式：<路径模式> <GitHub用户名>
+#
+# 团队分工：
+#   @e92nf872rp    — ANI Core 负责人（基础设施、gateway框架、API契约、CLI、pkg/）
+#   @viccao-yue    — ANI Services 负责人（业务接口handler、services/v1.yaml、下游服务）
+
+# ── 全局默认：所有未匹配文件由 Core 负责人审核 ───────────────────────────────
+*                                                       @e92nf872rp
+
+# ── ANI Core 基础设施（Core 负责人独立审核）──────────────────────────────────
+/pkg/                                                   @e92nf872rp
+/cmd/                                                   @e92nf872rp
+/repo/api/openapi/v1.yaml                               @e92nf872rp
+/repo/api/core-beta-readiness.yaml                      @e92nf872rp
+/repo/api/core-v1-compatibility-baseline.yaml           @e92nf872rp
+/repo/services/ani-gateway/                             @e92nf872rp
+/repo/services/auth-service/                            @e92nf872rp
+/repo/services/task-service/                            @e92nf872rp
+/repo/services/metering-service/                        @e92nf872rp
+/repo/services/reconcile-worker/                        @e92nf872rp
+/repo/deploy/                                           @e92nf872rp
+/repo/scripts/                                          @e92nf872rp
+/repo/Makefile                                          @e92nf872rp
+/CLAUDE.md                                              @e92nf872rp
+/ANI-06-开发计划.md                                      @e92nf872rp
+
+# ── Services API 契约（两人共同审核）─────────────────────────────────────────
+# services/v1.yaml 是跨层合同，Core 和 Services 都必须 approve
+/repo/api/openapi/services/v1.yaml                      @e92nf872rp @viccao-yue
+/ANI-SERVICES-TEAM-GUIDE.md                             @e92nf872rp @viccao-yue
+/repo/services/ani-services.html                        @e92nf872rp @viccao-yue
+
+# ── Services 业务 handler（Services 主审 + Core 兜底）────────────────────────
+# 这些文件是 Services 团队在 ani-gateway 内实现的业务路由 handler
+# 列在 ani-gateway/ 的宽规则之后，更精确的规则覆盖上面的宽规则
+/repo/services/ani-gateway/internal/router/model_resources.go         @viccao-yue @e92nf872rp
+/repo/services/ani-gateway/internal/router/inference_resources.go     @viccao-yue @e92nf872rp
+/repo/services/ani-gateway/internal/router/kb_resources.go            @viccao-yue @e92nf872rp
+/repo/services/ani-gateway/internal/router/gpu_container_resources.go @viccao-yue @e92nf872rp
+/repo/services/ani-gateway/internal/router/sandbox_resources.go       @viccao-yue @e92nf872rp
+/repo/services/ani-gateway/internal/router/tenant_resources.go        @viccao-yue @e92nf872rp
+
+# ── Services 旧骨架（冻结只读，双人共同审核防止误改）──────────────────────────
+/repo/services/model-service/                           @viccao-yue @e92nf872rp
+/repo/services/kb-service/                             @viccao-yue @e92nf872rp
+/repo/ai/                                              @viccao-yue @e92nf872rp
+
+# ── 开发记录（Services 任务文件双人可见）─────────────────────────────────────
+/repo/development-records/SERVICES-TEAM-TASKS.md        @e92nf872rp @viccao-yue
