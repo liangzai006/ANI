@@ -18,6 +18,8 @@ Sprint 12 只闭合 Core OpenAPI handler 与 local adapters，不声明 real-pro
 
 首切片（执行中）：**网络路由 Kube-OVN**，就绪声明见 [`sprint13-netroute-kubeovn-readiness.md`](sprint13-netroute-kubeovn-readiness.md)。
 
+持续执行驱动（codex goal 逐切片自动推进 A 轨 loop-safe 工作，真实写操作留人工 B 轨）见 [`sprint13-loop-execution-prompts.md`](sprint13-loop-execution-prompts.md)。
+
 ## 代码关联矩阵
 
 | Sprint 12 批次 | 已落地代码入口 | Sprint 13 真实组件 | Sprint 13 需新增或复用的 live gate |

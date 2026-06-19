@@ -26,6 +26,7 @@
 1. `SPRINT13-REAL-PROVIDER-READINESS-PLAN`：已建立 Sprint 12 handler/ports/local adapters 到真实 provider/live gate 的代码关联计划；该文档是 Sprint 13 的执行地图，不是完成记录。
 2. 首批执行前必须选择一个明确 provider slice，例如 object-store、vector insert、instance observability、GPU inventory、network routes、storage snapshots/mount-targets 或 K8s workloads。
 3. 每个 provider slice 必须先补 real adapter 或 provider runtime 选择，再补 live gate 和 evidence JSON，再更新对应 development record；未跑通前只保持 planning/local-profile 状态。
+4. 持续执行驱动：[`development-records/sprint13-loop-execution-prompts.md`](development-records/sprint13-loop-execution-prompts.md) 提供 codex goal 持续循环提示与切片队列（S01–S07）。两轨道：**A 轨 loop-safe**（readiness/real adapter 代码/fake 单测/契约级 live-gate/文档闭环/提交，可自动）；**B 轨 human-gated**（真实集群写、组件部署、真实 live gate evidence、real-provider 标记，必须人工先只读盘点 + 确认）。循环只跑 A 轨，把切片推进到「code+contract ready, LIVE PENDING」。
 
 ## Sprint 13 执行矩阵
 
