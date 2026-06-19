@@ -36,6 +36,12 @@ type Config struct {
 	ObjectStoreSecure          bool
 	ObjectStoreBucketPrefix    string
 
+	VectorStoreProvider         string
+	VectorStoreEndpoint         string
+	VectorStoreToken            string
+	VectorStoreDatabase         string
+	VectorStoreCollectionPrefix string
+
 	WorkloadProvider               string
 	WorkloadProviderApplyEnabled   bool
 	WorkloadLifecycleProvider      string
@@ -157,6 +163,21 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("OBJECT_STORE_BUCKET_PREFIX"); value != "" {
 		c.ObjectStoreBucketPrefix = value
+	}
+	if value := os.Getenv("VECTOR_STORE_PROVIDER"); value != "" {
+		c.VectorStoreProvider = value
+	}
+	if value := os.Getenv("VECTOR_STORE_ENDPOINT"); value != "" {
+		c.VectorStoreEndpoint = value
+	}
+	if value := os.Getenv("VECTOR_STORE_TOKEN"); value != "" {
+		c.VectorStoreToken = value
+	}
+	if value := os.Getenv("VECTOR_STORE_DATABASE"); value != "" {
+		c.VectorStoreDatabase = value
+	}
+	if value := os.Getenv("VECTOR_STORE_COLLECTION_PREFIX"); value != "" {
+		c.VectorStoreCollectionPrefix = value
 	}
 	if value := os.Getenv("WORKLOAD_RECONCILE_CONTROLLER_ENABLED"); value != "" {
 		c.WorkloadReconcileControllerEnabled = parseBool(value)

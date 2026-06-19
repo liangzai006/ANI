@@ -39,6 +39,7 @@
 | SPRINT13-STORAGE-ROOK-CEPH-A-TRACK | S03 storage Rook-Ceph A 轨：`KubernetesStorageRenderer` 增加 CSI `VolumeSnapshot` 与 mount-target `Service` contract manifest，provider dry-run / REST client fake 单测覆盖，新增 `validate-storage-live-gate`；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-storage-rook-ceph-a-track.md |
 | SPRINT13-GPU-INVENTORY-DCGM-A-TRACK | S04 GPU inventory / occupancy A 轨：新增 `KubernetesGPUInventory` 只读解析 NVIDIA device-plugin NodeList capacity/product labels，新增 `validate-gpu-inventory-live-gate` 覆盖 Core `/gpu-inventory`、`/gpu-inventory/occupancy` 与 DCGM readable contract；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-gpu-inventory-dcgm-a-track.md |
 | SPRINT13-OBJECTSTORE-MINIO-A-TRACK | S05 object-store MinIO A 轨：新增 `MinIOObjectStore` S3-compatible adapter 与 bootstrap `OBJECT_STORE_PROVIDER=minio` 显式注入路径，`validate-object-store-live-gate` 覆盖 bucket create/list、upload pre-signed URL、download pre-signed URL；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-objectstore-minio-a-track.md |
+| SPRINT13-VECTOR-MILVUS-A-TRACK | S06 vector document insert Milvus A 轨：新增 `MilvusVectorStore` REST adapter 与 bootstrap `VECTOR_STORE_PROVIDER=milvus` 显式注入路径，`validate-vector-store-live-gate` 覆盖 Milvus readiness、Core vector store create、document insert 202 与 search readiness；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-vector-milvus-a-track.md |
 
 ### Sprint 11 Kickoff（2026-06）
 

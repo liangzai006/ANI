@@ -138,6 +138,14 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 	if strings.TrimSpace(cfg.ObjectStoreProvider) == "minio" {
 		storageServiceOptions = append(storageServiceOptions, runtimeadapter.WithStorageObjectStore(objectStore))
 	}
+	vectorStore, err := vectorStoreAdapter(cfg)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	vectorStoreServiceOptions := []runtimeadapter.VectorStoreServiceOption{}
+	if strings.TrimSpace(cfg.VectorStoreProvider) == "milvus" {
+		vectorStoreServiceOptions = append(vectorStoreServiceOptions, runtimeadapter.WithVectorStoreBackend(vectorStore))
+	}
 	orchestrator := runtimeadapter.NewLocalInstanceOrchestrator(
 		planner,
 		runtimeadapter.NewKubernetesDryRunRenderer(planner),
@@ -155,8 +163,8 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		MessageBus:           natsadapter.NewMessageBus(js),
 		Cache:                redisadapter.NewCacheStore(redisClient),
 		ObjectStore:          objectStore,
-		VectorStore:          vectorstore.NotConfigured{},
-		VectorStoreResources: runtimeadapter.NewLocalVectorStoreService(),
+		VectorStore:          vectorStore,
+		VectorStoreResources: runtimeadapter.NewLocalVectorStoreService(vectorStoreServiceOptions...),
 		ImageRegistry:        registry.NotConfigured{},
 		GPUInventory:         gpuInventory,
 		WorkloadRuntime:      planner,
@@ -214,6 +222,22 @@ func objectStoreAdapter(cfg Config) (ports.ObjectStore, error) {
 		})
 	default:
 		return nil, fmt.Errorf("%w: unsupported object store provider %q", ports.ErrUnsupported, cfg.ObjectStoreProvider)
+	}
+}
+
+func vectorStoreAdapter(cfg Config) (ports.VectorStore, error) {
+	switch strings.TrimSpace(cfg.VectorStoreProvider) {
+	case "", "local", "not_configured":
+		return vectorstore.NotConfigured{}, nil
+	case "milvus":
+		return vectorstore.NewMilvusVectorStore(vectorstore.MilvusVectorStoreConfig{
+			Endpoint:         cfg.VectorStoreEndpoint,
+			Token:            cfg.VectorStoreToken,
+			Database:         cfg.VectorStoreDatabase,
+			CollectionPrefix: cfg.VectorStoreCollectionPrefix,
+		})
+	default:
+		return nil, fmt.Errorf("%w: unsupported vector store provider %q", ports.ErrUnsupported, cfg.VectorStoreProvider)
 	}
 }
 

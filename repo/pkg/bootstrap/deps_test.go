@@ -7,6 +7,7 @@ import (
 
 	"github.com/kubercloud/ani/pkg/adapters/objectstore"
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
+	"github.com/kubercloud/ani/pkg/adapters/vectorstore"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -141,6 +142,24 @@ func TestNewCapabilitiesCanWireMinIOObjectStoreProvider(t *testing.T) {
 	}
 	if !strings.HasPrefix(signed.URL, "https://minio.example:9000/models-a/tenant-a/model.bin?") {
 		t.Fatalf("signed URL = %q, want MinIO endpoint prefix", signed.URL)
+	}
+}
+
+func TestNewCapabilitiesCanWireMilvusVectorStoreProvider(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		VectorStoreProvider: "milvus",
+		VectorStoreEndpoint: "http://milvus.example:19530",
+		VectorStoreToken:    "milvus-token",
+		VectorStoreDatabase: "ani",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.VectorStore.(*vectorstore.MilvusVectorStore); !ok {
+		t.Fatalf("VectorStore = %T, want MilvusVectorStore", capabilities.VectorStore)
+	}
+	if _, ok := capabilities.VectorStoreResources.(*runtimeadapter.LocalVectorStoreService); !ok {
+		t.Fatalf("VectorStoreResources = %T, want LocalVectorStoreService with backend", capabilities.VectorStoreResources)
 	}
 }
 

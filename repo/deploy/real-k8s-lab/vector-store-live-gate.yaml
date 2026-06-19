@@ -1,0 +1,28 @@
+profile: SPRINT13-VECTOR-MILVUS-A
+status: contract
+description: >
+  Sprint 13 vector-store live validation gate for proving Core vector store
+  document insert and search readiness against Milvus.
+
+required_tools:
+  - curl
+
+live_checks:
+  - id: milvus-health-ready
+    command: GET {milvus_url}/healthz
+    pass_condition: milvus_http_endpoint_is_ready
+  - id: core-vector-store-create
+    command: POST {gateway_url}/vector-stores idempotency_key={idempotency_key} name={store_name} dimension={dimension}
+    pass_condition: http_201_response_has_vector_store_ready_or_pending_state
+  - id: core-vector-documents-insert
+    command: POST {gateway_url}/vector-stores/{vector_store_id}/documents idempotency_key={idempotency_key} documents={documents}
+    pass_condition: http_202_response_has_inserted_count_task_id_status
+  - id: core-vector-search-readiness
+    command: POST {gateway_url}/vector-stores/{vector_store_id}/search vector={query_vector} top_k={top_k}
+    pass_condition: http_200_response_has_items_total_or_http_422_precondition_failed_when_index_not_ready
+
+readiness_levels:
+  contract:
+    meaning: Gate definition and local validator exist; no live Milvus proof.
+  live:
+    meaning: Core vector document insert and search readiness checks passed against the approved Milvus lab backend.
