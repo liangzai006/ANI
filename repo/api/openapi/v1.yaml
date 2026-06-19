@@ -1414,10 +1414,13 @@ components:
 
     InstanceLogListResponse:
       type: object
-      required: [items]
+      required: [items, total, dev_profile]
       properties:
         items:       { type: array, items: { $ref: '#/components/schemas/InstanceLogEntry' } }
+        total:       { type: integer }
         next_cursor: { type: string, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     InstanceEvent:
       type: object
@@ -1433,14 +1436,17 @@ components:
 
     InstanceEventListResponse:
       type: object
-      required: [items]
+      required: [items, total, dev_profile]
       properties:
         items:       { type: array, items: { $ref: '#/components/schemas/InstanceEvent' } }
+        total:       { type: integer }
         next_cursor: { type: string, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     InstanceMetrics:
       type: object
-      required: [instance_id, timestamp]
+      required: [instance_id, timestamp, dev_profile]
       properties:
         instance_id:          { type: string, format: uuid }
         timestamp:            { type: string, format: date-time }
@@ -1452,6 +1458,8 @@ components:
         gpu_memory_total_mb:  { type: number, nullable: true }
         network_rx_bytes:     { type: integer, nullable: true }
         network_tx_bytes:     { type: integer, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     InstanceSecurityEvent:
       type: object
@@ -1466,20 +1474,25 @@ components:
 
     InstanceSecurityEventListResponse:
       type: object
-      required: [items]
+      required: [items, total, dev_profile]
       properties:
         items:       { type: array, items: { $ref: '#/components/schemas/InstanceSecurityEvent' } }
+        total:       { type: integer }
         next_cursor: { type: string, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     InstanceExecSession:
       type: object
-      required: [id, instance_id, ws_url, expires_at]
+      required: [id, instance_id, ws_url, expires_at, dev_profile]
       properties:
         id:          { type: string, format: uuid }
         instance_id: { type: string, format: uuid }
         ws_url:      { type: string, format: uri }
         token:       { type: string }
         expires_at:  { type: string, format: date-time }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     CreateInstanceExecSessionRequest:
       type: object
@@ -1671,7 +1684,7 @@ components:
 
     GPUInventoryRecord:
       type: object
-      required: [id, node_name, gpu_type, gpu_index, status]
+      required: [id, node_name, gpu_type, gpu_index, status, dev_profile]
       properties:
         id:              { type: string, format: uuid }
         node_name:       { type: string }
@@ -1682,18 +1695,22 @@ components:
         status:          { type: string, enum: [available, in_use, fault, maintenance] }
         tenant_id:       { type: string, format: uuid, nullable: true }
         instance_id:     { type: string, format: uuid, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     GPUInventoryListResponse:
       type: object
-      required: [items]
+      required: [items, total, dev_profile]
       properties:
         items:       { type: array, items: { $ref: '#/components/schemas/GPUInventoryRecord' } }
         next_cursor: { type: string, nullable: true }
         total:       { type: integer }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     GPUOccupancyStats:
       type: object
-      required: [total, in_use, available, fault]
+      required: [total, in_use, available, fault, dev_profile]
       properties:
         total:     { type: integer }
         in_use:    { type: integer }
@@ -1708,10 +1725,12 @@ components:
               total:     { type: integer }
               in_use:    { type: integer }
               available: { type: integer }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     SandboxTemplate:
       type: object
-      required: [id, name, image, created_at]
+      required: [id, name, image, created_at, dev_profile]
       properties:
         id:          { type: string, format: uuid }
         name:        { type: string }
@@ -1722,13 +1741,18 @@ components:
         storage_gb:  { type: number, nullable: true }
         is_builtin:  { type: boolean, default: false }
         created_at:  { type: string, format: date-time }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
     SandboxTemplateListResponse:
       type: object
-      required: [items]
+      required: [items, total, dev_profile]
       properties:
         items:       { type: array, items: { $ref: '#/components/schemas/SandboxTemplate' } }
+        total:       { type: integer }
         next_cursor: { type: string, nullable: true }
+        dev_profile:
+          $ref: '#/components/schemas/CoreDevProfileInfo'
 
   # 公共响应
   responses:

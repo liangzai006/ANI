@@ -82,6 +82,19 @@ ALPHA_FIELDS = {
     },
 }
 
+B1_SUPPORT_SCHEMA_FIELDS = {
+    "InstanceLogListResponse": {"items", "total", "next_cursor", "dev_profile"},
+    "InstanceEventListResponse": {"items", "total", "next_cursor", "dev_profile"},
+    "InstanceMetrics": {"instance_id", "timestamp", "dev_profile"},
+    "InstanceSecurityEventListResponse": {"items", "total", "next_cursor", "dev_profile"},
+    "InstanceExecSession": {"id", "instance_id", "ws_url", "expires_at", "dev_profile"},
+    "GPUInventoryRecord": {"id", "node_name", "gpu_type", "gpu_index", "status", "dev_profile"},
+    "GPUInventoryListResponse": {"items", "total", "next_cursor", "dev_profile"},
+    "GPUOccupancyStats": {"total", "in_use", "available", "fault", "dev_profile"},
+    "SandboxTemplate": {"id", "name", "image", "created_at", "dev_profile"},
+    "SandboxTemplateListResponse": {"items", "total", "next_cursor", "dev_profile"},
+}
+
 EXPECTED_LIFECYCLE_ACTIONS = {
     "start",
     "stop",
@@ -167,6 +180,12 @@ def validate_api_contract(root: Path, errors: list[str]) -> None:
     for schema in EXPECTED_SCHEMAS:
         if schema not in schemas:
             errors.append(f"api/openapi/v1.yaml missing schema {schema}")
+
+    for schema, fields in B1_SUPPORT_SCHEMA_FIELDS.items():
+        properties = schemas.get(schema, {}).get("properties", {})
+        missing_fields = fields - set(properties)
+        if missing_fields:
+            errors.append(f"schema {schema} missing B1 support fields: {sorted(missing_fields)}")
 
     for schema, fields in ALPHA_FIELDS.items():
         properties = schemas.get(schema, {}).get("properties", {})
