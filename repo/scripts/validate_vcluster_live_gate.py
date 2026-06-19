@@ -38,6 +38,8 @@ PROFILE = "M1-K8S-LIVE-A"
 GATE_ID = "vcluster-live-gate"
 LIVE_WORKLOAD_NAME = "ani-s02-live-workload"
 LIVE_WORKLOAD_IMAGE = "registry.k8s.io/pause:3.10"
+REQUIRED_CHART_VERSION = "0.34.1"
+COMMAND_TIMEOUT_SECONDS = 120
 
 
 def fail(message: str) -> None:
@@ -86,6 +88,8 @@ def validate_contract(document: dict[str, Any]) -> None:
             value = check.get(field)
             if not isinstance(value, str) or not value.strip():
                 fail(f"live check {field} must be a non-empty string")
+        if check["id"] == "helm-install" and f"--version {REQUIRED_CHART_VERSION}" not in check["command"]:
+            fail(f"helm-install must pin vCluster chart version {REQUIRED_CHART_VERSION}")
         check_ids.add(check["id"])
     missing = REQUIRED_CHECKS - check_ids
     if missing:
@@ -134,7 +138,17 @@ class LiveConfig:
 
 class CommandRunner:
     def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
-        result = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+        try:
+            result = subprocess.run(
+                command,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(f"{' '.join(command)} timed out after {COMMAND_TIMEOUT_SECONDS}s") from err
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(f"{' '.join(command)} failed: {detail}")
@@ -212,6 +226,7 @@ def validate_live_config(config: LiveConfig) -> None:
         "gateway_url": config.gateway_url,
         "ani_bearer_token": config.ani_bearer_token,
         "kubeconfig": config.kubeconfig,
+        "chart_version": config.chart_version,
     }
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:

@@ -99,6 +99,17 @@ class VClusterLiveGateTest(unittest.TestCase):
 
         self.assertIn("live check command must be a non-empty string", str(raised.exception))
 
+    def test_contract_gate_rejects_unpinned_helm_chart_version(self) -> None:
+        document = deepcopy(gate.load_gate(gate.DEFAULT_GATE))
+        for check in document["live_checks"]:
+            if check["id"] == "helm-install":
+                check["command"] = check["command"].replace(" --version 0.34.1", "")
+
+        with self.assertRaises(SystemExit) as raised:
+            gate.validate_contract(document)
+
+        self.assertIn("helm-install must pin vCluster chart version 0.34.1", str(raised.exception))
+
     def test_cli_rejects_empty_gate_path_before_loading(self) -> None:
         document = gate.load_gate(gate.DEFAULT_GATE)
         with (
@@ -448,6 +459,14 @@ class VClusterLiveGateTest(unittest.TestCase):
         self.assertIn("Core workloads request failed", str(raised.exception))
         self.assertIn("refused", str(raised.exception))
 
+    def test_command_runner_reports_subprocess_timeout_without_hanging(self) -> None:
+        runner = gate.CommandRunner()
+        with patch.object(gate.subprocess, "run", side_effect=gate.subprocess.TimeoutExpired(["vcluster"], gate.COMMAND_TIMEOUT_SECONDS)):
+            with self.assertRaises(RuntimeError) as raised:
+                runner.run(["vcluster", "connect", "k8sclu-live"])
+
+        self.assertIn("timed out after 120s", str(raised.exception))
+
     def test_cli_live_mode_rejects_missing_gateway_before_running_commands(self) -> None:
         with patch.object(gate, "run_live") as run_live:
             with patch(
@@ -568,6 +587,21 @@ class VClusterLiveGateTest(unittest.TestCase):
                 gate.validate_live_config(config)
 
         self.assertIn("gateway_url must not contain surrounding whitespace", str(raised.exception))
+
+    def test_live_config_rejects_empty_chart_version(self) -> None:
+        config = gate.LiveConfig(
+            tenant_id="tenant-a",
+            cluster_id="k8sclu-live",
+            gateway_url="http://127.0.0.1:3000/api/v1",
+            ani_bearer_token="ani-token",
+            kubeconfig="/tmp/real-lab.kubeconfig",
+            chart_version="",
+        )
+
+        with self.assertRaises(SystemExit) as raised:
+            gate.validate_live_config(config)
+
+        self.assertIn("live mode requires chart_version", str(raised.exception))
 
     def test_cli_live_mode_rejects_evidence_output_surrounding_whitespace_before_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
