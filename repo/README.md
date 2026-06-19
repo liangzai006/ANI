@@ -6,12 +6,12 @@
 
 ```text
 当前阶段：以 ../ANI-DOCS-INDEX.md、../ANI-06-开发计划.md Section 零和 CURRENT-SPRINT.md 为准
-当前执行：Phase 1 / Sprint 11 / Core Real Deployment Validation 正式部署完成；Rook-Ceph 正式部署已完成
+当前执行：Phase 1 / Sprint 13 / Core real provider 与 live gate 收敛启动；Sprint 12 Core「Services 支撑 Handler」已完成 Tier1 local profile 收口
 当前执行入口：CURRENT-SPRINT.md
 全局计划入口：../ANI-06-开发计划.md
 文档导航：../ANI-DOCS-INDEX.md
-当前边界：真实服务器只读验证已完成；Rook-Ceph 正式部署已完成；`ani-rbd-ssd` StorageClass 已上线；KubeVirt VM RBD storage smoke 和逐节点 reboot resilience 已通过；未执行手工挂载、fstab 修改、系统盘变更、默认 StorageClass 切换或已有 PVC 迁移
-Sprint 11 执行环境：正式部署执行环境，允许已审批的 Rook-Ceph operator/CephCluster/OSD/StorageClass 部署、受控 RBD smoke test、KubeVirt VM RBD storage smoke 和逐节点 reboot resilience；仍不代表 v1.0.0 release 或完整 production ready
+当前边界：Sprint 13 必须沿用 Sprint 12 已闭合的 Core handler/ports/adapters/router 边界接入真实 provider 与 live gate；未跑通对应 live gate 前不得标 runtime/production ready
+历史真实环境：真实服务器只读验证已完成；Rook-Ceph 正式部署已完成；`ani-rbd-ssd` StorageClass 已上线；KubeVirt VM RBD storage smoke 和逐节点 reboot resilience 已通过；未执行手工挂载、fstab 修改、系统盘变更、默认 StorageClass 切换或已有 PVC 迁移
 ```
 
 ## 代码仓库结构

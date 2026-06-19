@@ -8,18 +8,18 @@
 ## 当前结论
 
 ```text
-当前阶段：Phase 1 / Sprint 12 / Core「Services 支撑 Handler」实现中
+当前阶段：Phase 1 / Sprint 13 / Core real provider 与 live gate 收敛启动
 当前不是 Phase 2：Phase 2 指 2026-10 以后延期能力
 当前入口：repo/CURRENT-SPRINT.md
-当前执行：A SPRINT12-KICKOFF-A 已完成；B1 CORE-SVC-SUPPORT-OBSERVABILITY-A 已完成；B2 CORE-SVC-SUPPORT-NETSTORE-A 已完成并复审收口；B3 CORE-SVC-SUPPORT-OBJVEC-A 已完成 Tier1 local profile
-代码边界：Sprint 12 状态必须关联 api/openapi/v1.yaml operationId、pkg/ports、pkg/adapters 与 services/ani-gateway/internal/router handler
-Sprint 13 准备：真实 provider / live gate 计划见 repo/development-records/sprint13-real-provider-readiness-plan.md；未跑通 live gate 前不得标 runtime/production ready
+当前执行：Sprint 12 已完成 A/B1/B2/B3 全部 19 个 Core handler + 2 个 422 的 Tier1 local profile；Sprint 13 进入真实 provider / live gate 收敛准备
+代码边界：Sprint 13 必须沿用 Sprint 12 已闭合的 api/openapi/v1.yaml operationId、pkg/ports、pkg/adapters 与 services/ani-gateway/internal/router handler，不得绕过 port 或新增 Services 业务逻辑
+Sprint 13 计划：真实 provider / live gate 计划见 repo/development-records/sprint13-real-provider-readiness-plan.md；未跑通 live gate 前不得标 runtime/production ready
 真实底座门禁：REAL-K8S-LAB-A / make validate-real-k8s-profile；Sprint 5 八个 live gate（网络/VM/vCluster/upgrade/Secret/HA/KMS-SM4/GPU-CAPK）已归档 evidence
 真实底座状态：Sprint 11 真实服务器只读验证与 Rook-Ceph 正式部署已闭环并转历史回归门禁（CephCluster Ready/HEALTH_OK，5 SSD OSD，ani-rbd-ssd StorageClass 上线）；RBD smoke test 与逐节点 reboot resilience 已通过
 不是实际 v1.0.0 发布；backup/restore 演练、故障注入、soak 及破坏性磁盘操作须单独审批
 ```
 
-Sprint 6-10 完成 contract/local/release-prep scaffold（installer、offline、CLI、RC readiness 均为 contract/local validation，非真实发布）；Sprint 11 为首次真实物理服务器验证阶段，包含 Rook-Ceph VM 优先块存储 live 部署，现已转为历史回归门禁。历史 Sprint 4 回归门禁（`SPEC-SPLIT-A`、`SPEC-CORE-BETA`、`SPEC-COMPAT-A`、`MOCK-A`、`DOC-API-A`、`SDK-BETA-*`、`SDK-MOCK-SMOKE-*`、`SPRINT4-CLOSURE-A`）有效。详细技术边界与验收命令见 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)，已完成批次见 [`repo/development-records/README.md`](repo/development-records/README.md)。当前活跃冲刺为 **Sprint 12 / Core「Services 支撑 Handler」实现**（基于真实代码与 `api/openapi/v1.yaml` GAP，闭合 19 个 Core handler 缺口 + 2 个 422，仅 ANI Core，Tier1 local profile）；A/B1/B2/B3 已完成且 B2 已复审收口，B3 不代表 real-provider/runtime/production ready；状态矩阵见 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)，Sprint 13 真实 provider 代码关联计划见 [`repo/development-records/sprint13-real-provider-readiness-plan.md`](repo/development-records/sprint13-real-provider-readiness-plan.md)。
+Sprint 6-10 完成 contract/local/release-prep scaffold（installer、offline、CLI、RC readiness 均为 contract/local validation，非真实发布）；Sprint 11 为首次真实物理服务器验证阶段，包含 Rook-Ceph VM 优先块存储 live 部署，现已转为历史回归门禁；Sprint 12 已完成 Core「Services 支撑 Handler」19 个 handler + 2 个 422 的 Tier1 local profile 收口。历史 Sprint 4 回归门禁（`SPEC-SPLIT-A`、`SPEC-CORE-BETA`、`SPEC-COMPAT-A`、`MOCK-A`、`DOC-API-A`、`SDK-BETA-*`、`SDK-MOCK-SMOKE-*`、`SPRINT4-CLOSURE-A`）有效。详细技术边界与验收命令见 [`repo/CURRENT-SPRINT.md`](repo/CURRENT-SPRINT.md)，已完成批次见 [`repo/development-records/README.md`](repo/development-records/README.md)。当前活跃冲刺为 **Sprint 13 / Core real provider 与 live gate 收敛**：从 Sprint 12 已闭合的 handler、ports、local adapters 接入真实组件和 evidence JSON 门禁；未跑通 live gate 前，所有 Sprint 12 能力仍只可标 Tier1 local profile，不代表 real-provider/runtime/production ready。
 
 ---
 

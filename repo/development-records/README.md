@@ -6,7 +6,7 @@
 > - **当前冲刺任务** → `repo/CURRENT-SPRINT.md`（每冲刺更新）
 > - **已完成批次详情** → 本文件（每批次完成后追加）
 
-> 当前执行：**Sprint 12 / Core「Services 支撑 Handler」实现**。当前闭合 `api/openapi/v1.yaml` 已声明但网关未实现的 Core handler 缺口；仅 ANI Core，Tier1 local profile。`CORE-SVC-SUPPORT-OBSERVABILITY-A` 已完成实例可观测、GPU 清单/占用和 Sandbox 模板 catalog handler；`CORE-SVC-SUPPORT-NETSTORE-A` 已完成网络路由、卷快照、mount-targets、K8s workloads 与 2 个 422，并完成二次复审收口；`CORE-SVC-SUPPORT-OBJVEC-A` 已完成对象存储 bucket/object 预签名 URL 与 vector document insert handler；不代表 real-provider、runtime ready 或 production ready。Sprint 11 / Core Real Deployment Validation 正式部署完成与 Rook-Ceph 正式部署结果继续作为历史回归边界保留；guard 微批次完整索引见 [guard-series/REAL-K8S-LAB-guard-index.md](guard-series/REAL-K8S-LAB-guard-index.md)（最新 ID：M1-REAL-LAB-KX）。本文只做已完成批次归档，不作为当前任务清单使用。
+> 当前执行：**Sprint 13 / Core real provider 与 live gate 收敛启动**。Sprint 12 / Core「Services 支撑 Handler」已完成 A/B1/B2/B3 全部 19 个 Core handler + 2 个 422 的 Tier1 local profile 收口；不代表 real-provider、runtime ready 或 production ready。Sprint 13 必须从 Sprint 12 已建立的 ports/adapters/router 边界接入真实组件并形成可复跑 live gate 与 evidence JSON。Sprint 11 / Core Real Deployment Validation 正式部署完成与 Rook-Ceph 正式部署结果继续作为历史回归边界保留；guard 微批次完整索引见 [guard-series/REAL-K8S-LAB-guard-index.md](guard-series/REAL-K8S-LAB-guard-index.md)（最新 ID：M1-REAL-LAB-KX）。本文只做已完成批次归档，不作为当前任务清单使用。
 > 历史校准记录（2026-05-20/2026-05-21）：Sprint 2/3/4 的 API、SDK、Mock、Docs 与记录闭环已归档；这些记录只解释历史切换，不代表当前执行阶段。
 
 ---
@@ -27,6 +27,7 @@
 | CORE-SVC-SUPPORT-OBSERVABILITY-A | B1 实例可观测与 GPU/Sandbox catalog handler：新增实例 logs/events/metrics/security-events/exec session，只读观测 port + local adapter；新增 GPU inventory/occupancy handler 与 sandbox template catalog；全部为 Tier1 local profile，响应带 dev_profile，不声明 runtime/production ready | core-svc-support-observability-a.md |
 | CORE-SVC-SUPPORT-NETSTORE-A | B2 网络/存储/K8s handler：新增 network routes、volume snapshots、filesystem mount-targets、K8s workloads；searchVectorStore 非 ready 与 createK8sCluster 前置不满足返回 422 PRECONDITION_FAILED；复审收口后 createVolumeSnapshot 202 按全局约定返回 AsyncTask；全部为 Tier1 local profile，响应带 dev_profile，不声明 runtime/production ready | core-svc-support-netstore-a.md |
 | CORE-SVC-SUPPORT-OBJVEC-A | B3 对象/向量 handler：新增 storage buckets、object upload/download 预签名 URL、vector document insert；复用 `ports.ObjectStore` 与 `ports.VectorStore.Upsert` 边界；全部为 Tier1 local profile，不声明 runtime/production ready | core-svc-support-objvec-a.md |
+| SPRINT12-CLOSURE-A | Sprint 12 收口：A/B1/B2/B3 全部 19 个 Core handler + 2 个 422 经 OpenAPI、ports/adapters、Gateway handler、测试和文档闭环；进入 Sprint 13 real provider/live gate 收敛 | sprint12-closure-core-svc-support.md |
 
 ### Sprint 13 Planning（2026-06）
 
