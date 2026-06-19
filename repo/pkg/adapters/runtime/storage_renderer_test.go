@@ -85,3 +85,53 @@ func TestKubernetesStorageRendererRendersObjectMetadataIntent(t *testing.T) {
 		}
 	}
 }
+
+func TestKubernetesStorageRendererRendersVolumeSnapshot(t *testing.T) {
+	renderer := NewKubernetesStorageRenderer()
+
+	manifests, err := renderer.RenderVolumeSnapshot(context.Background(), ports.VolumeSnapshotRecord{
+		TenantID:   "tenant-a",
+		SnapshotID: "snap_daily",
+		VolumeID:   "vol_data",
+		Name:       "daily",
+		Status:     ports.VolumeSnapshotCreating,
+		SizeBytes:  8 * 1024 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("RenderVolumeSnapshot() error = %v", err)
+	}
+	if manifests[0].Provider != "kubernetes" || manifests[0].Kind != "VolumeSnapshot" {
+		t.Fatalf("manifest = %#v, want kubernetes VolumeSnapshot", manifests[0])
+	}
+	content := manifests[0].Content
+	for _, want := range []string{`"apiVersion": "snapshot.storage.k8s.io/v1"`, `"kind": "VolumeSnapshot"`, "snap-snap-daily", "ani-tenant-tenant-a", "vol-vol-data"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("rendered volume snapshot missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestKubernetesStorageRendererRendersFilesystemMountTargetService(t *testing.T) {
+	renderer := NewKubernetesStorageRenderer()
+
+	manifests, err := renderer.RenderFilesystemMountTarget(context.Background(), ports.FilesystemMountTargetRecord{
+		TenantID:      "tenant-a",
+		MountTargetID: "mt_shared",
+		FilesystemID:  "fs_shared",
+		SubnetID:      "subnet-a",
+		IPAddress:     "10.0.1.25",
+		Status:        ports.MountTargetCreating,
+	})
+	if err != nil {
+		t.Fatalf("RenderFilesystemMountTarget() error = %v", err)
+	}
+	if manifests[0].Provider != "kubernetes" || manifests[0].Kind != "Service" {
+		t.Fatalf("manifest = %#v, want kubernetes Service", manifests[0])
+	}
+	content := manifests[0].Content
+	for _, want := range []string{`"kind": "Service"`, `"type": "ClusterIP"`, "mt-mt-shared", "ani-tenant-tenant-a", "fs_shared", "10.0.1.25"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("rendered mount target missing %q:\n%s", want, content)
+		}
+	}
+}

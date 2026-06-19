@@ -119,6 +119,10 @@ func validateProviderDryRunDocument(provider string, doc map[string]any) error {
 			if apiVersion != "v1" {
 				return fmt.Errorf("kubernetes PersistentVolumeClaim requires v1")
 			}
+		case "VolumeSnapshot":
+			if apiVersion != "snapshot.storage.k8s.io/v1" {
+				return fmt.Errorf("kubernetes VolumeSnapshot requires snapshot.storage.k8s.io/v1")
+			}
 		default:
 			return fmt.Errorf("kubernetes provider does not allow kind %q", kind)
 		}

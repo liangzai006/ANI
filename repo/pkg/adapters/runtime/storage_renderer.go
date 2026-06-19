@@ -100,6 +100,86 @@ func (r *KubernetesStorageRenderer) RenderObject(_ context.Context, record ports
 	return []ports.WorkloadManifest{{Name: name, Kind: "ObjectMetadata", Provider: "objectstore", Content: content}}, nil
 }
 
+func (r *KubernetesStorageRenderer) RenderVolumeSnapshot(_ context.Context, record ports.VolumeSnapshotRecord) ([]ports.WorkloadManifest, error) {
+	if strings.TrimSpace(record.TenantID) == "" {
+		return nil, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.SnapshotID) == "" {
+		return nil, fmt.Errorf("%w: snapshot id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.VolumeID) == "" {
+		return nil, fmt.Errorf("%w: volume id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.Name) == "" {
+		return nil, fmt.Errorf("%w: snapshot name is required", ports.ErrInvalid)
+	}
+	if record.Status == "" {
+		return nil, fmt.Errorf("%w: snapshot status is required", ports.ErrInvalid)
+	}
+	if record.SizeBytes < 0 {
+		return nil, fmt.Errorf("%w: snapshot size_bytes must not be negative", ports.ErrInvalid)
+	}
+	name := storageProviderName("snap", record.SnapshotID)
+	content := manifest(map[string]any{
+		"apiVersion": "snapshot.storage.k8s.io/v1",
+		"kind":       "VolumeSnapshot",
+		"metadata":   storageProviderNamespacedMetadata(record.TenantID, name, "volume_snapshot", record.SnapshotID),
+		"spec": map[string]any{
+			"source": map[string]any{
+				"persistentVolumeClaimName": storageProviderName("vol", record.VolumeID),
+			},
+		},
+	})
+	return []ports.WorkloadManifest{{Name: name, Kind: "VolumeSnapshot", Provider: "kubernetes", Content: content}}, nil
+}
+
+func (r *KubernetesStorageRenderer) RenderFilesystemMountTarget(_ context.Context, record ports.FilesystemMountTargetRecord) ([]ports.WorkloadManifest, error) {
+	if strings.TrimSpace(record.TenantID) == "" {
+		return nil, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.MountTargetID) == "" {
+		return nil, fmt.Errorf("%w: mount target id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.FilesystemID) == "" {
+		return nil, fmt.Errorf("%w: filesystem id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(record.SubnetID) == "" {
+		return nil, fmt.Errorf("%w: subnet id is required", ports.ErrInvalid)
+	}
+	if record.Status == "" {
+		return nil, fmt.Errorf("%w: mount target status is required", ports.ErrInvalid)
+	}
+	name := storageProviderName("mt", record.MountTargetID)
+	metadata := storageProviderNamespacedMetadata(record.TenantID, name, "filesystem_mount_target", record.MountTargetID)
+	metadata["annotations"] = map[string]string{
+		"ani.kubercloud.io/filesystem-id":    record.FilesystemID,
+		"ani.kubercloud.io/subnet-id":        record.SubnetID,
+		"ani.kubercloud.io/mount-target-ip":  record.IPAddress,
+		"ani.kubercloud.io/storage-contract": "filesystem-mount-target",
+	}
+	content := manifest(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata":   metadata,
+		"spec": map[string]any{
+			"type": "ClusterIP",
+			"selector": map[string]string{
+				"ani.kubercloud.io/storage-kind":     "filesystem",
+				"ani.kubercloud.io/storage-resource": record.FilesystemID,
+			},
+			"ports": []any{
+				map[string]any{
+					"name":       "nfs",
+					"port":       2049,
+					"targetPort": 2049,
+					"protocol":   "TCP",
+				},
+			},
+		},
+	})
+	return []ports.WorkloadManifest{{Name: name, Kind: "Service", Provider: "kubernetes", Content: content}}, nil
+}
+
 func storageProviderNamespacedMetadata(tenantID string, name string, resourceKind string, resourceID string) map[string]any {
 	return map[string]any{
 		"name":      name,

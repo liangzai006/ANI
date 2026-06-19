@@ -1,0 +1,32 @@
+profile: SPRINT13-STORAGE-ROOK-CEPH-A
+status: contract
+description: >
+  Sprint 13 storage live validation gate for proving Core volume snapshot
+  and filesystem mount-target contract readiness against Rook-Ceph / CSI /
+  NFS or an equivalent filesystem backend.
+
+required_tools:
+  - kubectl
+
+live_checks:
+  - id: core-volume-create
+    command: POST {gateway_url}/volumes name={volume_name}
+    pass_condition: http_2xx_response_has_volume_id
+  - id: core-volume-snapshot-create
+    command: POST {gateway_url}/volumes/{volume_id}/snapshots name={snapshot_name}
+    pass_condition: http_202_response_has_async_task
+  - id: core-volume-snapshots-list
+    command: GET {gateway_url}/volumes/{volume_id}/snapshots
+    pass_condition: http_2xx_response_has_snapshot_items
+  - id: core-filesystem-create
+    command: POST {gateway_url}/filesystems name={filesystem_name}
+    pass_condition: http_2xx_response_has_filesystem_id
+  - id: core-mount-targets-list
+    command: GET {gateway_url}/filesystems/{filesystem_id}/mount-targets
+    pass_condition: http_2xx_response_has_mount_target_items
+
+readiness_levels:
+  contract:
+    meaning: Gate definition and local validator exist; no live Rook-Ceph/CSI/NFS proof.
+  live:
+    meaning: Core storage snapshot and mount-target checks passed against the approved real lab backend.

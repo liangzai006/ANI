@@ -36,6 +36,7 @@
 | SPRINT13-REAL-PROVIDER-READINESS-PLAN | Sprint 13 真实 provider / live gate 代码关联计划：把 Sprint 12 B1/B2/B3 的 handler、ports、local adapters 映射到真实组件和 live gate；未执行 live gate 前不标 runtime/production ready | sprint13-real-provider-readiness-plan.md |
 | SPRINT13-NETROUTE-KUBEOVN-A-TRACK | S01 网络路由 Kube-OVN A 轨：adapter-local route→`Vpc.spec.staticRoutes` renderer、provider dry-run fake 单测、`validate-kubeovn-network-live-gate` route contract；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-netroute-kubeovn-a-track.md |
 | SPRINT13-K8S-WORKLOADS-VCLUSTER-A-TRACK | S02 K8s workloads vCluster A 轨：real-provider cluster 经既有 proxy target 只读读取 Kubernetes API workload list，fake 单测覆盖 Deployment 解析，`validate-vcluster-live-gate` 增加 `core-workloads-list` contract；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-k8s-workloads-vcluster-a-track.md |
+| SPRINT13-STORAGE-ROOK-CEPH-A-TRACK | S03 storage Rook-Ceph A 轨：`KubernetesStorageRenderer` 增加 CSI `VolumeSnapshot` 与 mount-target `Service` contract manifest，provider dry-run / REST client fake 单测覆盖，新增 `validate-storage-live-gate`；状态 code+contract ready, LIVE PENDING，不标 real-provider/runtime/production ready | sprint13-storage-rook-ceph-a-track.md |
 
 ### Sprint 11 Kickoff（2026-06）
 

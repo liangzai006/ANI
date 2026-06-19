@@ -129,6 +129,46 @@ func TestKubernetesRESTClientApplyManifestsSupportsSecret(t *testing.T) {
 	}
 }
 
+func TestKubernetesRESTClientApplyManifestsSupportsVolumeSnapshot(t *testing.T) {
+	var gotPath string
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotPath = r.URL.String()
+		if r.Method != http.MethodPatch {
+			t.Fatalf("method = %s, want PATCH", r.Method)
+		}
+		return jsonResponse(http.StatusOK, `{"kind":"VolumeSnapshot"}`), nil
+	})
+
+	client := newTestKubernetesRESTClient(t, transport)
+	refs, err := client.ApplyManifests(context.Background(), []ports.WorkloadManifest{{
+		Provider: "kubernetes",
+		Kind:     "VolumeSnapshot",
+		Name:     "snap-daily",
+		Content: `{
+  "apiVersion": "snapshot.storage.k8s.io/v1",
+  "kind": "VolumeSnapshot",
+  "metadata": {
+    "name": "snap-daily",
+    "namespace": "ani-tenant-tenant-a"
+  },
+  "spec": {
+    "source": {
+      "persistentVolumeClaimName": "vol-data"
+    }
+  }
+}`,
+	}})
+	if err != nil {
+		t.Fatalf("ApplyManifests(VolumeSnapshot) error = %v", err)
+	}
+	if len(refs) != 1 || refs[0] != "kubernetes/VolumeSnapshot/snap-daily" {
+		t.Fatalf("refs = %#v, want VolumeSnapshot ref", refs)
+	}
+	if !strings.Contains(gotPath, "/apis/snapshot.storage.k8s.io/v1/namespaces/ani-tenant-tenant-a/volumesnapshots/snap-daily") {
+		t.Fatalf("path = %q, want VolumeSnapshot resource path", gotPath)
+	}
+}
+
 func TestKubernetesRESTClientSupportsClusterAPIMachineDeployment(t *testing.T) {
 	var gotPath string
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

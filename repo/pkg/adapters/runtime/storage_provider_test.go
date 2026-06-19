@@ -130,6 +130,68 @@ func TestKubernetesStorageProviderAdapterRejectsObjectStoreManifest(t *testing.T
 	}
 }
 
+func TestKubernetesStorageProviderAdapterDryRunsSnapshotAndMountTargetManifests(t *testing.T) {
+	client := &fakeKubernetesStorageProviderClient{}
+	renderer := NewKubernetesStorageRenderer()
+	snapshotManifests, err := renderer.RenderVolumeSnapshot(context.Background(), ports.VolumeSnapshotRecord{
+		TenantID:   "tenant-a",
+		SnapshotID: "snap-daily",
+		VolumeID:   "vol-data",
+		Name:       "daily",
+		Status:     ports.VolumeSnapshotCreating,
+		SizeBytes:  8 * 1024 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("RenderVolumeSnapshot() error = %v", err)
+	}
+	mountTargetManifests, err := renderer.RenderFilesystemMountTarget(context.Background(), ports.FilesystemMountTargetRecord{
+		TenantID:      "tenant-a",
+		MountTargetID: "mt-shared",
+		FilesystemID:  "fs-shared",
+		SubnetID:      "subnet-a",
+		IPAddress:     "10.0.1.25",
+		Status:        ports.MountTargetCreating,
+	})
+	if err != nil {
+		t.Fatalf("RenderFilesystemMountTarget() error = %v", err)
+	}
+
+	snapshotResult, err := NewKubernetesStorageProviderAdapter(client).DryRun(context.Background(), ports.StorageProviderDryRunRequest{
+		TenantID:        "tenant-a",
+		UserID:          "user-a",
+		ResourceKind:    "volume_snapshot",
+		ResourceID:      "snap-daily",
+		Operation:       ports.StorageProviderOperationCreate,
+		Manifests:       snapshotManifests,
+		PermissionProof: "rbac:scope:volumes:create",
+	})
+	if err != nil {
+		t.Fatalf("DryRun(snapshot) error = %v", err)
+	}
+	if !snapshotResult.Accepted || snapshotResult.ResourceRefs[0] != "kubernetes/VolumeSnapshot/snap-snap-daily" {
+		t.Fatalf("snapshot dry-run result = %#v, want accepted VolumeSnapshot ref", snapshotResult)
+	}
+
+	mountTargetResult, err := NewKubernetesStorageProviderAdapter(client).DryRun(context.Background(), ports.StorageProviderDryRunRequest{
+		TenantID:        "tenant-a",
+		UserID:          "user-a",
+		ResourceKind:    "filesystem_mount_target",
+		ResourceID:      "mt-shared",
+		Operation:       ports.StorageProviderOperationCreate,
+		Manifests:       mountTargetManifests,
+		PermissionProof: "rbac:scope:filesystems:read",
+	})
+	if err != nil {
+		t.Fatalf("DryRun(mount target) error = %v", err)
+	}
+	if !mountTargetResult.Accepted || mountTargetResult.ResourceRefs[0] != "kubernetes/Service/mt-mt-shared" {
+		t.Fatalf("mount target dry-run result = %#v, want accepted Service ref", mountTargetResult)
+	}
+	if client.dryRuns != 2 {
+		t.Fatalf("dryRuns = %d, want 2", client.dryRuns)
+	}
+}
+
 func TestKubernetesStorageProviderAdapterObservesStorageStatus(t *testing.T) {
 	client := &fakeKubernetesStorageProviderClient{
 		status: ports.StorageProviderStatusResult{
