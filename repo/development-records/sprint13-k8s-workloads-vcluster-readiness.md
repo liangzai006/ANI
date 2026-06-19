@@ -3,7 +3,7 @@
 > 记录类型：Per-slice readiness（ANI-06「真实底座组件引入强制门禁」§153 的执行前声明）
 > 工件归属：Sprint 13 / Core real provider 与 live gate 收敛
 > 执行地图：[`sprint13-real-provider-readiness-plan.md`](sprint13-real-provider-readiness-plan.md)
-> 状态：**code+contract ready, LIVE PENDING**（A 轨已完成；尚未跑通真实 live gate）。在 evidence 产出前，K8s workload list 只可标 Tier1 local profile。
+> 状态：**real-provider evidence passed for S02 workload list gate**（B 轨已完成；见 `sprint13-k8s-workloads-vcluster-live-result.md`）。不代表 production ready。
 
 ---
 
@@ -18,11 +18,11 @@
 
 | 项 | 内容 |
 |---|---|
-| **当前状态** | contract + Tier1 local profile；local profile 仍返回本地模拟 Deployment/StatefulSet；real-provider cluster 现在可经既有 proxy target 只读读取 Kubernetes API workload list。 |
-| **真实组件 + 版本** | vCluster / Kubernetes API；宿主集群 Kubernetes `v1.36.1`，vCluster 版本以 live gate 执行时 `/version` evidence 为准。 |
-| **live gate 命令** | 本地契约：`make validate-vcluster-live-gate`（已覆盖 `core-workloads-list` contract）；真实 B 轨：`python scripts/validate_vcluster_live_gate.py --live ... --evidence-output <path>`，覆盖 `GET /k8s-clusters/{id}/workloads`。 |
-| **evidence 输出路径** | `repo/development-records/sprint13-k8s-workloads-vcluster-live-result.md` + 非敏感 evidence JSON。 |
-| **失败边界（不得声称）** | 若 workload list 未在真实 vCluster API 上跑通并归档 evidence，不得标 real-provider / runtime ready / production ready；不得用 Sprint 5 `/version` proxy evidence 替代 workload list evidence。 |
+| **当前状态** | S02 workload list real-provider evidence passed；local profile 仍保留本地模拟路径，真实证据来自 Gateway `/k8s-clusters/{id}/workloads` 经 vCluster Kubernetes API observe。 |
+| **真实组件 + 版本** | 宿主集群 Kubernetes `v1.36.1`；vCluster Helm chart/app 固定 `0.34.1`；vCluster API evidence 返回 Kubernetes `v1.35.0`；vCluster CLI `v0.34.1`。 |
+| **live gate 命令** | 本地契约：`make validate-vcluster-live-gate`；真实 B 轨：`python scripts/validate_vcluster_live_gate.py --live --proxy-server http://127.0.0.1:18002 --chart-version 0.34.1 --evidence-output development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json`，覆盖临时 Deployment create、Core proxy `/version`、Core workload list observe 与 cleanup。 |
+| **evidence 输出路径** | `repo/development-records/sprint13-k8s-workloads-vcluster-live-result.md` + `repo/development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json`。 |
+| **失败边界（不得声称）** | S02 已通过 workload list evidence，但不得标 production ready；不得声称生产 per-cluster metadata target、TLS/credential 管理、长期 workload 生命周期、跨 namespace 策略或 S03-S07 已完成。 |
 
 ## 2. 代码边界
 
@@ -34,7 +34,7 @@
 ## 3. 真实服务器安全
 
 - A 轨不执行 Helm/kubectl apply，不部署或修改真实 vCluster。
-- B 轨执行前必须由人工确认 tenant、cluster、namespace、token 来源和证据输出路径；凭据不得写入可提交文件或回复。
+- B 轨已由人工确认后执行；凭据未写入可提交文件或回复。
 
 ## 4. 完成判定（A 轨）
 

@@ -1,0 +1,12 @@
+{
+  "cleanup": "deleted",
+  "core_cluster_id": "k8sclu-22cb0b6a-1fc2-4eb2-b487-528d1601a9fd",
+  "id": "vcluster-live-gate",
+  "kubectl_version": "v1.35.0",
+  "profile": "M1-K8S-LIVE-A",
+  "proxy_status": 200,
+  "status": "passed",
+  "workload_count": 1,
+  "workload_name": "ani-s02-live-workload",
+  "workloads_status": 200
+}

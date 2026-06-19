@@ -60,12 +60,6 @@ document entrypoint boundaries valid
 git diff --check: no output
 ```
 
-## 后续 B 轨
+## 后续 B 轨结果
 
-人工确认真实 tenant/cluster/namespace/token 来源后，执行：
-
-```bash
-python scripts/validate_vcluster_live_gate.py --live --evidence-output repo/development-records/sprint13-k8s-workloads-vcluster-live-result.json
-```
-
-真实 evidence 归档前，S02 保持 Tier1 local profile / LIVE PENDING。
+S02 B 轨已在 2026-06-20 完成，结果见 `sprint13-k8s-workloads-vcluster-live-result.md`，evidence 见 `live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json`。本 A-track 记录保留当时的 code+contract ready 事实，不再作为当前状态来源。

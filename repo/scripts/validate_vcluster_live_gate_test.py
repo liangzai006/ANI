@@ -17,8 +17,8 @@ class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
         self.envs: list[dict[str, str] | None] = []
-        self.posts: list[tuple[str, dict[str, object], str]] = []
-        self.gets: list[tuple[str, str]] = []
+        self.posts: list[tuple[str, dict[str, object], str, str]] = []
+        self.gets: list[tuple[str, str, str]] = []
 
     def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
@@ -29,8 +29,8 @@ class FakeRunner:
             return '{"major":"1","minor":"30"}'
         return "ok"
 
-    def post_json(self, url: str, payload: dict[str, object], bearer_token: str) -> dict[str, object]:
-        self.posts.append((url, payload, bearer_token))
+    def post_json(self, url: str, payload: dict[str, object], bearer_token: str, tenant_id: str = "") -> dict[str, object]:
+        self.posts.append((url, payload, bearer_token, tenant_id))
         if url.endswith("/k8s-clusters"):
             return {
                 "status_code": 201,
@@ -43,15 +43,15 @@ class FakeRunner:
             }
         return {"status_code": 200, "headers": {"x-upstream": "vcluster"}, "body": {"kind": "Status"}}
 
-    def get_json(self, url: str, bearer_token: str) -> dict[str, object]:
-        self.gets.append((url, bearer_token))
+    def get_json(self, url: str, bearer_token: str, tenant_id: str = "") -> dict[str, object]:
+        self.gets.append((url, bearer_token, tenant_id))
         return {
             "status_code": 200,
             "headers": {},
             "body": {
                 "items": [
                     {
-                        "name": "web",
+                        "name": "ani-s02-live-workload",
                         "namespace": "default",
                         "kind": "Deployment",
                         "replicas": 1,
@@ -85,8 +85,10 @@ class VClusterLiveGateTest(unittest.TestCase):
         self.assertIn("helm-install", check_ids)
         self.assertIn("vcluster-kubeconfig", check_ids)
         self.assertIn("kubectl-version", check_ids)
+        self.assertIn("vcluster-workload-create", check_ids)
         self.assertIn("core-proxy-version", check_ids)
         self.assertIn("core-workloads-list", check_ids)
+        self.assertIn("vcluster-workload-cleanup", check_ids)
 
     def test_contract_gate_rejects_live_check_command_non_string(self) -> None:
         document = deepcopy(gate.load_gate(gate.DEFAULT_GATE))
@@ -223,6 +225,8 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "--repository-config=",
                 "--set",
                 "sync.toHost.services.enabled=true",
+                "--version",
+                "0.34.1",
             ],
         )
         self.assertEqual(
@@ -253,6 +257,7 @@ class VClusterLiveGateTest(unittest.TestCase):
                     "version": "v1.35.0",
                 },
                 "ani-token",
+                "tenant-a",
             ),
         )
         self.assertEqual(
@@ -267,6 +272,7 @@ class VClusterLiveGateTest(unittest.TestCase):
                     "body": {},
                 },
                 "ani-token",
+                "tenant-a",
             ),
         )
         self.assertEqual(
@@ -274,9 +280,58 @@ class VClusterLiveGateTest(unittest.TestCase):
             (
                 "http://127.0.0.1:3000/api/v1/k8s-clusters/k8sclu-core-live/workloads?namespace=default&kind=Deployment",
                 "ani-token",
+                "tenant-a",
             ),
         )
         self.assertEqual(result["workload_count"], 1)
+        self.assertEqual(result["workload_name"], "ani-s02-live-workload")
+        self.assertEqual(result["cleanup"], "deleted")
+        self.assertEqual(
+            runner.commands[2],
+            [
+                "vcluster",
+                "connect",
+                "k8sclu-live",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--background-proxy=false",
+                "--server",
+                "https://k8sclu-live.example",
+                "--",
+                "kubectl",
+                "-n",
+                "default",
+                "delete",
+                "deployment",
+                "ani-s02-live-workload",
+                "--ignore-not-found=true",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[3],
+            [
+                "vcluster",
+                "connect",
+                "k8sclu-live",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--background-proxy=false",
+                "--server",
+                "https://k8sclu-live.example",
+                "--",
+                "kubectl",
+                "-n",
+                "default",
+                "create",
+                "deployment",
+                "ani-s02-live-workload",
+                "--image",
+                "registry.k8s.io/pause:3.10",
+                "--replicas",
+                "1",
+            ],
+        )
+        self.assertEqual(runner.commands[4], runner.commands[2])
 
     def test_live_gate_uses_vcluster_connect_to_run_kubectl_version_without_printing_kubeconfig(self) -> None:
         runner = VClusterCommandRunner()
@@ -307,6 +362,64 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "get",
                 "--raw",
                 "/version",
+            ],
+        )
+
+    def test_live_gate_can_use_existing_vcluster_proxy_server_for_kubectl_steps(self) -> None:
+        runner = FakeRunner()
+        result = gate.run_live(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                cluster_id="k8sclu-live",
+                gateway_url="http://127.0.0.1:3000/api/v1",
+                ani_bearer_token="ani-token",
+                kubeconfig="/tmp/real-lab.kubeconfig",
+                proxy_server="http://127.0.0.1:18002",
+            ),
+            runner=runner,
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(
+            runner.commands[1],
+            [
+                "kubectl",
+                "--server",
+                "http://127.0.0.1:18002",
+                "get",
+                "--raw",
+                "/version",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[2],
+            [
+                "kubectl",
+                "--server",
+                "http://127.0.0.1:18002",
+                "-n",
+                "default",
+                "delete",
+                "deployment",
+                "ani-s02-live-workload",
+                "--ignore-not-found=true",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[3],
+            [
+                "kubectl",
+                "--server",
+                "http://127.0.0.1:18002",
+                "-n",
+                "default",
+                "create",
+                "deployment",
+                "ani-s02-live-workload",
+                "--image",
+                "registry.k8s.io/pause:3.10",
+                "--replicas",
+                "1",
             ],
         )
 

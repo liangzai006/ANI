@@ -11,7 +11,7 @@ required_tools:
 
 live_checks:
   - id: helm-install
-    command: helm upgrade --install {cluster_id} vcluster --repo https://charts.loft.sh --namespace {namespace} --create-namespace --repository-config= --set sync.toHost.services.enabled=true
+    command: helm upgrade --install {cluster_id} vcluster --repo https://charts.loft.sh --namespace {namespace} --create-namespace --repository-config= --set sync.toHost.services.enabled=true --version 0.34.1
     pass_condition: command_succeeds
   - id: vcluster-kubeconfig
     command: vcluster connect {cluster_id} --namespace {namespace} --background-proxy=false -- kubectl get --raw /version
@@ -19,6 +19,9 @@ live_checks:
   - id: kubectl-version
     command: vcluster connect {cluster_id} --namespace {namespace} --background-proxy=false -- kubectl get --raw /version
     pass_condition: json_has_kubernetes_version
+  - id: vcluster-workload-create
+    command: kubectl create deployment ani-s02-live-workload --image registry.k8s.io/pause:3.10 --replicas 1
+    pass_condition: temporary_deployment_created_in_vcluster_default_namespace
   - id: core-cluster-register
     command: POST {gateway_url}/k8s-clusters name={cluster_id}
     pass_condition: http_2xx_response_has_cluster_id
@@ -27,7 +30,10 @@ live_checks:
     pass_condition: http_2xx
   - id: core-workloads-list
     command: GET {gateway_url}/k8s-clusters/{core_cluster_id}/workloads?namespace=default&kind=Deployment
-    pass_condition: http_2xx_response_has_workload_items
+    pass_condition: http_2xx_response_observes_ani_s02_live_workload
+  - id: vcluster-workload-cleanup
+    command: kubectl delete deployment ani-s02-live-workload --ignore-not-found=true
+    pass_condition: temporary_deployment_deleted_from_vcluster_default_namespace
 
 readiness_levels:
   contract:
