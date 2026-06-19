@@ -51,6 +51,9 @@ func TestNewCapabilitiesDefaultsToLocalProviderAdapters(t *testing.T) {
 	if _, ok := capabilities.InstanceService.(*runtimeadapter.LocalInstanceService); !ok {
 		t.Fatalf("InstanceService = %T, want LocalInstanceService with operation store", capabilities.InstanceService)
 	}
+	if _, ok := capabilities.InstanceObservability.(*runtimeadapter.LocalInstanceObservabilityService); !ok {
+		t.Fatalf("InstanceObservability = %T, want LocalInstanceObservabilityService", capabilities.InstanceObservability)
+	}
 	if _, ok := capabilities.NetworkStore.(*runtimeadapter.MetadataNetworkStore); !ok {
 		t.Fatalf("NetworkStore = %T, want MetadataNetworkStore", capabilities.NetworkStore)
 	}
@@ -186,6 +189,21 @@ func TestNewCapabilitiesCanWireKubernetesRESTOpsProvider(t *testing.T) {
 	}
 	if _, ok := capabilities.InstanceOps.(*runtimeadapter.KubernetesInstanceOps); !ok {
 		t.Fatalf("InstanceOps = %T, want KubernetesInstanceOps", capabilities.InstanceOps)
+	}
+}
+
+func TestNewCapabilitiesCanWirePrometheusInstanceObservabilityProvider(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		InstanceObservabilityProvider:      "prometheus_kubernetes",
+		InstanceObservabilityPrometheusURL: "https://prometheus.example.test",
+		KubernetesAPIHost:                  "https://kubernetes.example.test",
+		InstanceObservabilityExecBaseURL:   "wss://gateway.example.test/api/v1",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.InstanceObservability.(*runtimeadapter.PrometheusInstanceObservability); !ok {
+		t.Fatalf("InstanceObservability = %T, want PrometheusInstanceObservability", capabilities.InstanceObservability)
 	}
 }
 

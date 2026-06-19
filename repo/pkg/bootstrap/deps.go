@@ -25,43 +25,44 @@ import (
 // Capabilities exposes ANI-defined ports for loosely-coupled component access.
 // Existing raw clients stay available during the ARCH-ADAPTER migration window.
 type Capabilities struct {
-	Metadata             ports.MetadataStore
-	MessageBus           ports.MessageBus
-	Cache                ports.CacheStore
-	ObjectStore          ports.ObjectStore
-	VectorStore          ports.VectorStore
-	VectorStoreResources ports.VectorStoreService
-	ImageRegistry        ports.ImageRegistry
-	GPUInventory         ports.GPUInventory
-	WorkloadRuntime      ports.WorkloadRuntime
-	WorkloadRenderer     ports.WorkloadRenderer
-	WorkloadAdmission    ports.WorkloadAdmission
-	WorkloadPlanAudit    ports.WorkloadPlanAuditStore
-	WorkloadDryRun       ports.WorkloadProviderDryRun
-	WorkloadApply        ports.WorkloadProviderApply
-	WorkloadReconcile    ports.WorkloadStatusReconciler
-	WorkloadController   ports.WorkloadReconcileController
-	WorkloadStatus       ports.WorkloadProviderStatusReader
-	WorkloadInstances    ports.WorkloadInstanceOrchestrator
-	WorkloadStore        ports.WorkloadInstanceStore
-	WorkloadOperations   ports.WorkloadOperationStore
-	WorkloadIdentity     ports.WorkloadIdentityService
-	InstanceService      ports.WorkloadInstanceService
-	InstanceOps          ports.WorkloadInstanceOps
-	NetworkStore         ports.NetworkResourceStore
-	NetworkRenderer      ports.NetworkProviderRenderer
-	NetworkDryRun        ports.NetworkProviderDryRun
-	NetworkApply         ports.NetworkProviderApply
-	NetworkStatus        ports.NetworkProviderStatusReader
-	NetworkReconcile     ports.NetworkStatusReconciler
-	NetworkResources     ports.NetworkService
-	StorageStore         ports.StorageResourceStore
-	StorageRenderer      ports.StorageProviderRenderer
-	StorageDryRun        ports.StorageProviderDryRun
-	StorageApply         ports.StorageProviderApply
-	StorageStatus        ports.StorageProviderStatusReader
-	StorageReconcile     ports.StorageStatusReconciler
-	StorageResources     ports.StorageService
+	Metadata              ports.MetadataStore
+	MessageBus            ports.MessageBus
+	Cache                 ports.CacheStore
+	ObjectStore           ports.ObjectStore
+	VectorStore           ports.VectorStore
+	VectorStoreResources  ports.VectorStoreService
+	ImageRegistry         ports.ImageRegistry
+	GPUInventory          ports.GPUInventory
+	WorkloadRuntime       ports.WorkloadRuntime
+	WorkloadRenderer      ports.WorkloadRenderer
+	WorkloadAdmission     ports.WorkloadAdmission
+	WorkloadPlanAudit     ports.WorkloadPlanAuditStore
+	WorkloadDryRun        ports.WorkloadProviderDryRun
+	WorkloadApply         ports.WorkloadProviderApply
+	WorkloadReconcile     ports.WorkloadStatusReconciler
+	WorkloadController    ports.WorkloadReconcileController
+	WorkloadStatus        ports.WorkloadProviderStatusReader
+	WorkloadInstances     ports.WorkloadInstanceOrchestrator
+	WorkloadStore         ports.WorkloadInstanceStore
+	WorkloadOperations    ports.WorkloadOperationStore
+	WorkloadIdentity      ports.WorkloadIdentityService
+	InstanceService       ports.WorkloadInstanceService
+	InstanceOps           ports.WorkloadInstanceOps
+	InstanceObservability ports.InstanceObservability
+	NetworkStore          ports.NetworkResourceStore
+	NetworkRenderer       ports.NetworkProviderRenderer
+	NetworkDryRun         ports.NetworkProviderDryRun
+	NetworkApply          ports.NetworkProviderApply
+	NetworkStatus         ports.NetworkProviderStatusReader
+	NetworkReconcile      ports.NetworkStatusReconciler
+	NetworkResources      ports.NetworkService
+	StorageStore          ports.StorageResourceStore
+	StorageRenderer       ports.StorageProviderRenderer
+	StorageDryRun         ports.StorageProviderDryRun
+	StorageApply          ports.StorageProviderApply
+	StorageStatus         ports.StorageProviderStatusReader
+	StorageReconcile      ports.StorageStatusReconciler
+	StorageResources      ports.StorageService
 }
 
 // Deps holds all initialized external dependencies.
@@ -103,6 +104,10 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		return Capabilities{}, err
 	}
 	instanceOps, err := workloadOpsExecutor(cfg, kubeClient)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	instanceObservability, err := instanceObservabilityAdapter(cfg)
 	if err != nil {
 		return Capabilities{}, err
 	}
@@ -188,21 +193,22 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 			runtimeadapter.WithInstanceLifecycleExecutor(lifecycle),
 			runtimeadapter.WithWorkloadIdentityService(workloadIdentity),
 		),
-		InstanceOps:      instanceOps,
-		NetworkStore:     networkStore,
-		NetworkRenderer:  networkRenderer,
-		NetworkDryRun:    networkProvider,
-		NetworkApply:     networkProvider,
-		NetworkStatus:    networkProvider,
-		NetworkReconcile: runtimeadapter.NewLocalNetworkStatusReconciler(networkStore),
-		NetworkResources: runtimeadapter.NewLocalNetworkService(runtimeadapter.WithNetworkResourceStore(networkStore)),
-		StorageStore:     storageStore,
-		StorageRenderer:  runtimeadapter.NewKubernetesStorageRenderer(),
-		StorageDryRun:    storageProvider,
-		StorageApply:     storageProvider,
-		StorageStatus:    storageProvider,
-		StorageReconcile: runtimeadapter.NewLocalStorageStatusReconciler(storageStore),
-		StorageResources: runtimeadapter.NewLocalStorageService(storageServiceOptions...),
+		InstanceOps:           instanceOps,
+		InstanceObservability: instanceObservability,
+		NetworkStore:          networkStore,
+		NetworkRenderer:       networkRenderer,
+		NetworkDryRun:         networkProvider,
+		NetworkApply:          networkProvider,
+		NetworkStatus:         networkProvider,
+		NetworkReconcile:      runtimeadapter.NewLocalNetworkStatusReconciler(networkStore),
+		NetworkResources:      runtimeadapter.NewLocalNetworkService(runtimeadapter.WithNetworkResourceStore(networkStore)),
+		StorageStore:          storageStore,
+		StorageRenderer:       runtimeadapter.NewKubernetesStorageRenderer(),
+		StorageDryRun:         storageProvider,
+		StorageApply:          storageProvider,
+		StorageStatus:         storageProvider,
+		StorageReconcile:      runtimeadapter.NewLocalStorageStatusReconciler(storageStore),
+		StorageResources:      runtimeadapter.NewLocalStorageService(storageServiceOptions...),
 	}, nil
 }
 
@@ -238,6 +244,23 @@ func vectorStoreAdapter(cfg Config) (ports.VectorStore, error) {
 		})
 	default:
 		return nil, fmt.Errorf("%w: unsupported vector store provider %q", ports.ErrUnsupported, cfg.VectorStoreProvider)
+	}
+}
+
+func instanceObservabilityAdapter(cfg Config) (ports.InstanceObservability, error) {
+	switch strings.TrimSpace(cfg.InstanceObservabilityProvider) {
+	case "", "local", "not_configured":
+		return runtimeadapter.NewLocalInstanceObservabilityService(), nil
+	case "prometheus_kubernetes":
+		return runtimeadapter.NewPrometheusInstanceObservability(runtimeadapter.PrometheusInstanceObservabilityConfig{
+			PrometheusURL:          cfg.InstanceObservabilityPrometheusURL,
+			KubernetesAPIHost:      cfg.KubernetesAPIHost,
+			KubernetesBearerToken:  cfg.KubernetesBearerToken,
+			KubernetesFieldManager: cfg.KubernetesProviderFieldManager,
+			ExecBaseURL:            cfg.InstanceObservabilityExecBaseURL,
+		})
+	default:
+		return nil, fmt.Errorf("%w: unsupported instance observability provider %q", ports.ErrUnsupported, cfg.InstanceObservabilityProvider)
 	}
 }
 

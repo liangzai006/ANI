@@ -1,0 +1,35 @@
+profile: SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A
+status: contract
+description: >
+  Sprint 13 instance observability live validation gate for proving Core
+  logs, events, metrics, security-events, and exec session readiness against
+  Prometheus plus Kubernetes API / kubelet-backed signals.
+
+required_tools:
+  - curl
+
+live_checks:
+  - id: prometheus-health-ready
+    command: GET {prometheus_url}/-/ready
+    pass_condition: prometheus_http_endpoint_is_ready
+  - id: core-instance-logs-list
+    command: GET {gateway_url}/instances/{instance_id}/logs?limit={limit}
+    pass_condition: http_200_response_has_items_total_next_cursor_and_dev_profile
+  - id: core-instance-events-list
+    command: GET {gateway_url}/instances/{instance_id}/events?type=Warning
+    pass_condition: http_200_response_has_items_total_next_cursor_and_dev_profile
+  - id: core-instance-metrics-get
+    command: GET {gateway_url}/instances/{instance_id}/metrics
+    pass_condition: http_200_response_has_instance_metrics_and_dev_profile
+  - id: core-instance-security-events-list
+    command: GET {gateway_url}/instances/{instance_id}/security-events?severity=warning
+    pass_condition: http_200_response_has_items_total_next_cursor_and_dev_profile
+  - id: core-instance-exec-session-create
+    command: POST {gateway_url}/instances/{instance_id}/exec idempotency_key={idempotency_key}
+    pass_condition: http_200_response_has_ws_url_expires_at_no_long_lived_token
+
+readiness_levels:
+  contract:
+    meaning: Gate definition and local validator exist; no live Prometheus/Kubernetes proof.
+  live:
+    meaning: Core instance observability checks passed against the approved Prometheus and Kubernetes lab backend.

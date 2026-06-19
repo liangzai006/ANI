@@ -42,15 +42,18 @@ type Config struct {
 	VectorStoreDatabase         string
 	VectorStoreCollectionPrefix string
 
-	WorkloadProvider               string
-	WorkloadProviderApplyEnabled   bool
-	WorkloadLifecycleProvider      string
-	WorkloadLifecycleApplyEnabled  bool
-	WorkloadOpsProvider            string
-	WorkloadOpsEnabled             bool
-	KubernetesAPIHost              string
-	KubernetesBearerToken          string
-	KubernetesProviderFieldManager string
+	WorkloadProvider                   string
+	WorkloadProviderApplyEnabled       bool
+	WorkloadLifecycleProvider          string
+	WorkloadLifecycleApplyEnabled      bool
+	WorkloadOpsProvider                string
+	WorkloadOpsEnabled                 bool
+	InstanceObservabilityProvider      string
+	InstanceObservabilityPrometheusURL string
+	InstanceObservabilityExecBaseURL   string
+	KubernetesAPIHost                  string
+	KubernetesBearerToken              string
+	KubernetesProviderFieldManager     string
 
 	WorkloadReconcileControllerEnabled     bool
 	WorkloadReconcileNormalInterval        int
@@ -130,6 +133,15 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("WORKLOAD_OPS_ENABLED"); value != "" {
 		c.WorkloadOpsEnabled = parseBool(value)
+	}
+	if value := os.Getenv("INSTANCE_OBSERVABILITY_PROVIDER"); value != "" {
+		c.InstanceObservabilityProvider = value
+	}
+	if value := os.Getenv("INSTANCE_OBSERVABILITY_PROMETHEUS_URL"); value != "" {
+		c.InstanceObservabilityPrometheusURL = value
+	}
+	if value := os.Getenv("INSTANCE_OBSERVABILITY_EXEC_BASE_URL"); value != "" {
+		c.InstanceObservabilityExecBaseURL = value
 	}
 	if value := os.Getenv("KUBERNETES_API_HOST"); value != "" {
 		c.KubernetesAPIHost = value
