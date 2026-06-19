@@ -75,6 +75,27 @@ class InstanceObservabilityLiveGateTest(unittest.TestCase):
 
         validate_docs.assert_called_once()
 
+    def test_cli_accepts_human_gated_evidence_output_argument(self) -> None:
+        document = gate.load_gate(gate.DEFAULT_GATE)
+        evidence_path = Path(tempfile.gettempdir()) / "ani-instance-observability-evidence.json"
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "validate_instance_observability_live_gate.py",
+                    "--live",
+                    "--evidence-output",
+                    str(evidence_path),
+                ],
+            ),
+            patch.object(gate, "load_gate", return_value=document),
+            patch.object(gate, "validate_docs"),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                gate.main()
+
+        self.assertIn("human-gated", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

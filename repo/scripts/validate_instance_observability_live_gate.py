@@ -111,13 +111,24 @@ def validate_gate_path(path: str) -> None:
         fail("gate path must not contain surrounding whitespace")
 
 
+def validate_optional_output_path(path: str | None) -> None:
+    if path is None:
+        return
+    if not path.strip():
+        fail("evidence output path must not be empty")
+    if path != path.strip():
+        fail("evidence output path must not contain surrounding whitespace")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate", default=str(DEFAULT_GATE), help="instance observability live gate YAML")
     parser.add_argument("--live", action="store_true", help="reserved for human-gated live execution")
+    parser.add_argument("--evidence-output", help="reserved path for human-gated live evidence JSON")
     args = parser.parse_args()
 
     validate_gate_path(args.gate)
+    validate_optional_output_path(args.evidence_output)
     document = load_gate(Path(args.gate))
     validate_contract(document)
     validate_docs()

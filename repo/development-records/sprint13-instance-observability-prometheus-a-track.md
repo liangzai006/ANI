@@ -44,7 +44,7 @@ TestPrometheusInstanceObservabilityListsLogsEventsAndSecurityEvents PASS
 TestPrometheusInstanceObservabilityGetsMetricsFromPrometheus PASS
 TestPrometheusInstanceObservabilityCreatesIdempotentShortLivedExecSession PASS
 TestNewCapabilitiesCanWirePrometheusInstanceObservabilityProvider PASS
-InstanceObservabilityLiveGateTest: Ran 6 tests OK
+InstanceObservabilityLiveGateTest: Ran 7 tests OK
 ```
 
 已执行最终 A 轨门禁：
@@ -65,7 +65,7 @@ TestPrometheusInstanceObservabilityCreatesIdempotentShortLivedExecSession PASS
 TestNewCapabilitiesCanWirePrometheusInstanceObservabilityProvider PASS
 staged instance demo API valid
 SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A contract valid; live execution is human-gated
-Ran 6 tests in 0.009s
+Ran 7 tests in 0.010s
 OK
 validated 1 YAML files
 document entrypoint boundaries valid
