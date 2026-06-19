@@ -27,6 +27,15 @@ type Config struct {
 	HealthPort  int
 	ServiceName string
 
+	ObjectStoreProvider        string
+	ObjectStoreEndpoint        string
+	ObjectStoreAccessKeyID     string
+	ObjectStoreSecretAccessKey string
+	ObjectStoreSessionToken    string
+	ObjectStoreRegion          string
+	ObjectStoreSecure          bool
+	ObjectStoreBucketPrefix    string
+
 	WorkloadProvider               string
 	WorkloadProviderApplyEnabled   bool
 	WorkloadLifecycleProvider      string
@@ -124,6 +133,30 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"); value != "" {
 		c.KubernetesProviderFieldManager = value
+	}
+	if value := os.Getenv("OBJECT_STORE_PROVIDER"); value != "" {
+		c.ObjectStoreProvider = value
+	}
+	if value := os.Getenv("OBJECT_STORE_ENDPOINT"); value != "" {
+		c.ObjectStoreEndpoint = value
+	}
+	if value := os.Getenv("OBJECT_STORE_ACCESS_KEY_ID"); value != "" {
+		c.ObjectStoreAccessKeyID = value
+	}
+	if value := os.Getenv("OBJECT_STORE_SECRET_ACCESS_KEY"); value != "" {
+		c.ObjectStoreSecretAccessKey = value
+	}
+	if value := os.Getenv("OBJECT_STORE_SESSION_TOKEN"); value != "" {
+		c.ObjectStoreSessionToken = value
+	}
+	if value := os.Getenv("OBJECT_STORE_REGION"); value != "" {
+		c.ObjectStoreRegion = value
+	}
+	if value := os.Getenv("OBJECT_STORE_SECURE"); value != "" {
+		c.ObjectStoreSecure = parseBool(value)
+	}
+	if value := os.Getenv("OBJECT_STORE_BUCKET_PREFIX"); value != "" {
+		c.ObjectStoreBucketPrefix = value
 	}
 	if value := os.Getenv("WORKLOAD_RECONCILE_CONTROLLER_ENABLED"); value != "" {
 		c.WorkloadReconcileControllerEnabled = parseBool(value)

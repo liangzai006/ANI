@@ -128,6 +128,16 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 	networkProvider := runtimeadapter.NewKubeOVNNetworkProviderAdapter(kubeClient)
 	storageStore := runtimeadapter.NewMetadataStorageStore(metadata)
 	storageProvider := runtimeadapter.NewKubernetesStorageProviderAdapter(kubeClient)
+	objectStore, err := objectStoreAdapter(cfg)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	storageServiceOptions := []runtimeadapter.StorageServiceOption{
+		runtimeadapter.WithStorageResourceStore(storageStore),
+	}
+	if strings.TrimSpace(cfg.ObjectStoreProvider) == "minio" {
+		storageServiceOptions = append(storageServiceOptions, runtimeadapter.WithStorageObjectStore(objectStore))
+	}
 	orchestrator := runtimeadapter.NewLocalInstanceOrchestrator(
 		planner,
 		runtimeadapter.NewKubernetesDryRunRenderer(planner),
@@ -144,7 +154,7 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		Metadata:             metadata,
 		MessageBus:           natsadapter.NewMessageBus(js),
 		Cache:                redisadapter.NewCacheStore(redisClient),
-		ObjectStore:          objectstore.NotConfigured{},
+		ObjectStore:          objectStore,
 		VectorStore:          vectorstore.NotConfigured{},
 		VectorStoreResources: runtimeadapter.NewLocalVectorStoreService(),
 		ImageRegistry:        registry.NotConfigured{},
@@ -184,8 +194,27 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		StorageApply:     storageProvider,
 		StorageStatus:    storageProvider,
 		StorageReconcile: runtimeadapter.NewLocalStorageStatusReconciler(storageStore),
-		StorageResources: runtimeadapter.NewLocalStorageService(runtimeadapter.WithStorageResourceStore(storageStore)),
+		StorageResources: runtimeadapter.NewLocalStorageService(storageServiceOptions...),
 	}, nil
+}
+
+func objectStoreAdapter(cfg Config) (ports.ObjectStore, error) {
+	switch strings.TrimSpace(cfg.ObjectStoreProvider) {
+	case "", "local", "not_configured":
+		return objectstore.NotConfigured{}, nil
+	case "minio":
+		return objectstore.NewMinIOObjectStore(objectstore.MinIOObjectStoreConfig{
+			Endpoint:        cfg.ObjectStoreEndpoint,
+			AccessKeyID:     cfg.ObjectStoreAccessKeyID,
+			SecretAccessKey: cfg.ObjectStoreSecretAccessKey,
+			SessionToken:    cfg.ObjectStoreSessionToken,
+			Region:          cfg.ObjectStoreRegion,
+			Secure:          cfg.ObjectStoreSecure,
+			BucketPrefix:    cfg.ObjectStoreBucketPrefix,
+		})
+	default:
+		return nil, fmt.Errorf("%w: unsupported object store provider %q", ports.ErrUnsupported, cfg.ObjectStoreProvider)
+	}
 }
 
 func reconcileControllerConfig(cfg Config) ports.ReconcileControllerConfig {

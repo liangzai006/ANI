@@ -1,9 +1,13 @@
 package bootstrap
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/kubercloud/ani/pkg/adapters/objectstore"
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
+	"github.com/kubercloud/ani/pkg/ports"
 )
 
 func TestConnectMetadataStoreRejectsInvalidDatabaseURL(t *testing.T) {
@@ -110,6 +114,33 @@ func TestNewCapabilitiesCanWireKubernetesRESTProvider(t *testing.T) {
 	}
 	if _, ok := capabilities.WorkloadStatus.(*runtimeadapter.KubernetesProviderAdapter); !ok {
 		t.Fatalf("WorkloadStatus = %T, want KubernetesProviderAdapter", capabilities.WorkloadStatus)
+	}
+}
+
+func TestNewCapabilitiesCanWireMinIOObjectStoreProvider(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		ObjectStoreProvider:        "minio",
+		ObjectStoreEndpoint:        "https://minio.example:9000",
+		ObjectStoreAccessKeyID:     "minio",
+		ObjectStoreSecretAccessKey: "secret",
+		ObjectStoreRegion:          "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.ObjectStore.(*objectstore.MinIOObjectStore); !ok {
+		t.Fatalf("ObjectStore = %T, want MinIOObjectStore", capabilities.ObjectStore)
+	}
+	signed, err := capabilities.ObjectStore.SignedUploadURL(t.Context(), ports.ObjectRef{
+		TenantID:    "tenant-a",
+		BucketClass: ports.BucketClass("models-a"),
+		ObjectKey:   "model.bin",
+	}, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("SignedUploadURL() error = %v", err)
+	}
+	if !strings.HasPrefix(signed.URL, "https://minio.example:9000/models-a/tenant-a/model.bin?") {
+		t.Fatalf("signed URL = %q, want MinIO endpoint prefix", signed.URL)
 	}
 }
 

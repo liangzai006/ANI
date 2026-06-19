@@ -1,0 +1,33 @@
+profile: SPRINT13-OBJECTSTORE-MINIO-A
+status: contract
+description: >
+  Sprint 13 object-store live validation gate for proving Core bucket and
+  object pre-signed URL contract readiness against MinIO / S3 compatible
+  object storage.
+
+required_tools:
+  - curl
+  - mc
+
+live_checks:
+  - id: minio-health-ready
+    command: mc alias set ani-minio {minio_url} {access_key} {secret_key} && mc ls ani-minio
+    pass_condition: minio_alias_connects_and_bucket_namespace_is_readable
+  - id: core-bucket-create
+    command: POST {gateway_url}/buckets idempotency_key={idempotency_key} name={bucket_name}
+    pass_condition: http_201_response_has_storage_bucket_record
+  - id: core-buckets-list
+    command: GET {gateway_url}/buckets
+    pass_condition: http_200_response_has_items_total_next_cursor
+  - id: core-object-upload-presign
+    command: POST {gateway_url}/objects/upload idempotency_key={idempotency_key} bucket_id={bucket_id} key={object_key}
+    pass_condition: http_200_response_has_object_id_upload_url_expires_at
+  - id: core-object-download-presign
+    command: GET {gateway_url}/objects/{object_id}/download
+    pass_condition: http_200_response_has_download_url_expires_at
+
+readiness_levels:
+  contract:
+    meaning: Gate definition and local validator exist; no live MinIO proof.
+  live:
+    meaning: Core bucket and object pre-signed URL checks passed against the approved MinIO lab backend.
