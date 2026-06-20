@@ -3,12 +3,12 @@
 > 记录类型：Sprint 13 A-track completion record
 > 日期：2026-06-19
 > 范围：ANI Core only
-> 状态：code+contract ready, LIVE PENDING
+> 状态：A 轨已完成；后续 B 轨已通过 production-shaped live gate（历史 LIVE PENDING token 仅作门禁兼容语境）
 > 批次标识：SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A-TRACK
 
 ## 目标
 
-把 Sprint 12 已落地的 instance observability 从 Tier1 local profile 扩展到 Prometheus + Kubernetes API / kubelet-backed signals 的真实 provider contract 代码边界。A 轨只做 adapter 代码、fake/mock 单测、契约级 live-gate 和文档闭环；不部署 Prometheus、不访问真实 Kubernetes API、不跑真实 live gate。
+把 Sprint 12 已落地的 instance observability 从 Tier1 local profile 扩展到 Prometheus + Kubernetes API / kubelet-backed signals 的真实 provider contract 代码边界。A 轨只做 adapter 代码、fake/mock 单测、契约级 live-gate 和文档闭环；不部署 Prometheus、不访问真实 Kubernetes API、不跑真实 live gate。后续 B 轨已使用 production-shaped Gateway 与真实 Prometheus/Kubernetes API/kubelet backend 跑通 live gate。
 
 ## 实现
 
@@ -19,8 +19,8 @@
   - `GetMetrics` 通过 Prometheus `/api/v1/query` 读取 pod-scoped metric sample，返回 `InstanceMetricsRecord`。
   - `ListSecurityEvents` 将 Kubernetes Warning event 投影为 `kubernetes_warning` security event。
   - `CreateExecSession` 返回短 TTL Core WebSocket URL，并按 `idempotency_key` 幂等；不返回长期 token。
-- `pkg/bootstrap/deps.go` / `pkg/bootstrap/server.go`
-  - 新增显式 `INSTANCE_OBSERVABILITY_PROVIDER=prometheus_kubernetes` 配置路径，构造并注入 `Capabilities.InstanceObservability`。
+- `services/ani-gateway/instance_observability_runtime.go` / `services/ani-gateway/main.go`
+  - 新增显式 `INSTANCE_OBSERVABILITY_PROVIDER=prometheus_kubernetes` 配置路径，构造并注入 Gateway router 的 `ports.InstanceObservability`。
   - 默认配置保持 `LocalInstanceObservabilityService` dev_profile，不把 contract adapter 标为 runtime ready。
 - `deploy/real-k8s-lab/instance-observability-live-gate.yaml`
   - 新增 `SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A` live gate contract。
@@ -32,8 +32,8 @@
 - 未修改 `ports.InstanceObservability` 签名。
 - 未修改 Gateway handler。
 - 未新增 `/api/v1/svc`。
-- 未执行真实服务器/集群写操作。
-- 未把 instance observability 标记为 real-provider/runtime/production ready。
+- A 轨未执行真实服务器/集群写操作。
+- B 轨仅声明组件级 production-shaped acceptance passed；不声明 full platform production ready。
 
 ## 验证
 
@@ -74,4 +74,10 @@ git diff --check passed
 
 ## 后续 B 轨
 
-人工确认真实 Prometheus endpoint、Kubernetes API host、credential 来源、tenant namespace 映射、pod/instance label 策略、exec proxy 方案和 evidence 输出路径后，执行 human-gated live gate 并归档非敏感 evidence。真实 evidence 归档前，S07 保持 Tier1 local profile / dev_profile / LIVE PENDING。
+已完成。B 轨归档：
+
+- result：`sprint13-instance-observability-prometheus-live-result.md`
+- evidence：`live-evidence/sprint13-instance-observability-prometheus-live-evidence.json`
+- gate：`validate-instance-observability-live-gate --live --production-shaped --cleanup`
+
+本结果只代表 S07 组件级 production-shaped acceptance passed，不代表 full platform production ready、长期 Prometheus HA/持久化或正式镜像发布完成。

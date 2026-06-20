@@ -132,6 +132,12 @@ spec:
                   key: database
             - name: VECTOR_STORE_COLLECTION_PREFIX
               value: ani_s13_
+            - name: INSTANCE_OBSERVABILITY_PROVIDER
+              value: prometheus_kubernetes
+            - name: INSTANCE_OBSERVABILITY_PROMETHEUS_URL
+              value: http://sprint13-prometheus.ani-s07-observability.svc.cluster.local:9090
+            - name: INSTANCE_OBSERVABILITY_EXEC_BASE_URL
+              value: wss://ani-gateway.ani-system.svc.cluster.local:8080/api/v1
           readinessProbe:
             httpGet:
               path: /readyz

@@ -51,7 +51,7 @@ class InstanceObservabilityLiveGateTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             gate.validate_contract(document)
 
-        self.assertIn("status must be contract or live", str(raised.exception))
+        self.assertIn("status must be contract, live or passed", str(raised.exception))
 
     def test_cli_reports_missing_gate_path_without_traceback(self) -> None:
         missing_gate = Path(tempfile.gettempdir()) / "ani-missing-instance-observability-live-gate.yaml"
@@ -75,7 +75,7 @@ class InstanceObservabilityLiveGateTest(unittest.TestCase):
 
         validate_docs.assert_called_once()
 
-    def test_cli_accepts_human_gated_evidence_output_argument(self) -> None:
+    def test_cli_live_invokes_automated_validator(self) -> None:
         document = gate.load_gate(gate.DEFAULT_GATE)
         evidence_path = Path(tempfile.gettempdir()) / "ani-instance-observability-evidence.json"
         with (
@@ -84,17 +84,82 @@ class InstanceObservabilityLiveGateTest(unittest.TestCase):
                 [
                     "validate_instance_observability_live_gate.py",
                     "--live",
+                    "--gateway-url",
+                    "https://gateway.example/api/v1",
+                    "--ani-bearer-token",
+                    "redacted-test-token",
+                    "--prometheus-url",
+                    "https://prometheus.example",
                     "--evidence-output",
                     str(evidence_path),
                 ],
             ),
             patch.object(gate, "load_gate", return_value=document),
             patch.object(gate, "validate_docs"),
+            patch.object(gate, "validate_live") as validate_live,
         ):
-            with self.assertRaises(SystemExit) as raised:
-                gate.main()
+            gate.main()
 
-        self.assertIn("human-gated", str(raised.exception))
+        validate_live.assert_called_once()
+        live_args = validate_live.call_args.args[0]
+        self.assertEqual(live_args.gateway_url, "https://gateway.example/api/v1")
+        self.assertEqual(live_args.prometheus_url, "https://prometheus.example")
+        self.assertEqual(live_args.evidence_output, str(evidence_path))
+
+    def test_production_shaped_live_rejects_local_gateway(self) -> None:
+        args = gate.LiveArgs(
+            gateway_url="http://127.0.0.1:18004/api/v1",
+            ani_bearer_token="redacted-test-token",
+            prometheus_url="https://prometheus.example",
+            kubeconfig="",
+            namespace="ani-tenant-tenant-a",
+            instance_name="sprint13-observability-live",
+            evidence_output="",
+            production_shaped=True,
+            cleanup=True,
+        )
+
+        with self.assertRaises(SystemExit) as raised:
+            gate.validate_production_shaped_live_args(args)
+
+        self.assertIn("non-local production gateway URL", str(raised.exception))
+
+    def test_target_manifest_uses_single_rfc3339_event_timestamp(self) -> None:
+        manifest = gate.target_manifest("ani-tenant-tenant-a", "sprint13-observability-live")
+
+        self.assertIn("firstTimestamp:", manifest)
+        self.assertIn("lastTimestamp:", manifest)
+        self.assertIn('Z"', manifest)
+
+    def test_live_derives_target_namespace_from_core_tenant_id(self) -> None:
+        args = gate.LiveArgs(
+            gateway_url="https://gateway.example/api/v1",
+            ani_bearer_token="redacted-test-token",
+            prometheus_url="https://prometheus.example",
+            kubeconfig="",
+            namespace="auto",
+            instance_name="sprint13-observability-live",
+            evidence_output="",
+            production_shaped=True,
+            cleanup=False,
+        )
+        responses = {
+            ("POST", "https://gateway.example/api/v1/instances"): (201, {"instance": {"id": "inst-1", "tenant_id": "tenant_a"}}),
+            ("GET", "https://gateway.example/api/v1/instances/inst-1/logs?limit=20"): (200, {"items": [{"message": "ok"}], "total": 1}),
+            ("GET", "https://gateway.example/api/v1/instances/inst-1/events?type=Warning"): (200, {"items": [{"reason": "Warning"}], "total": 1}),
+            ("GET", "https://gateway.example/api/v1/instances/inst-1/metrics"): (200, {"cpu_utilization_pct": 1.0}),
+            ("GET", "https://gateway.example/api/v1/instances/inst-1/security-events?severity=warning"): (200, {"items": [{"severity": "warning"}], "total": 1}),
+            ("POST", "https://gateway.example/api/v1/instances/inst-1/exec"): (200, {"ws_url": "wss://gateway.example/api/v1/instances/sprint13/exec/session-1"}),
+        }
+
+        def json_requester(method: str, url: str, _token: str, _payload: dict[str, object] | None = None) -> tuple[int, dict[str, object]]:
+            return responses[(method, url)]
+
+        with patch.object(gate, "ensure_target_pod") as ensure_target_pod:
+            gate.validate_live(args, json_requester=json_requester, text_requester=lambda _url: (200, "ready"))
+
+        ensure_target_pod.assert_called_once()
+        self.assertEqual(args.namespace, "ani-tenant-tenant-a")
 
 
 if __name__ == "__main__":

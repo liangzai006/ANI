@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Sprint 13 S01-S04 B-track production-shaped evidence boundaries."""
+"""Validate Sprint 13 S01-S07 B-track production-shaped evidence boundaries."""
 
 from __future__ import annotations
 
@@ -104,6 +104,19 @@ SLICES = {
             "production_vector_collection_lifecycle",
         },
     },
+    "S07": {
+        "evidence": RECORD_ROOT / "live-evidence/sprint13-instance-observability-prometheus-live-evidence.json",
+        "result": RECORD_ROOT / "sprint13-instance-observability-prometheus-live-result.md",
+        "required_missing": {
+            "production_prometheus_service_or_query",
+            "production_kubelet_or_kubernetes_api_access",
+        },
+        "required_proof": {
+            "production_gateway",
+            "production_prometheus_service_or_query",
+            "production_kubelet_or_kubernetes_api_access",
+        },
+    },
 }
 
 ALLOWED_PRODUCTION_STATUSES = {"pending", "passed"}
@@ -178,6 +191,9 @@ REQUIRED_DEPLOYMENT_ENVS = {
     "VECTOR_STORE_TOKEN",
     "VECTOR_STORE_DATABASE",
     "VECTOR_STORE_COLLECTION_PREFIX",
+    "INSTANCE_OBSERVABILITY_PROVIDER",
+    "INSTANCE_OBSERVABILITY_PROMETHEUS_URL",
+    "INSTANCE_OBSERVABILITY_EXEC_BASE_URL",
 }
 REQUIRED_PRODUCTION_READINESS_DOC_TOKENS = {
     "Auth/Dex production gate",
@@ -270,6 +286,8 @@ def validate_evidence(slice_id: str, path: Path) -> None:
         validate_s05_object_store_evidence(payload)
     if slice_id == "S06":
         validate_s06_vector_store_evidence(payload)
+    if slice_id == "S07":
+        validate_s07_instance_observability_evidence(payload)
 
 
 def validate_s01_gateway_production_evidence(payload: dict[str, Any]) -> None:
@@ -400,6 +418,34 @@ def validate_s06_vector_store_evidence(payload: dict[str, Any]) -> None:
         fail("S06 production_shape passed requires milvus_health_ready=true")
     if payload.get("cleanup_enabled") is not True:
         fail("S06 production_shape passed requires cleanup_enabled=true")
+
+
+def validate_s07_instance_observability_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "prometheus_health_status": 200,
+        "instance_create_status": 201,
+        "logs_status": 200,
+        "events_status": 200,
+        "metrics_status": 200,
+        "security_events_status": 200,
+        "exec_status": 200,
+        "cleanup_status": 200,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S07 production_shape passed requires {field}={expected}")
+    for field in ("logs_count", "events_count", "security_events_count"):
+        value = payload.get(field)
+        if not isinstance(value, int) or value < 1:
+            fail(f"S07 production_shape passed requires {field} >= 1")
+    if payload.get("metrics_cpu_present") is not True:
+        fail("S07 production_shape passed requires metrics_cpu_present=true")
+    if payload.get("exec_ws_url_present") is not True:
+        fail("S07 production_shape passed requires exec_ws_url_present=true")
+    if payload.get("exec_token_exposed") is not False:
+        fail("S07 production_shape passed requires exec_token_exposed=false")
+    if payload.get("cleanup_enabled") is not True:
+        fail("S07 production_shape passed requires cleanup_enabled=true")
 
 
 def validate_result_doc(slice_id: str, path: Path) -> None:
@@ -560,6 +606,12 @@ def validate_production_deployment_contract() -> None:
             fail(f"production Deployment must not commit {name} literal")
     if env_by_name.get("VECTOR_STORE_COLLECTION_PREFIX", {}).get("value") != "ani_s13_":
         fail("production Deployment VECTOR_STORE_COLLECTION_PREFIX must be ani_s13_")
+    if env_by_name.get("INSTANCE_OBSERVABILITY_PROVIDER", {}).get("value") != "prometheus_kubernetes":
+        fail("production Deployment INSTANCE_OBSERVABILITY_PROVIDER must be prometheus_kubernetes")
+    if env_by_name.get("INSTANCE_OBSERVABILITY_PROMETHEUS_URL", {}).get("value") != "http://sprint13-prometheus.ani-s07-observability.svc.cluster.local:9090":
+        fail("production Deployment INSTANCE_OBSERVABILITY_PROMETHEUS_URL must point at in-cluster Sprint 13 Prometheus")
+    if env_by_name.get("INSTANCE_OBSERVABILITY_EXEC_BASE_URL", {}).get("value") != "wss://ani-gateway.ani-system.svc.cluster.local:8080/api/v1":
+        fail("production Deployment INSTANCE_OBSERVABILITY_EXEC_BASE_URL must point at in-cluster Gateway API")
     proxy_template = env_by_name.get("VCLUSTER_PROXY_SERVER_TEMPLATE", {}).get("value")
     kubeconfig_template = env_by_name.get("VCLUSTER_KUBECONFIG_SERVER_TEMPLATE", {}).get("value")
     if proxy_template != "https://{cluster_id}.{namespace}:443":
@@ -630,7 +682,7 @@ def validate_all() -> None:
 
 def main() -> int:
     validate_all()
-    print("Sprint 13 S01-S04 production-shaped evidence boundaries valid")
+    print("Sprint 13 S01-S07 production-shaped evidence boundaries valid")
     return 0
 
 

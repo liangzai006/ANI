@@ -68,16 +68,30 @@ func main() {
 			"collection_prefix_configured", strings.TrimSpace(vectorStoreRuntimeConfig.VectorStoreCollectionPrefix) != "",
 		)
 	}
+	instanceObservabilityRuntimeConfig := gatewayInstanceObservabilityRuntimeConfigFromEnv()
+	instanceObservability, instanceObservabilityUsesInstanceName, err := newGatewayInstanceObservability(instanceObservabilityRuntimeConfig)
+	if err != nil {
+		logger.Error("failed to configure instance observability provider runtime", "err", err)
+		os.Exit(1)
+	}
+	if instanceObservability != nil {
+		logger.Info("instance observability provider runtime configured",
+			"provider", strings.TrimSpace(instanceObservabilityRuntimeConfig.Provider),
+			"prometheus_configured", strings.TrimSpace(instanceObservabilityRuntimeConfig.PrometheusURL) != "",
+		)
+	}
 	middleware.StartAuditWorker()
 	middleware.Register(h)
 	router.RegisterWithOptions(h, router.RegisterOptions{
-		K8sClusterService: k8sClusterService,
-		EncryptionService: encryptionService,
-		SecretService:     secretService,
-		GPUInventory:      gpuInventory,
-		NetworkService:    networkService,
-		StorageService:    storageService,
-		VectorStoreService: vectorStoreService,
+		K8sClusterService:                     k8sClusterService,
+		EncryptionService:                     encryptionService,
+		SecretService:                         secretService,
+		GPUInventory:                          gpuInventory,
+		NetworkService:                        networkService,
+		StorageService:                        storageService,
+		VectorStoreService:                    vectorStoreService,
+		InstanceObservability:                 instanceObservability,
+		InstanceObservabilityUsesInstanceName: instanceObservabilityUsesInstanceName,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

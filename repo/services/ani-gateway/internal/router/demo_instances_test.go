@@ -421,6 +421,39 @@ func TestDemoInstanceObservabilityResponsesUseLocalProfile(t *testing.T) {
 	requireLocalCoreDevProfile(t, execResponse.DevProfile, "local-instance-observability")
 }
 
+func TestDemoInstanceObservabilityCanUseInstanceNameForProviderTarget(t *testing.T) {
+	api := newDemoInstanceAPIWithObservability(nil, true)
+	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "container", Name: "s07-observability-live"}, "tenant-a")
+	if err != nil {
+		t.Fatalf("demoSpecFromRequest error = %v", err)
+	}
+	created, err := api.service.Create(context.Background(), ports.WorkloadInstanceCreateRequest{
+		IdempotencyKey:  "demo-observe-provider-create",
+		Spec:            spec,
+		UserID:          "user-a",
+		PermissionProof: "demo:test",
+		RequestedAt:     time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create error = %v", err)
+	}
+	record, err := api.service.Get(context.Background(), ports.WorkloadInstanceGetRequest{
+		TenantID:   "tenant-a",
+		InstanceID: created.Ref.InstanceID,
+	})
+	if err != nil {
+		t.Fatalf("Get error = %v", err)
+	}
+	if got := api.observabilityTargetID(record); got != "s07-observability-live" {
+		t.Fatalf("observability target = %q, want instance name", got)
+	}
+
+	localAPI := newDemoInstanceAPIWithObservability(nil, false)
+	if got := localAPI.observabilityTargetID(record); got != created.Ref.InstanceID {
+		t.Fatalf("local observability target = %q, want instance id %q", got, created.Ref.InstanceID)
+	}
+}
+
 func TestDemoInstanceServiceVMConsoleSession(t *testing.T) {
 	api := newDemoInstanceAPI()
 	spec, err := demoSpecFromRequest(demoCreateInstanceRequest{Kind: "vm", Name: "demo-vm"}, "tenant-a")

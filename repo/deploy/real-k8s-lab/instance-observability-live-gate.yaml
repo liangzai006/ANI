@@ -1,5 +1,5 @@
 profile: SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A
-status: contract
+status: passed
 description: >
   Sprint 13 instance observability live validation gate for proving Core
   logs, events, metrics, security-events, and exec session readiness against
@@ -7,6 +7,7 @@ description: >
 
 required_tools:
   - curl
+  - kubectl
 
 live_checks:
   - id: prometheus-health-ready
@@ -33,3 +34,10 @@ readiness_levels:
     meaning: Gate definition and local validator exist; no live Prometheus/Kubernetes proof.
   live:
     meaning: Core instance observability checks passed against the approved Prometheus and Kubernetes lab backend.
+  passed:
+    meaning: Production-shaped Gateway live gate has passed and non-sensitive evidence is archived.
+
+evidence:
+  output: development-records/live-evidence/sprint13-instance-observability-prometheus-live-evidence.json
+  result: development-records/sprint13-instance-observability-prometheus-live-result.md
+  production_shape_status: passed

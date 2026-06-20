@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for Sprint 13 S01-S04 production-shaped evidence guard."""
+"""Tests for Sprint 13 S01-S07 production-shaped evidence guard."""
 
 from __future__ import annotations
 
@@ -223,6 +223,28 @@ class Sprint13ProductionShapeGuardTest(unittest.TestCase):
                 guard.validate_evidence("S05", evidence)
 
         self.assertIn("S05 production_shape passed requires bucket_create_status=201", str(raised.exception))
+
+    def test_s07_production_passed_requires_observability_business_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "evidence.json"
+            evidence.write_text(json.dumps({
+                "status": "passed",
+                "production_shape": {
+                    "status": "passed",
+                    "transport_profile": "production_gateway_prometheus_and_kubernetes_api",
+                    "missing_items": [],
+                    "proof_items": [
+                        "production_gateway",
+                        "production_prometheus_service_or_query",
+                        "production_kubelet_or_kubernetes_api_access",
+                    ],
+                },
+            }) + "\n", encoding="utf-8")
+
+            with self.assertRaises(SystemExit) as raised:
+                guard.validate_evidence("S07", evidence)
+
+        self.assertIn("S07 production_shape passed requires prometheus_health_status=200", str(raised.exception))
 
     def test_production_deployment_requires_object_store_provider_secret_wiring(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

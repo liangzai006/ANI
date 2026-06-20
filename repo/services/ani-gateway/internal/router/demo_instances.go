@@ -73,9 +73,10 @@ func (s *demoInstanceStore) List(_ context.Context, tenantID string, kind ports.
 var _ ports.WorkloadInstanceStore = (*demoInstanceStore)(nil)
 
 type demoInstanceAPI struct {
-	service       ports.WorkloadInstanceService
-	operations    ports.WorkloadOperationStore
-	observability ports.InstanceObservability
+	service                       ports.WorkloadInstanceService
+	operations                    ports.WorkloadOperationStore
+	observability                 ports.InstanceObservability
+	observabilityUsesInstanceName bool
 }
 
 type demoCreateInstanceRequest struct {
@@ -360,6 +361,10 @@ type demoTimelineStep struct {
 }
 
 func newDemoInstanceAPI() *demoInstanceAPI {
+	return newDemoInstanceAPIWithObservability(nil, false)
+}
+
+func newDemoInstanceAPIWithObservability(observability ports.InstanceObservability, useInstanceName bool) *demoInstanceAPI {
 	store := newDemoInstanceStore()
 	operations := runtimeadapter.NewLocalOperationStore()
 	identity := runtimeadapter.NewLocalWorkloadIdentityService()
@@ -384,15 +389,23 @@ func newDemoInstanceAPI() *demoInstanceAPI {
 		runtimeadapter.WithWorkloadIdentityService(identity),
 		runtimeadapter.WithSandboxRuntime(runtimeadapter.NewLocalSandboxRuntime()),
 	)
+	if observability == nil {
+		observability = runtimeadapter.NewLocalInstanceObservabilityService()
+	}
 	return &demoInstanceAPI{
-		service:       service,
-		operations:    operations,
-		observability: runtimeadapter.NewLocalInstanceObservabilityService(),
+		service:                       service,
+		operations:                    operations,
+		observability:                 observability,
+		observabilityUsesInstanceName: useInstanceName,
 	}
 }
 
 func registerDemoInstances(v1 *route.RouterGroup) {
-	api := newDemoInstanceAPI()
+	registerDemoInstancesWithObservability(v1, nil, false)
+}
+
+func registerDemoInstancesWithObservability(v1 *route.RouterGroup, observability ports.InstanceObservability, useInstanceName bool) {
+	api := newDemoInstanceAPIWithObservability(observability, useInstanceName)
 	v1.GET("/instances", api.list)
 	v1.POST("/instances", api.create)
 	v1.GET("/instances/:instance_id", api.get)
@@ -585,13 +598,14 @@ func (api *demoInstanceAPI) listOperations(ctx context.Context, c *app.RequestCo
 }
 
 func (api *demoInstanceAPI) listLogs(ctx context.Context, c *app.RequestContext) {
-	if err := api.ensureInstanceExists(ctx, c); err != nil {
+	record, err := api.instanceForObservation(ctx, c)
+	if err != nil {
 		writeInstanceObservabilityError(c, err)
 		return
 	}
 	result, err := api.observability.ListLogs(ctx, ports.InstanceObservationListRequest{
 		TenantID:   demoTenantID(c),
-		InstanceID: c.Param("instance_id"),
+		InstanceID: api.observabilityTargetID(record),
 		Limit:      queryInt(c, "limit", 100),
 		Cursor:     c.Query("cursor"),
 		Level:      c.Query("level"),
@@ -604,13 +618,14 @@ func (api *demoInstanceAPI) listLogs(ctx context.Context, c *app.RequestContext)
 }
 
 func (api *demoInstanceAPI) listEvents(ctx context.Context, c *app.RequestContext) {
-	if err := api.ensureInstanceExists(ctx, c); err != nil {
+	record, err := api.instanceForObservation(ctx, c)
+	if err != nil {
 		writeInstanceObservabilityError(c, err)
 		return
 	}
 	result, err := api.observability.ListEvents(ctx, ports.InstanceObservationListRequest{
 		TenantID:   demoTenantID(c),
-		InstanceID: c.Param("instance_id"),
+		InstanceID: api.observabilityTargetID(record),
 		Limit:      queryInt(c, "limit", 50),
 		Type:       c.Query("type"),
 	})
@@ -622,13 +637,14 @@ func (api *demoInstanceAPI) listEvents(ctx context.Context, c *app.RequestContex
 }
 
 func (api *demoInstanceAPI) getMetrics(ctx context.Context, c *app.RequestContext) {
-	if err := api.ensureInstanceExists(ctx, c); err != nil {
+	record, err := api.instanceForObservation(ctx, c)
+	if err != nil {
 		writeInstanceObservabilityError(c, err)
 		return
 	}
 	result, err := api.observability.GetMetrics(ctx, ports.InstanceObservationGetRequest{
 		TenantID:   demoTenantID(c),
-		InstanceID: c.Param("instance_id"),
+		InstanceID: api.observabilityTargetID(record),
 	})
 	if err != nil {
 		writeInstanceObservabilityError(c, err)
@@ -638,7 +654,8 @@ func (api *demoInstanceAPI) getMetrics(ctx context.Context, c *app.RequestContex
 }
 
 func (api *demoInstanceAPI) createExecSession(ctx context.Context, c *app.RequestContext) {
-	if err := api.ensureInstanceExists(ctx, c); err != nil {
+	record, err := api.instanceForObservation(ctx, c)
+	if err != nil {
 		writeInstanceObservabilityError(c, err)
 		return
 	}
@@ -659,7 +676,7 @@ func (api *demoInstanceAPI) createExecSession(ctx context.Context, c *app.Reques
 	}
 	result, err := api.observability.CreateExecSession(ctx, ports.InstanceExecSessionCreateRequest{
 		TenantID:       demoTenantID(c),
-		InstanceID:     c.Param("instance_id"),
+		InstanceID:     api.observabilityTargetID(record),
 		IdempotencyKey: req.IdempotencyKey,
 		Container:      req.Container,
 		Command:        req.Command,
@@ -675,13 +692,14 @@ func (api *demoInstanceAPI) createExecSession(ctx context.Context, c *app.Reques
 }
 
 func (api *demoInstanceAPI) listSecurityEvents(ctx context.Context, c *app.RequestContext) {
-	if err := api.ensureInstanceExists(ctx, c); err != nil {
+	record, err := api.instanceForObservation(ctx, c)
+	if err != nil {
 		writeInstanceObservabilityError(c, err)
 		return
 	}
 	result, err := api.observability.ListSecurityEvents(ctx, ports.InstanceObservationListRequest{
 		TenantID:   demoTenantID(c),
-		InstanceID: c.Param("instance_id"),
+		InstanceID: api.observabilityTargetID(record),
 		Limit:      queryInt(c, "limit", 50),
 		Severity:   c.Query("severity"),
 	})
@@ -776,11 +794,22 @@ func (api *demoInstanceAPI) consoleExec(ctx context.Context, c *app.RequestConte
 }
 
 func (api *demoInstanceAPI) ensureInstanceExists(ctx context.Context, c *app.RequestContext) error {
-	_, err := api.service.Get(ctx, ports.WorkloadInstanceGetRequest{
+	_, err := api.instanceForObservation(ctx, c)
+	return err
+}
+
+func (api *demoInstanceAPI) instanceForObservation(ctx context.Context, c *app.RequestContext) (ports.WorkloadInstanceRecord, error) {
+	return api.service.Get(ctx, ports.WorkloadInstanceGetRequest{
 		TenantID:   demoTenantID(c),
 		InstanceID: c.Param("instance_id"),
 	})
-	return err
+}
+
+func (api *demoInstanceAPI) observabilityTargetID(record ports.WorkloadInstanceRecord) string {
+	if api.observabilityUsesInstanceName && strings.TrimSpace(record.Name) != "" {
+		return record.Name
+	}
+	return record.InstanceID
 }
 
 func consoleAction(protocol string) ports.WorkloadInstanceOpsAction {

@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ani-s07-observability
+  labels:
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sprint13-prometheus
+  namespace: ani-s07-observability
+  labels:
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sprint13-prometheus-cadvisor-reader
+  labels:
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sprint13-prometheus-cadvisor-reader
+  labels:
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+subjects:
+  - kind: ServiceAccount
+    name: sprint13-prometheus
+    namespace: ani-s07-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sprint13-prometheus-cadvisor-reader
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sprint13-prometheus-config
+  namespace: ani-s07-observability
+  labels:
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    scrape_configs:
+      - job_name: kubernetes-cadvisor
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          insecure_skip_verify: true
+        kubernetes_sd_configs:
+          - role: node
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprint13-prometheus
+  namespace: ani-s07-observability
+  labels:
+    app.kubernetes.io/name: sprint13-prometheus
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sprint13-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprint13-prometheus
+        ani.dev/sprint: "13"
+        ani.dev/slice: s07-instance-observability
+    spec:
+      serviceAccountName: sprint13-prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: sprint13-prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprint13-prometheus
+  namespace: ani-s07-observability
+  labels:
+    app.kubernetes.io/name: sprint13-prometheus
+    ani.dev/sprint: "13"
+    ani.dev/slice: s07-instance-observability
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: sprint13-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+      nodePort: 31990
