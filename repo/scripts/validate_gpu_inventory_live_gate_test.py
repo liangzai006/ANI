@@ -64,6 +64,13 @@ class GPUInventoryLiveGateTest(unittest.TestCase):
 
         validate_docs.assert_called_once()
 
+    def test_json_getter_reports_network_errors_without_traceback(self) -> None:
+        with patch("urllib.request.urlopen", side_effect=OSError("network blocked")):
+            with self.assertRaises(SystemExit) as raised:
+                gate.default_json_getter("http://127.0.0.1:18004/api/v1/nodes", "")
+
+        self.assertIn("could not read http://127.0.0.1:18004/api/v1/nodes", str(raised.exception))
+
     def test_live_requires_dcgm_metrics_url(self) -> None:
         document = gate.load_gate(gate.DEFAULT_GATE)
         with (
@@ -84,6 +91,7 @@ class GPUInventoryLiveGateTest(unittest.TestCase):
                 ani_bearer_token="dev-token",
                 kubectl_binary="kubectl",
                 kubeconfig="local-secrets/kubeconfig",
+                kubernetes_nodes_url="",
                 dcgm_metrics_url="http://dcgm.example/metrics",
                 evidence_output=str(evidence),
             )
@@ -121,6 +129,61 @@ class GPUInventoryLiveGateTest(unittest.TestCase):
             content = evidence.read_text(encoding="utf-8")
             self.assertIn('"status": "passed"', content)
             self.assertIn('"gpu_capacity_total": 2', content)
+            self.assertNotIn("dev-token", content)
+            self.assertNotIn("local-secrets/kubeconfig", content)
+
+    def test_live_can_read_nodes_from_kubernetes_nodes_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "gpu-evidence.json"
+            args = gate.LiveArgs(
+                gateway_url="http://core.example/api/v1",
+                ani_bearer_token="dev-token",
+                kubectl_binary="kubectl",
+                kubeconfig="local-secrets/kubeconfig",
+                kubernetes_nodes_url="http://127.0.0.1:18004/api/v1/nodes",
+                dcgm_metrics_url="http://dcgm.example/metrics",
+                evidence_output=str(evidence),
+            )
+
+            def json_getter(url: str, bearer_token: str) -> tuple[int, dict]:
+                if url.endswith("/api/v1/nodes"):
+                    self.assertEqual("", bearer_token)
+                    return 200, {
+                        "items": [{
+                            "metadata": {"name": "gpu-node-a"},
+                            "status": {
+                                "capacity": {"nvidia.com/gpu": "2"},
+                                "allocatable": {"nvidia.com/gpu": "2"},
+                            },
+                        }]
+                    }
+                if url.endswith("/gpu-inventory"):
+                    self.assertEqual("dev-token", bearer_token)
+                    return 200, {
+                        "items": [{"id": "gpu-0"}, {"id": "gpu-1"}],
+                        "total": 2,
+                        "dev_profile": {"mode": "real", "provider": "kubernetes-gpu-inventory", "real_provider": True},
+                    }
+                return 200, {
+                    "total": 2,
+                    "available": 2,
+                    "in_use": 0,
+                    "fault": 0,
+                    "dev_profile": {"mode": "real", "provider": "kubernetes-gpu-inventory", "real_provider": True},
+                }
+
+            def command_runner(_: list[str]) -> str:
+                raise AssertionError("kubectl should not be called when kubernetes_nodes_url is provided")
+
+            gate.validate_live(
+                args,
+                command_runner=command_runner,
+                json_getter=json_getter,
+                text_getter=lambda _: (200, "DCGM_FI_DEV_GPU_UTIL{gpu=\"0\"} 0\n"),
+            )
+
+            content = evidence.read_text(encoding="utf-8")
+            self.assertIn('"status": "passed"', content)
             self.assertNotIn("dev-token", content)
             self.assertNotIn("local-secrets/kubeconfig", content)
 

@@ -1,0 +1,12 @@
+{
+  "dcgm_metric_present": true,
+  "gpu_capacity_total": 6,
+  "gpu_node_count": 3,
+  "id": "gpu-inventory-live-gate",
+  "inventory_count": 6,
+  "inventory_status": 200,
+  "occupancy_status": 200,
+  "occupancy_total": 6,
+  "profile": "SPRINT13-GPU-INVENTORY-DCGM-A",
+  "status": "passed"
+}

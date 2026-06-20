@@ -1,5 +1,5 @@
 profile: SPRINT13-GPU-INVENTORY-DCGM-A
-status: contract
+status: live
 description: >
   Sprint 13 GPU inventory live validation gate for proving Core GPU inventory
   and occupancy contract readiness against NVIDIA device-plugin node capacity
@@ -13,10 +13,10 @@ live_checks:
     command: kubectl get nodes -o json
     pass_condition: node_status_capacity_or_allocatable_has_nvidia_dot_com_gpu
   - id: core-gpu-inventory-list
-    command: python scripts/validate_gpu_inventory_live_gate.py --live --gateway-url {gateway_url} --dcgm-metrics-url {metrics_url}
+    command: python scripts/validate_gpu_inventory_live_gate.py --live --gateway-url {gateway_url} --kubernetes-nodes-url {nodes_url} --dcgm-metrics-url {metrics_url}
     pass_condition: http_200_response_has_items_total_and_real_provider_dev_profile
   - id: core-gpu-occupancy-get
-    command: python scripts/validate_gpu_inventory_live_gate.py --live --gateway-url {gateway_url} --dcgm-metrics-url {metrics_url}
+    command: python scripts/validate_gpu_inventory_live_gate.py --live --gateway-url {gateway_url} --kubernetes-nodes-url {nodes_url} --dcgm-metrics-url {metrics_url}
     pass_condition: http_200_response_has_total_available_in_use_fault_and_real_provider_dev_profile
   - id: dcgm-exporter-metrics-readable
     command: GET {metrics_url}/metrics or Prometheus query for DCGM_FI_DEV_GPU_UTIL
@@ -26,4 +26,4 @@ readiness_levels:
   contract:
     meaning: Gate definition and local validator exist; no live NVIDIA/DCGM/Core API proof.
   live:
-    meaning: Core GPU inventory and occupancy checks passed against the approved real lab backend.
+    meaning: Core GPU inventory and occupancy checks passed against the approved real lab backend with NVIDIA device-plugin node capacity and DCGM metrics evidence.

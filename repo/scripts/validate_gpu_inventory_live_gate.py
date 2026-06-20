@@ -41,6 +41,7 @@ class LiveArgs:
     ani_bearer_token: str
     kubectl_binary: str
     kubeconfig: str
+    kubernetes_nodes_url: str
     dcgm_metrics_url: str
     evidence_output: str
 
@@ -141,9 +142,12 @@ def default_json_getter(url: str, bearer_token: str) -> tuple[int, dict[str, Any
     if bearer_token.strip():
         headers["Authorization"] = f"Bearer {bearer_token.strip()}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        status = int(getattr(response, "status", response.getcode()))
-        body = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status = int(getattr(response, "status", response.getcode()))
+            body = response.read().decode("utf-8")
+    except OSError as exc:
+        fail(f"could not read {url}: {exc}")
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
@@ -155,9 +159,12 @@ def default_json_getter(url: str, bearer_token: str) -> tuple[int, dict[str, Any
 
 def default_text_getter(url: str) -> tuple[int, str]:
     request = urllib.request.Request(url)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        status = int(getattr(response, "status", response.getcode()))
-        return status, response.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status = int(getattr(response, "status", response.getcode()))
+            return status, response.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        fail(f"could not read {url}: {exc}")
 
 
 def parse_gpu_capacity(value: Any) -> int:
@@ -191,6 +198,30 @@ def summarize_kubernetes_gpu_nodes(node_list: dict[str, Any]) -> tuple[int, int]
     return gpu_nodes, total
 
 
+def load_kubernetes_nodes(
+    args: LiveArgs,
+    command_runner: Callable[[list[str]], str],
+    json_getter: Callable[[str, str], tuple[int, dict[str, Any]]],
+) -> dict[str, Any]:
+    if args.kubernetes_nodes_url.strip():
+        status, nodes_doc = json_getter(args.kubernetes_nodes_url.strip(), "")
+        if status != 200:
+            fail(f"Kubernetes nodes endpoint returned HTTP {status}")
+        return nodes_doc
+
+    kubectl_command = [args.kubectl_binary or "kubectl"]
+    if args.kubeconfig.strip():
+        kubectl_command.extend(["--kubeconfig", args.kubeconfig.strip()])
+    kubectl_command.extend(["get", "nodes", "-o", "json"])
+    try:
+        nodes_doc = json.loads(command_runner(kubectl_command))
+    except json.JSONDecodeError:
+        fail("kubectl node list did not return JSON")
+    if not isinstance(nodes_doc, dict):
+        fail("kubectl node list must be a JSON object")
+    return nodes_doc
+
+
 def require_real_gpu_dev_profile(payload: dict[str, Any], label: str) -> None:
     profile = payload.get("dev_profile")
     if not isinstance(profile, dict):
@@ -212,16 +243,7 @@ def validate_live(
     if not args.dcgm_metrics_url.strip():
         fail("live mode requires --dcgm-metrics-url")
 
-    kubectl_command = [args.kubectl_binary or "kubectl"]
-    if args.kubeconfig.strip():
-        kubectl_command.extend(["--kubeconfig", args.kubeconfig.strip()])
-    kubectl_command.extend(["get", "nodes", "-o", "json"])
-    try:
-        nodes_doc = json.loads(command_runner(kubectl_command))
-    except json.JSONDecodeError:
-        fail("kubectl node list did not return JSON")
-    if not isinstance(nodes_doc, dict):
-        fail("kubectl node list must be a JSON object")
+    nodes_doc = load_kubernetes_nodes(args, command_runner, json_getter)
     gpu_node_count, gpu_capacity_total = summarize_kubernetes_gpu_nodes(nodes_doc)
     if gpu_node_count <= 0 or gpu_capacity_total <= 0:
         fail("no Kubernetes nodes report nvidia.com/gpu capacity")
@@ -276,6 +298,11 @@ def main() -> int:
     parser.add_argument("--ani-bearer-token", default="", help="ANI Core bearer token")
     parser.add_argument("--kubectl-binary", default="kubectl", help="kubectl binary")
     parser.add_argument("--kubeconfig", default="", help="kubeconfig for live Kubernetes reads")
+    parser.add_argument(
+        "--kubernetes-nodes-url",
+        default="",
+        help="optional Kubernetes NodeList URL, for example a local kubectl proxy /api/v1/nodes endpoint",
+    )
     parser.add_argument("--dcgm-metrics-url", default="", help="DCGM exporter metrics URL")
     parser.add_argument("--evidence-output", default="", help="non-sensitive evidence JSON output")
     args = parser.parse_args()
@@ -290,6 +317,7 @@ def main() -> int:
             ani_bearer_token=args.ani_bearer_token,
             kubectl_binary=args.kubectl_binary,
             kubeconfig=args.kubeconfig,
+            kubernetes_nodes_url=args.kubernetes_nodes_url,
             dcgm_metrics_url=args.dcgm_metrics_url,
             evidence_output=args.evidence_output,
         ))
