@@ -7,6 +7,42 @@ import (
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
+type recordingVectorStoreService struct {
+	createCalls int
+}
+
+func (s *recordingVectorStoreService) CreateVectorStore(_ context.Context, request ports.VectorStoreCreateRequest) (ports.VectorStoreRecord, error) {
+	s.createCalls++
+	return ports.VectorStoreRecord{
+		TenantID:  request.TenantID,
+		StoreID:   "vst_injected",
+		Name:      request.Name,
+		Dimension: request.Dimension,
+		Metric:    request.Metric,
+		State:     ports.VectorStoreReady,
+	}, nil
+}
+
+func (s *recordingVectorStoreService) ListVectorStores(context.Context, ports.VectorStoreResourceListRequest) ([]ports.VectorStoreRecord, error) {
+	return nil, nil
+}
+
+func (s *recordingVectorStoreService) GetVectorStore(context.Context, ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+	return ports.VectorStoreRecord{}, ports.ErrNotFound
+}
+
+func (s *recordingVectorStoreService) DeleteVectorStore(context.Context, ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+	return ports.VectorStoreRecord{}, ports.ErrNotFound
+}
+
+func (s *recordingVectorStoreService) SearchVectorStore(context.Context, ports.VectorStoreResourceSearchRequest) ([]ports.VectorSearchResult, error) {
+	return nil, nil
+}
+
+func (s *recordingVectorStoreService) InsertDocuments(context.Context, ports.VectorStoreDocumentInsertRequest) (ports.VectorStoreDocumentInsertResult, error) {
+	return ports.VectorStoreDocumentInsertResult{}, nil
+}
+
 func TestVectorStoreAPIDevProfileCreateSearchAndDelete(t *testing.T) {
 	api := newVectorStoreAPI()
 	store, err := api.service.CreateVectorStore(context.Background(), ports.VectorStoreCreateRequest{
@@ -92,5 +128,23 @@ func TestVectorStoreAPIDocumentInsertResponseMatchesCoreSchema(t *testing.T) {
 	}
 	if got := vectorStoreDocumentInsertFromResult(result); got.InsertedCount != 1 || got.TaskID == "" || got.Status != "completed" {
 		t.Fatalf("insert response = %+v, want VectorStoreDocumentInsertResponse fields", got)
+	}
+}
+
+func TestVectorStoreAPIUsesInjectedService(t *testing.T) {
+	service := &recordingVectorStoreService{}
+	api := newVectorStoreAPIWithService(service)
+	store, err := api.service.CreateVectorStore(context.Background(), ports.VectorStoreCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "api-vector-injected",
+		Name:           "kb-injected",
+		Dimension:      3,
+		Metric:         "cosine",
+	})
+	if err != nil {
+		t.Fatalf("CreateVectorStore error = %v", err)
+	}
+	if service.createCalls != 1 || store.StoreID != "vst_injected" {
+		t.Fatalf("injected service createCalls=%d store=%+v, want injected service", service.createCalls, store)
 	}
 }

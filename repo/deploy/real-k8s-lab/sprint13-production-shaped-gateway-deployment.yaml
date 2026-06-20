@@ -113,6 +113,25 @@ spec:
               value: "false"
             - name: OBJECT_STORE_BUCKET_PREFIX
               value: ani-s13-
+            - name: VECTOR_STORE_PROVIDER
+              value: milvus
+            - name: VECTOR_STORE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: ani-vectorstore-production-shaped-runtime
+                  key: endpoint
+            - name: VECTOR_STORE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ani-vectorstore-production-shaped-runtime
+                  key: token
+            - name: VECTOR_STORE_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: ani-vectorstore-production-shaped-runtime
+                  key: database
+            - name: VECTOR_STORE_COLLECTION_PREFIX
+              value: ani_s13_
           readinessProbe:
             httpGet:
               path: /readyz

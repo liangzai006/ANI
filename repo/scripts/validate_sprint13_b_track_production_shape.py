@@ -91,6 +91,19 @@ SLICES = {
             "production_presigned_url_endpoint",
         },
     },
+    "S06": {
+        "evidence": RECORD_ROOT / "live-evidence/sprint13-vector-milvus-live-evidence.json",
+        "result": RECORD_ROOT / "sprint13-vector-milvus-live-result.md",
+        "required_missing": {
+            "production_vector_store_credentials",
+            "production_vector_collection_lifecycle",
+        },
+        "required_proof": {
+            "production_gateway",
+            "production_vector_store_credentials",
+            "production_vector_collection_lifecycle",
+        },
+    },
 }
 
 ALLOWED_PRODUCTION_STATUSES = {"pending", "passed"}
@@ -160,6 +173,11 @@ REQUIRED_DEPLOYMENT_ENVS = {
     "OBJECT_STORE_REGION",
     "OBJECT_STORE_SECURE",
     "OBJECT_STORE_BUCKET_PREFIX",
+    "VECTOR_STORE_PROVIDER",
+    "VECTOR_STORE_ENDPOINT",
+    "VECTOR_STORE_TOKEN",
+    "VECTOR_STORE_DATABASE",
+    "VECTOR_STORE_COLLECTION_PREFIX",
 }
 REQUIRED_PRODUCTION_READINESS_DOC_TOKENS = {
     "Auth/Dex production gate",
@@ -250,6 +268,8 @@ def validate_evidence(slice_id: str, path: Path) -> None:
         validate_s04_gpu_dcgm_evidence(payload)
     if slice_id == "S05":
         validate_s05_object_store_evidence(payload)
+    if slice_id == "S06":
+        validate_s06_vector_store_evidence(payload)
 
 
 def validate_s01_gateway_production_evidence(payload: dict[str, Any]) -> None:
@@ -355,6 +375,31 @@ def validate_s05_object_store_evidence(payload: dict[str, Any]) -> None:
         fail("S05 production_shape passed requires download_presign_url_present=true")
     if payload.get("cleanup_enabled") is not True:
         fail("S05 production_shape passed requires cleanup_enabled=true")
+
+
+def validate_s06_vector_store_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "milvus_health_status": 200,
+        "vector_store_create_status": 201,
+        "document_insert_status": 202,
+        "search_status": 200,
+        "cleanup_api_key_status": 201,
+        "cleanup_status": 200,
+        "cleanup_api_key_revoke_status": 200,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S06 production_shape passed requires {field}={expected}")
+    inserted_count = payload.get("inserted_count")
+    if not isinstance(inserted_count, int) or inserted_count < 1:
+        fail("S06 production_shape passed requires inserted_count >= 1")
+    search_hit_count = payload.get("search_hit_count")
+    if not isinstance(search_hit_count, int) or search_hit_count < 1:
+        fail("S06 production_shape passed requires search_hit_count >= 1")
+    if payload.get("milvus_health_ready") is not True:
+        fail("S06 production_shape passed requires milvus_health_ready=true")
+    if payload.get("cleanup_enabled") is not True:
+        fail("S06 production_shape passed requires cleanup_enabled=true")
 
 
 def validate_result_doc(slice_id: str, path: Path) -> None:
@@ -504,6 +549,17 @@ def validate_production_deployment_contract() -> None:
             fail(f"production Deployment {name} must come from secretKeyRef")
         if "value" in env_item:
             fail(f"production Deployment must not commit {name} literal")
+    if env_by_name.get("VECTOR_STORE_PROVIDER", {}).get("value") != "milvus":
+        fail("production Deployment VECTOR_STORE_PROVIDER must be milvus")
+    for name in ("VECTOR_STORE_ENDPOINT", "VECTOR_STORE_TOKEN", "VECTOR_STORE_DATABASE"):
+        env_item = env_by_name.get(name, {})
+        value_from = env_item.get("valueFrom")
+        if not isinstance(value_from, dict) or "secretKeyRef" not in value_from:
+            fail(f"production Deployment {name} must come from secretKeyRef")
+        if "value" in env_item:
+            fail(f"production Deployment must not commit {name} literal")
+    if env_by_name.get("VECTOR_STORE_COLLECTION_PREFIX", {}).get("value") != "ani_s13_":
+        fail("production Deployment VECTOR_STORE_COLLECTION_PREFIX must be ani_s13_")
     proxy_template = env_by_name.get("VCLUSTER_PROXY_SERVER_TEMPLATE", {}).get("value")
     kubeconfig_template = env_by_name.get("VCLUSTER_KUBECONFIG_SERVER_TEMPLATE", {}).get("value")
     if proxy_template != "https://{cluster_id}.{namespace}:443":

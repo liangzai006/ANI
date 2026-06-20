@@ -1,0 +1,215 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ani-s06-vectorstore
+  labels:
+    ani.dev/sprint: sprint13
+    ani.dev/slice: s06-vectorstore-milvus
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprint13-milvus-etcd
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus-etcd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sprint13-milvus-etcd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprint13-milvus-etcd
+    spec:
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.5
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              exec etcd \
+                --advertise-client-urls="http://${POD_IP}:2379" \
+                --listen-client-urls="http://${POD_IP}:2379,http://localhost:2379" \
+                --data-dir=/etcd
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: client
+              containerPort: 2379
+          volumeMounts:
+            - name: data
+              mountPath: /etcd
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprint13-milvus-etcd
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus-etcd
+spec:
+  selector:
+    app.kubernetes.io/name: sprint13-milvus-etcd
+  ports:
+    - name: client
+      port: 2379
+      targetPort: client
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprint13-milvus-minio
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus-minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sprint13-milvus-minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprint13-milvus-minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2024-08-17T01-24-54Z
+          imagePullPolicy: IfNotPresent
+          args:
+            - server
+            - /data
+            - --console-address
+            - :9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: sprint13-milvus-minio
+                  key: access_key
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sprint13-milvus-minio
+                  key: secret_key
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprint13-milvus-minio
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus-minio
+spec:
+  selector:
+    app.kubernetes.io/name: sprint13-milvus-minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9001
+      targetPort: console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprint13-milvus
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sprint13-milvus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sprint13-milvus
+    spec:
+      containers:
+        - name: milvus
+          image: milvusdb/milvus:v2.4.15
+          imagePullPolicy: IfNotPresent
+          command:
+            - milvus
+            - run
+            - standalone
+          env:
+            - name: ETCD_ENDPOINTS
+              value: sprint13-milvus-etcd.ani-s06-vectorstore.svc.cluster.local:2379
+            - name: MINIO_ADDRESS
+              value: sprint13-milvus-minio.ani-s06-vectorstore.svc.cluster.local:9000
+            - name: MINIO_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: sprint13-milvus-minio
+                  key: access_key
+            - name: MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sprint13-milvus-minio
+                  key: secret_key
+            - name: COMMON_STORAGETYPE
+              value: minio
+          ports:
+            - name: grpc-rest
+              containerPort: 19530
+            - name: metrics
+              containerPort: 9091
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 18
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/milvus
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprint13-milvus
+  namespace: ani-s06-vectorstore
+  labels:
+    app.kubernetes.io/name: sprint13-milvus
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: sprint13-milvus
+  ports:
+    - name: grpc-rest
+      port: 19530
+      targetPort: grpc-rest
+      nodePort: 31930
+    - name: metrics
+      port: 9091
+      targetPort: metrics

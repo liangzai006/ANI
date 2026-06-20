@@ -10,12 +10,13 @@ import (
 )
 
 type RegisterOptions struct {
-	K8sClusterService ports.K8sClusterService
-	EncryptionService ports.EncryptionService
-	SecretService     ports.SecretService
-	GPUInventory      ports.GPUInventory
-	NetworkService    ports.NetworkService
-	StorageService    ports.StorageService
+	K8sClusterService  ports.K8sClusterService
+	EncryptionService  ports.EncryptionService
+	SecretService      ports.SecretService
+	GPUInventory       ports.GPUInventory
+	NetworkService     ports.NetworkService
+	StorageService     ports.StorageService
+	VectorStoreService ports.VectorStoreService
 }
 
 // Register wires all route groups onto the Hertz server.
@@ -38,7 +39,11 @@ func RegisterWithOptions(h *server.Hertz, options RegisterOptions) {
 	registerGPUInventoryResourcesWithInventory(v1, options.GPUInventory)
 	registerNetworkResourcesWithService(v1, options.NetworkService)
 	registerStorageResourcesWithService(v1, options.StorageService)
-	registerVectorStoreResources(v1)
+	if options.VectorStoreService != nil {
+		registerVectorStoreResourcesWithService(v1, options.VectorStoreService)
+	} else {
+		registerVectorStoreResources(v1)
+	}
 	registerK8sClusterResourcesWithService(v1, options.K8sClusterService)
 	registerEncryptionResourcesWithService(v1, options.EncryptionService)
 	registerSecretResourcesWithService(v1, options.SecretService)

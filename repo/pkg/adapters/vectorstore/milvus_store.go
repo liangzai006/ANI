@@ -67,6 +67,7 @@ func (s *MilvusVectorStore) EnsureCollection(ctx context.Context, ref ports.Vect
 	body["primaryFieldName"] = "id"
 	body["vectorFieldName"] = "vector"
 	body["idType"] = "VarChar"
+	body["params"] = map[string]string{"max_length": "256"}
 	return s.doMilvus(ctx, "/v2/vectordb/collections/create", body, nil, milvusAllowAlreadyExists)
 }
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -54,6 +55,19 @@ func main() {
 		logger.Error("failed to configure storage provider runtime", "err", err)
 		os.Exit(1)
 	}
+	vectorStoreRuntimeConfig := gatewayVectorStoreRuntimeConfigFromEnv()
+	vectorStoreService, err := newGatewayVectorStoreService(vectorStoreRuntimeConfig)
+	if err != nil {
+		logger.Error("failed to configure vector store provider runtime", "err", err)
+		os.Exit(1)
+	}
+	if vectorStoreService != nil {
+		logger.Info("vector store provider runtime configured",
+			"provider", strings.TrimSpace(vectorStoreRuntimeConfig.VectorStoreProvider),
+			"database_configured", strings.TrimSpace(vectorStoreRuntimeConfig.VectorStoreDatabase) != "",
+			"collection_prefix_configured", strings.TrimSpace(vectorStoreRuntimeConfig.VectorStoreCollectionPrefix) != "",
+		)
+	}
 	middleware.StartAuditWorker()
 	middleware.Register(h)
 	router.RegisterWithOptions(h, router.RegisterOptions{
@@ -63,6 +77,7 @@ func main() {
 		GPUInventory:      gpuInventory,
 		NetworkService:    networkService,
 		StorageService:    storageService,
+		VectorStoreService: vectorStoreService,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

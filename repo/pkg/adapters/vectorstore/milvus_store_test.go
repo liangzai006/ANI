@@ -50,6 +50,10 @@ func TestMilvusVectorStoreEnsuresCollectionWithQuickSetupSchema(t *testing.T) {
 	if requestBody["dimension"] != float64(768) || requestBody["metricType"] != "COSINE" {
 		t.Fatalf("request body = %#v, want dimension and COSINE metric", requestBody)
 	}
+	params, ok := requestBody["params"].(map[string]any)
+	if !ok || params["max_length"] != "256" {
+		t.Fatalf("params = %#v, want VarChar max_length", requestBody["params"])
+	}
 }
 
 func TestMilvusVectorStoreUpsertPostsRecordsToEntitiesEndpoint(t *testing.T) {

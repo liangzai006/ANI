@@ -1,0 +1,26 @@
+{
+  "cleanup_api_key_revoke_status": 200,
+  "cleanup_api_key_status": 201,
+  "cleanup_enabled": true,
+  "cleanup_status": 200,
+  "document_insert_status": 202,
+  "id": "vector-store-live-gate",
+  "inserted_count": 1,
+  "milvus_health_ready": true,
+  "milvus_health_status": 200,
+  "production_shape": {
+    "missing_items": [],
+    "proof_items": [
+      "production_gateway",
+      "production_vector_store_credentials",
+      "production_vector_collection_lifecycle"
+    ],
+    "status": "passed",
+    "transport_profile": "production_gateway_and_vector_store_service"
+  },
+  "profile": "SPRINT13-VECTOR-MILVUS-A",
+  "search_hit_count": 1,
+  "search_status": 200,
+  "status": "passed",
+  "vector_store_create_status": 201
+}

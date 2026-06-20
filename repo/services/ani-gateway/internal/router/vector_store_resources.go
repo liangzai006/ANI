@@ -66,11 +66,22 @@ type vectorStoreDocumentInsertResponse struct {
 }
 
 func newVectorStoreAPI() *vectorStoreAPI {
-	return &vectorStoreAPI{service: runtimeadapter.NewLocalVectorStoreService()}
+	return newVectorStoreAPIWithService(nil)
 }
 
 func registerVectorStoreResources(v1 *route.RouterGroup) {
-	api := newVectorStoreAPI()
+	registerVectorStoreResourcesWithService(v1, nil)
+}
+
+func newVectorStoreAPIWithService(service ports.VectorStoreService) *vectorStoreAPI {
+	if service == nil {
+		service = runtimeadapter.NewLocalVectorStoreService()
+	}
+	return &vectorStoreAPI{service: service}
+}
+
+func registerVectorStoreResourcesWithService(v1 *route.RouterGroup, service ports.VectorStoreService) {
+	api := newVectorStoreAPIWithService(service)
 	v1.GET("/vector-stores", api.listVectorStores)
 	v1.POST("/vector-stores", api.createVectorStore)
 	v1.GET("/vector-stores/:vector_store_id", api.getVectorStore)

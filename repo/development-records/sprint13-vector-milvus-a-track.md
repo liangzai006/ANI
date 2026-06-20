@@ -3,7 +3,7 @@
 > 记录类型：Sprint 13 A-track completion record
 > 日期：2026-06-19
 > 范围：ANI Core only
-> 状态：code+contract ready, LIVE PENDING
+> 状态：code+contract ready；后续 B 轨已通过 production-shaped live gate（历史 LIVE PENDING 阻塞已解除）
 
 ## 目标
 
@@ -59,6 +59,14 @@ document entrypoint boundaries valid
 git diff --check passed
 ```
 
-## 后续 B 轨
+## 后续 B 轨结果
 
-人工确认真实 Milvus endpoint、token、database、collection prefix、schema/index 策略和 evidence 输出路径后，执行 human-gated live gate 并归档非敏感 evidence。真实 evidence 归档前，S06 保持 Tier1 local profile / LIVE PENDING。
+后续 B 轨已完成以下非敏感进展：
+
+- 独立 namespace 临时部署 Milvus standalone + etcd + MinIO 验证栈，数据卷均为 `emptyDir`，未触碰 Rook-Ceph / CSI / 默认 StorageClass / 裸盘。
+- production-shaped Gateway 已补 `VECTOR_STORE_PROVIDER=milvus` 与 `ani-vectorstore-production-shaped-runtime` SecretRef 装配，当前 Gateway 节点 binary 已更新并滚动成功，启动日志确认 Milvus provider runtime configured。
+- `validate_vector_store_live_gate.py` 已补 `--live`、`--production-shaped`、`--cleanup` 和 evidence 输出；proof_items 对齐 `production_gateway`、`production_vector_store_credentials`、`production_vector_collection_lifecycle`。
+- Milvus REST quick-setup schema 的 VarChar 主键要求 `params.max_length`；adapter 已补字段并用 fake transport 单测固定。
+- `make validate-vector-alpha`、`make validate-vector-store-live-gate`、S06 聚焦 Go 单测与真实 `validate_vector_store_live_gate.py --live --production-shaped --cleanup` 已通过。
+
+结果：`sprint13-vector-milvus-live-evidence.json` 已归档，`production_shape.status=passed`；live result 见 [`sprint13-vector-milvus-live-result.md`](sprint13-vector-milvus-live-result.md)。Auth/Dex bearer 通过本地-only Dex 密码文件完成 OIDC 登录，仅在进程内使用；未读取 JWT 私钥，未把 token、endpoint 或 IP 写入 evidence。
