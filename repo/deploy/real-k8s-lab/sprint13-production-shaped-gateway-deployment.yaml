@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ani-gateway
+  namespace: ani-system
+  labels:
+    app.kubernetes.io/name: ani-gateway
+    ani.dev/profile: sprint13-production-shaped
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ani-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ani-gateway
+        ani.dev/profile: sprint13-production-shaped
+    spec:
+      serviceAccountName: ani-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ani-gateway
+          image: ani-gateway:sprint13-production-shaped
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ANI_AUTH_MODE
+              value: dev
+            - name: KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            - name: KUBERNETES_SERVICE_ACCOUNT_CA_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - name: KUBERNETES_PROVIDER_FIELD_MANAGER
+              value: ani-gateway-sprint13-production-shaped
+            - name: NETWORK_PROVIDER
+              value: kubeovn_rest
+            - name: NETWORK_PROVIDER_APPLY_ENABLED
+              value: "true"
+            - name: NETWORK_PROVIDER_USER_ID
+              value: ani-core-network-provider
+            - name: NETWORK_PROVIDER_PERMISSION_PROOF
+              value: rbac-scope:networks.write
+            - name: STORAGE_PROVIDER
+              value: kubernetes_rest
+            - name: STORAGE_PROVIDER_APPLY_ENABLED
+              value: "true"
+            - name: STORAGE_PROVIDER_USER_ID
+              value: ani-core-storage-provider
+            - name: STORAGE_PROVIDER_PERMISSION_PROOF
+              value: rbac-scope:storage.write
+            - name: GPU_INVENTORY_PROVIDER
+              value: kubernetes_rest
+            - name: K8S_CLUSTER_PROVIDER_MODE
+              value: vcluster_helm
+            - name: K8S_CLUSTER_PROXY_MODE
+              value: forwarding_metadata
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ani-gateway-production-shaped-runtime
+                  key: database_url
+            - name: VCLUSTER_HELM_BINARY
+              value: /usr/local/bin/helm
+            - name: VCLUSTER_BINARY
+              value: /usr/local/bin/vcluster
+            - name: VCLUSTER_CHART_NAME
+              value: vcluster
+            - name: VCLUSTER_CHART_REPO
+              value: https://charts.loft.sh
+            - name: VCLUSTER_HELM_SET_VALUES
+              value: controlPlane.statefulSet.persistence.volumeClaim.storageClass=ani-rbd-ssd
+            - name: VCLUSTER_PROXY_SERVER_TEMPLATE
+              value: https://{cluster_id}.{namespace}:443
+            - name: VCLUSTER_KUBECONFIG_SERVER_TEMPLATE
+              value: https://{cluster_id}.{namespace}:443
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ani-gateway
+  namespace: ani-system
+  labels:
+    app.kubernetes.io/name: ani-gateway
+    ani.dev/profile: sprint13-production-shaped
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: ani-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080

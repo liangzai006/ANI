@@ -20,11 +20,14 @@ func TestKubernetesRESTClientServerSideDryRunUsesDryRunAll(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		gotPath = r.URL.String()
 		gotAuth = r.Header.Get("Authorization")
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
+		if r.Method != http.MethodPatch {
+			t.Fatalf("method = %s, want PATCH", r.Method)
 		}
 		if r.URL.Query().Get("dryRun") != "All" {
 			t.Fatalf("dryRun = %q, want All", r.URL.Query().Get("dryRun"))
+		}
+		if r.Header.Get("Content-Type") != kubernetesApplyPatchContentType {
+			t.Fatalf("content-type = %q, want apply patch", r.Header.Get("Content-Type"))
 		}
 		return jsonResponse(http.StatusCreated, `{"kind":"Deployment"}`), nil
 	})
@@ -38,8 +41,8 @@ func TestKubernetesRESTClientServerSideDryRunUsesDryRunAll(t *testing.T) {
 	if !result.Accepted || result.Provider != "kubernetes" {
 		t.Fatalf("result = %#v, want accepted kubernetes dry-run", result)
 	}
-	if !strings.Contains(gotPath, "/apis/apps/v1/namespaces/ani-tenant-tenant-a/deployments") {
-		t.Fatalf("path = %q, want Deployment collection path", gotPath)
+	if !strings.Contains(gotPath, "/apis/apps/v1/namespaces/ani-tenant-tenant-a/deployments/app-01") {
+		t.Fatalf("path = %q, want Deployment resource path", gotPath)
 	}
 	if gotAuth != "Bearer token-a" {
 		t.Fatalf("Authorization = %q, want bearer token", gotAuth)
@@ -362,8 +365,8 @@ func TestKubernetesRESTClientSupportsKubeOVNNetworkResources(t *testing.T) {
 	if len(paths) != 2 {
 		t.Fatalf("paths = %#v, want dry-run and apply calls", paths)
 	}
-	if !strings.Contains(paths[0], "/apis/kubeovn.io/v1/vpcs?dryRun=All") {
-		t.Fatalf("dry-run path = %q, want KubeOVN Vpc collection", paths[0])
+	if !strings.Contains(paths[0], "/apis/kubeovn.io/v1/vpcs/vpc-vpc-main") || !strings.Contains(paths[0], "dryRun=All") {
+		t.Fatalf("dry-run path = %q, want KubeOVN Vpc resource dry-run", paths[0])
 	}
 	if !strings.Contains(paths[1], "/apis/kubeovn.io/v1/vpcs/vpc-vpc-main") {
 		t.Fatalf("apply path = %q, want KubeOVN Vpc resource", paths[1])

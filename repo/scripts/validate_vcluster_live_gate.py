@@ -13,6 +13,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ GATE_ID = "vcluster-live-gate"
 LIVE_WORKLOAD_NAME = "ani-s02-live-workload"
 LIVE_WORKLOAD_IMAGE = "registry.k8s.io/pause:3.10"
 REQUIRED_CHART_VERSION = "0.34.1"
+PRODUCTION_SHAPED_REQUESTED_VERSION = "v1.35.0"
 COMMAND_TIMEOUT_SECONDS = 120
 
 
@@ -133,6 +135,7 @@ class LiveConfig:
     chart_name: str = "vcluster"
     chart_repo: str = "https://charts.loft.sh"
     chart_version: str = "0.34.1"
+    helm_set_values: tuple[str, ...] = ()
     production_shaped: bool = False
     work_dir: Path | None = None
 
@@ -170,7 +173,7 @@ class CommandRunner:
             headers=headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=COMMAND_TIMEOUT_SECONDS) as response:
                 response_body = response.read().decode("utf-8")
                 return {
                     "status_code": response.status,
@@ -196,7 +199,7 @@ class CommandRunner:
             headers=headers,
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=COMMAND_TIMEOUT_SECONDS) as response:
                 response_body = response.read().decode("utf-8")
                 return {
                     "status_code": response.status,
@@ -227,8 +230,9 @@ def validate_live_config(config: LiveConfig) -> None:
         "gateway_url": config.gateway_url,
         "ani_bearer_token": config.ani_bearer_token,
         "kubeconfig": config.kubeconfig,
-        "chart_version": config.chart_version,
     }
+    if config.chart_repo.strip().lower() not in {"", "none", "local", "-"}:
+        required["chart_version"] = config.chart_version
     missing = [name for name, value in required.items() if not value.strip()]
     if missing:
         fail(f"live mode requires {', '.join(missing)}")
@@ -274,8 +278,6 @@ def helm_install_command(config: LiveConfig) -> list[str]:
         "--install",
         config.cluster_id,
         config.chart_name,
-        "--repo",
-        config.chart_repo,
         "--namespace",
         live_namespace(config),
         "--create-namespace",
@@ -283,16 +285,53 @@ def helm_install_command(config: LiveConfig) -> list[str]:
         "--set",
         "sync.toHost.services.enabled=true",
     ]
+    if config.chart_repo.strip().lower() not in {"", "none", "local", "-"}:
+        command[5:5] = ["--repo", config.chart_repo.strip()]
     if config.chart_version.strip():
         command.extend(["--version", config.chart_version.strip()])
+    for value in config.helm_set_values:
+        if value.strip():
+            command.extend(["--set", value.strip()])
     return command
 
 
-def vcluster_connect_command(config: LiveConfig) -> list[str]:
-    return vcluster_kubectl_command(config, ["get", "--raw", "/version"])
+def vcluster_print_kubeconfig_command(config: LiveConfig) -> list[str]:
+    command = [
+        config.vcluster_binary,
+        "connect",
+        config.cluster_id,
+        "--namespace",
+        live_namespace(config),
+        "--print",
+    ]
+    if config.vcluster_server.strip():
+        command.extend(["--server", config.vcluster_server.strip()])
+    return command
 
 
-def vcluster_kubectl_command(config: LiveConfig, kubectl_args: list[str]) -> list[str]:
+def resolved_vcluster_server(config: LiveConfig, cluster_id: str) -> str:
+    value = config.vcluster_server.strip()
+    if not value:
+        return value
+    return (
+        value.replace("{cluster_id}", cluster_id)
+        .replace("{tenant_id}", config.tenant_id)
+        .replace("{namespace}", live_namespace(config))
+    )
+
+
+def vcluster_connect_command(config: LiveConfig, direct_kubeconfig: str = "") -> list[str]:
+    return vcluster_kubectl_command(config, ["get", "--raw", "/version"], direct_kubeconfig=direct_kubeconfig)
+
+
+def vcluster_kubectl_command(config: LiveConfig, kubectl_args: list[str], direct_kubeconfig: str = "") -> list[str]:
+    if direct_kubeconfig.strip():
+        return [
+            config.kubectl_binary,
+            "--kubeconfig",
+            direct_kubeconfig.strip(),
+            *kubectl_args,
+        ]
     if config.proxy_server.strip():
         return [
             config.kubectl_binary,
@@ -315,7 +354,7 @@ def vcluster_kubectl_command(config: LiveConfig, kubectl_args: list[str]) -> lis
     return command
 
 
-def workload_delete_command(config: LiveConfig) -> list[str]:
+def workload_delete_command(config: LiveConfig, direct_kubeconfig: str = "") -> list[str]:
     return vcluster_kubectl_command(
         config,
         [
@@ -326,10 +365,11 @@ def workload_delete_command(config: LiveConfig) -> list[str]:
             LIVE_WORKLOAD_NAME,
             "--ignore-not-found=true",
         ],
+        direct_kubeconfig=direct_kubeconfig,
     )
 
 
-def workload_create_command(config: LiveConfig) -> list[str]:
+def workload_create_command(config: LiveConfig, direct_kubeconfig: str = "") -> list[str]:
     return vcluster_kubectl_command(
         config,
         [
@@ -343,6 +383,7 @@ def workload_create_command(config: LiveConfig) -> list[str]:
             "--replicas",
             "1",
         ],
+        direct_kubeconfig=direct_kubeconfig,
     )
 
 
@@ -371,6 +412,16 @@ def parse_version_output(output: str) -> dict[str, object]:
     return value
 
 
+def write_vcluster_kubeconfig(config: LiveConfig, kubeconfig: str) -> str:
+    path = kubeconfig_path(config)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(kubeconfig, encoding="utf-8")
+    except OSError as err:
+        fail(f"vcluster kubeconfig output unusable: {err}")
+    return str(path)
+
+
 def create_core_cluster(config: LiveConfig, runner: CommandRunner, version: dict[str, object]) -> str:
     payload = {
         "idempotency_key": f"live-core-{config.cluster_id}",
@@ -394,15 +445,29 @@ def create_core_cluster(config: LiveConfig, runner: CommandRunner, version: dict
 
 def run_live(config: LiveConfig, runner: CommandRunner | None = None) -> dict[str, object]:
     runner = runner or CommandRunner()
-    runner.run(helm_install_command(config), env=host_kube_env(config))
-    version_output = runner.run(vcluster_connect_command(config), env=host_kube_env(config))
+    active_config = config
+    direct_kubeconfig = ""
+    core_cluster_id = ""
+    if config.production_shaped:
+        core_cluster_id = create_core_cluster(config, runner, {"gitVersion": PRODUCTION_SHAPED_REQUESTED_VERSION})
+        active_config = replace(
+            config,
+            cluster_id=core_cluster_id,
+            vcluster_server=resolved_vcluster_server(config, core_cluster_id),
+        )
+        kubeconfig_output = runner.run(vcluster_print_kubeconfig_command(active_config), env=host_kube_env(config))
+        direct_kubeconfig = write_vcluster_kubeconfig(active_config, kubeconfig_output)
+    else:
+        runner.run(helm_install_command(config), env=host_kube_env(config))
+    version_output = runner.run(vcluster_connect_command(active_config, direct_kubeconfig=direct_kubeconfig), env=host_kube_env(config))
     version = parse_version_output(version_output)
     if not isinstance(version, dict) or not (version.get("gitVersion") or version.get("major")):
         fail("vcluster kubectl /version response missing Kubernetes version")
-    runner.run(workload_delete_command(config), env=host_kube_env(config))
-    runner.run(workload_create_command(config), env=host_kube_env(config))
+    runner.run(workload_delete_command(active_config, direct_kubeconfig=direct_kubeconfig), env=host_kube_env(config))
+    runner.run(workload_create_command(active_config, direct_kubeconfig=direct_kubeconfig), env=host_kube_env(config))
     try:
-        core_cluster_id = create_core_cluster(config, runner, version)
+        if not core_cluster_id:
+            core_cluster_id = create_core_cluster(config, runner, version)
 
         payload = {
             "idempotency_key": f"live-proxy-{core_cluster_id}-version",
@@ -463,7 +528,7 @@ def run_live(config: LiveConfig, runner: CommandRunner | None = None) -> dict[st
                 ],
             }
     finally:
-        runner.run(workload_delete_command(config), env=host_kube_env(config))
+        runner.run(workload_delete_command(active_config, direct_kubeconfig=direct_kubeconfig), env=host_kube_env(config))
     result["cleanup"] = "deleted"
     return result
 
@@ -522,7 +587,10 @@ def main() -> int:
     parser.add_argument("--helm-binary", default=os.getenv("ANI_HELM_BINARY", "helm"))
     parser.add_argument("--vcluster-binary", default=os.getenv("ANI_VCLUSTER_BINARY", "vcluster"))
     parser.add_argument("--kubectl-binary", default=os.getenv("ANI_KUBECTL_BINARY", "kubectl"))
+    parser.add_argument("--chart-name", default=os.getenv("VCLUSTER_CHART_NAME", "vcluster"))
+    parser.add_argument("--chart-repo", default=os.getenv("VCLUSTER_CHART_REPO", "https://charts.loft.sh"))
     parser.add_argument("--chart-version", default=os.getenv("VCLUSTER_CHART_VERSION", "0.34.1"))
+    parser.add_argument("--helm-set", action="append", default=[], help="additional Helm --set value for vCluster")
     parser.add_argument("--production-shaped", action="store_true", help="require production-shaped S02 transport and write production_shape evidence")
     parser.add_argument(
         "--evidence-output",
@@ -548,7 +616,10 @@ def main() -> int:
             helm_binary=args.helm_binary,
             vcluster_binary=args.vcluster_binary,
             kubectl_binary=args.kubectl_binary,
+            chart_name=args.chart_name,
+            chart_repo=args.chart_repo,
             chart_version=args.chart_version,
+            helm_set_values=tuple(args.helm_set),
             production_shaped=args.production_shaped,
         )
         validate_live_config(config)

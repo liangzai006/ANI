@@ -193,7 +193,7 @@ func TestLocalNetworkServiceRouteCanUseKubeOVNProviderPipeline(t *testing.T) {
 			provider,
 			NetworkProviderExecutionConfig{
 				UserID:          "ani-core-network-provider",
-				PermissionProof: "rbac-scope:networks.routes.write",
+				PermissionProof: "rbac-scope:networks.write",
 			},
 		),
 		WithNetworkServiceClock(func() time.Time { return time.Unix(2000, 0) }),
@@ -224,8 +224,8 @@ func TestLocalNetworkServiceRouteCanUseKubeOVNProviderPipeline(t *testing.T) {
 	if !route.RealProvider || route.Provider != "kubeovn" {
 		t.Fatalf("route provider = real:%v provider:%q, want kubeovn real provider", route.RealProvider, route.Provider)
 	}
-	if provider.dryRuns != 1 || provider.applies != 1 || provider.observes != 1 {
-		t.Fatalf("provider calls dry=%d apply=%d observe=%d, want 1/1/1", provider.dryRuns, provider.applies, provider.observes)
+	if provider.dryRuns != 2 || provider.applies != 2 || provider.observes != 2 {
+		t.Fatalf("provider calls dry=%d apply=%d observe=%d, want VPC + route provider calls", provider.dryRuns, provider.applies, provider.observes)
 	}
 	if provider.lastDryRun.ResourceKind != "route" || provider.lastDryRun.ResourceID != route.RouteID {
 		t.Fatalf("dry-run identity = %#v, want route %s", provider.lastDryRun, route.RouteID)
@@ -235,6 +235,55 @@ func TestLocalNetworkServiceRouteCanUseKubeOVNProviderPipeline(t *testing.T) {
 	}
 	if len(provider.lastDryRun.Manifests) != 1 || provider.lastDryRun.Manifests[0].Kind != "Vpc" {
 		t.Fatalf("dry-run manifests = %#v, want route rendered as Vpc staticRoutes", provider.lastDryRun.Manifests)
+	}
+}
+
+func TestLocalNetworkServiceVPCAndSubnetUseKubeOVNProviderPipeline(t *testing.T) {
+	provider := &fakeNetworkRouteProvider{}
+	service := NewLocalNetworkService(
+		WithNetworkProvider(
+			NewKubeOVNNetworkRenderer(),
+			provider,
+			provider,
+			provider,
+			NetworkProviderExecutionConfig{
+				UserID:          "ani-core-network-provider",
+				PermissionProof: "rbac-scope:networks.write",
+			},
+		),
+		WithNetworkServiceClock(func() time.Time { return time.Unix(3000, 0) }),
+	)
+	vpc, err := service.CreateVPC(context.Background(), ports.NetworkVPCCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "provider-vpc",
+		Name:           "provider-vpc",
+		CIDR:           "10.80.0.0/16",
+	})
+	if err != nil {
+		t.Fatalf("CreateVPC error = %v", err)
+	}
+	subnet, err := service.CreateSubnet(context.Background(), ports.NetworkSubnetCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "provider-subnet",
+		VPCID:          vpc.VPCID,
+		Name:           "provider-subnet",
+		CIDR:           "10.80.1.0/24",
+		Gateway:        "10.80.1.1",
+	})
+	if err != nil {
+		t.Fatalf("CreateSubnet error = %v", err)
+	}
+	if vpc.State != ports.NetworkResourceAvailable || subnet.State != ports.NetworkResourceAvailable {
+		t.Fatalf("vpc/subnet state = %s/%s, want available", vpc.State, subnet.State)
+	}
+	if provider.dryRuns != 2 || provider.applies != 2 || provider.observes != 2 {
+		t.Fatalf("provider calls dry=%d apply=%d observe=%d, want 2/2/2", provider.dryRuns, provider.applies, provider.observes)
+	}
+	if provider.lastDryRun.ResourceKind != "subnet" || provider.lastDryRun.ResourceID != subnet.SubnetID {
+		t.Fatalf("last dry-run identity = %#v, want subnet %s", provider.lastDryRun, subnet.SubnetID)
+	}
+	if len(provider.lastDryRun.Manifests) != 1 || provider.lastDryRun.Manifests[0].Kind != "Subnet" {
+		t.Fatalf("last dry-run manifests = %#v, want Subnet manifest", provider.lastDryRun.Manifests)
 	}
 }
 

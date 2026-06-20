@@ -3,7 +3,7 @@
 > 记录类型：Sprint 13 B-track production-shaped post-review hardening
 > 日期：2026-06-20
 > 范围：仅 ANI Core production-shaped Kubernetes provider 装配路径；不改 Services，不推远端
-> 状态：**production-shaped acceptance code/gate ready; historical S01-S04 evidence remains pending until production-shaped live rerun**。
+> 状态：**production-shaped acceptance passed for S01-S04**；不代表 full platform production ready。
 
 ## 目标
 
@@ -31,6 +31,7 @@
 - `PrometheusInstanceObservabilityConfig` 同步支持 in-cluster ServiceAccount token/CA file，避免 S07 后续 B 轨沿用旧缺口。
 - `KubernetesRESTClient` 不再直接读取 ambient process env；环境变量只在 Gateway/bootstrap 配置层读取，adapter 层保持显式 config，降低 CI 和生产排障的不确定性。
 - Gateway `secret_runtime` 与 `k8s_proxy_runtime` 也同步显式透传 in-cluster ServiceAccount 配置，避免 adapter 显式化后回归 Sprint 5 Secret / node-pool provider 路径。
+- 后续 S01 rerun 发现 Gateway network provider 仍为 route-only，已继续修复为 VPC/Subnet/SecurityGroup/LoadBalancer/Route 通用 provider pipeline；Kubernetes dry-run 也改为 server-side apply PATCH `dryRun=All`，避免 route 更新既有 VPC 时 POST create 409。
 
 ## 测试覆盖
 
@@ -41,4 +42,6 @@
 
 ## 生产边界
 
-本次修复提升的是生产部署代码路径一致性和可验收性；它没有把旧 S01-S04 historical lab evidence 改写为 production-shaped passed。S01-S04 要标 `production_shape.status=passed`，仍必须在正式 Gateway + in-cluster ServiceAccount/RBAC + 非本地 transport 路径重新执行对应 `--production-shaped` live gate，并产出新的非敏感 evidence JSON。
+本次修复提升的是生产部署代码路径一致性和可验收性；S01-S04 已在正式 Gateway + in-cluster ServiceAccount/RBAC + 非本地 transport 路径重新执行对应 `--production-shaped` live gate，并产出新的非敏感 evidence JSON，均为 `production_shape.status=passed`。
+
+该结论仍不等于 full platform production ready；生产发布还需要 Auth/Dex、正式镜像与升级、长期运行、备份/恢复和故障注入等门禁。

@@ -9,6 +9,7 @@ gateway:
   namespace: ani-system
   service_account: ani-gateway
   rbac_manifest: deploy/real-k8s-lab/sprint13-production-shaped-gateway-rbac.yaml
+  deployment_manifest: deploy/real-k8s-lab/sprint13-production-shaped-gateway-deployment.yaml
   kubernetes_client:
     host_source: in_cluster_service
     token_source: service_account_projected_token

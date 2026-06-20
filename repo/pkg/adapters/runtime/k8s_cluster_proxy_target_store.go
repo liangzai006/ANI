@@ -69,6 +69,9 @@ func k8sClusterProxyTargetKey(tenantID string, clusterID string) string {
 func cloneK8sClusterProxyTarget(target ports.K8sClusterProxyTarget) ports.K8sClusterProxyTarget {
 	target.Server = strings.TrimRight(strings.TrimSpace(target.Server), "/")
 	target.BearerToken = strings.TrimSpace(target.BearerToken)
+	target.CAData = strings.TrimSpace(target.CAData)
+	target.ClientCertificateData = strings.TrimSpace(target.ClientCertificateData)
+	target.ClientKeyData = strings.TrimSpace(target.ClientKeyData)
 	return target
 }
 

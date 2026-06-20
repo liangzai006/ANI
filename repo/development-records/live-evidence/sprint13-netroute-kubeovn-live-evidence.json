@@ -1,29 +1,39 @@
 {
   "cleanup": {
     "resources": [
-      "service/lb-sprint13-s01-lb",
-      "networkpolicy/sg-sprint13-s01-sg",
-      "subnet/subnet-sprint13-s01-subnet",
-      "vpc/vpc-sprint13-s01-route",
-      "namespace/ani-tenant-sprint13-s01-b"
+      "service/lb-ani-s01-prodshape-gateway-lb3",
+      "networkpolicy/sg-ani-s01-prodshape-gateway-sg3",
+      "subnet/subnet-subnet-5b545381-1af4-45e5-97e6-b72418aa678f",
+      "vpc/vpc-vpc-eb2c25f7-228c-49cc-972e-548fc024816e",
+      "namespace/ani-tenant-tenant-a"
     ],
     "status": "deleted"
   },
+  "gateway_route_count": 1,
+  "gateway_route_create_status": 201,
+  "gateway_route_id": "rt_15c2b937-f51a-4d2a-bb22-8d80801dc402",
+  "gateway_route_list_status": 200,
+  "gateway_subnet_create_status": 201,
+  "gateway_subnet_id": "subnet_5b545381-1af4-45e5-97e6-b72418aa678f",
+  "gateway_vpc_create_status": 201,
+  "gateway_vpc_id": "vpc_eb2c25f7-228c-49cc-972e-548fc024816e",
   "id": "kubeovn-network-live-gate",
-  "load_balancer": "lb-sprint13-s01-lb",
-  "namespace": "ani-tenant-sprint13-s01-b",
+  "load_balancer": "lb-ani-s01-prodshape-gateway-lb3",
+  "namespace": "ani-tenant-tenant-a",
   "production_shape": {
-    "missing_items": [
-      "production_rbac_and_credential_management",
+    "missing_items": [],
+    "proof_items": [
+      "production_gateway",
+      "in_cluster_serviceaccount_rbac",
       "persistent_route_metadata_reconciliation"
     ],
-    "status": "pending",
-    "transport_profile": "lab_kubeconfig"
+    "status": "passed",
+    "transport_profile": "production_gateway_in_cluster_serviceaccount"
   },
   "profile": "M1-NETWORK-LIVE-A",
-  "route": "route-sprint13-s01-route",
-  "security_group": "sg-sprint13-s01-sg",
+  "route": "route-rt-15c2b937-f51a-4d2a-bb22-8d80801dc402",
+  "security_group": "sg-ani-s01-prodshape-gateway-sg3",
   "status": "passed",
-  "subnet": "subnet-sprint13-s01-subnet",
-  "vpc": "vpc-sprint13-s01-route"
+  "subnet": "subnet-subnet-5b545381-1af4-45e5-97e6-b72418aa678f",
+  "vpc": "vpc-vpc-eb2c25f7-228c-49cc-972e-548fc024816e"
 }

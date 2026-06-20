@@ -165,7 +165,7 @@ func TestNewCapabilitiesCanWireKubeOVNNetworkRouteProvider(t *testing.T) {
 		NetworkProvider:                "kubeovn_rest",
 		NetworkProviderApplyEnabled:    true,
 		NetworkProviderUserID:          "ani-core-network-provider",
-		NetworkProviderPermissionProof: "rbac-scope:networks.routes.write",
+		NetworkProviderPermissionProof: "rbac-scope:networks.write",
 		KubernetesAPIHost:              "https://kubernetes.example.test",
 		KubernetesProviderFieldManager: "ani-test",
 	})
@@ -186,7 +186,7 @@ func TestNewCapabilitiesCanWireKubeOVNNetworkRouteProviderWithInClusterKubernete
 		NetworkProvider:                   "kubeovn_rest",
 		NetworkProviderApplyEnabled:       true,
 		NetworkProviderUserID:             "ani-core-network-provider",
-		NetworkProviderPermissionProof:    "rbac-scope:networks.routes.write",
+		NetworkProviderPermissionProof:    "rbac-scope:networks.write",
 		KubernetesServiceHost:             "10.96.0.1",
 		KubernetesServicePort:             "443",
 		KubernetesServiceAccountTokenFile: tokenPath,

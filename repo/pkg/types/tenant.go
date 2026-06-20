@@ -53,7 +53,7 @@ func TryFromContext(ctx context.Context) (*TenantContext, bool) {
 func SetDBTenant(ctx context.Context, tx pgx.Tx) error {
 	tc := FromContext(ctx)
 	_, err := tx.Exec(ctx,
-		"SET LOCAL app.current_tenant_id = $1",
+		"SELECT set_config('app.current_tenant_id', $1, true)",
 		tc.TenantID.String(),
 	)
 	if err != nil {

@@ -1,23 +1,19 @@
-# SPRINT13-K8S-WORKLOADS-VCLUSTER-LIVE-A — K8s workloads vCluster live gate 结果
+# SPRINT13-K8S-WORKLOADS-VCLUSTER-LIVE-A - K8s workloads vCluster live gate result
 
-> 记录类型：Sprint 13 B-track live result
+> 记录类型：Sprint 13 B-track production-shaped live result
 > 完成日期：2026-06-20
-> 范围：仅 ANI Core S02 K8s workloads vCluster workload list evidence；不代表 production ready
-> 状态：**real-provider evidence passed for S02 workload list gate, production-shaped gate pending**
-
-## 目标
-
-在人工确认真实写操作后，对 Sprint 13 S02 K8s workloads vCluster 执行真实 live gate，证明 Core 可经既有 vCluster proxy target / Kubernetes API 路径观察真实 vCluster 内的 Deployment workload，并在成功后清理临时 workload。
+> 范围：ANI Core S02 K8s workloads vCluster provider / proxy / workload observe
+> 状态：**production-shaped gate passed**；不代表 full platform production ready
 
 ## §153 五项实测结果
 
 | 项 | 实测结果 |
 |---|---|
-| 当前状态 | S02 K8s workloads vCluster real-provider evidence passed。`validate-vcluster-live-gate` 已覆盖 Helm chart version pin、vCluster `/version`、临时 Deployment create、Core cluster register、Core proxy `/version`、Core workload list observe 与 cleanup。 |
-| 真实组件 + 版本 | 宿主 Kubernetes `v1.36.1`；vCluster Helm chart/app 固定恢复为 `0.34.1`；vCluster API evidence 返回 Kubernetes `v1.35.0`；vCluster CLI 恢复为 `v0.34.1`。 |
-| live gate 命令 | `python scripts/validate_vcluster_live_gate.py --live --tenant-id tenant-a --namespace ani-tenant-tenant-a-vcluster --cluster-id k8sclu-live --gateway-url http://127.0.0.1:8080/api/v1 --ani-bearer-token dev-token --vcluster-binary /private/tmp/vcluster-v0.34.1-darwin-arm64 --proxy-server http://127.0.0.1:18002 --chart-version 0.34.1 --evidence-output development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json` |
+| 当前状态 | S02 已重新执行 `--production-shaped` live gate 并通过。Gateway 运行在集群内 ServiceAccount/RBAC 路径，Core 通过 provider-backed `createK8sCluster` 创建 vCluster，再经 metadata target TLS 执行 `/version` proxy 与 workload list observe。 |
+| 真实组件 + 版本 | vCluster CLI `v0.34.1`；vCluster chart/app `0.34.1`；vCluster API evidence 返回 Kubernetes `v1.35.0`；RBD StorageClass `ani-rbd-ssd`。 |
+| live gate 命令 | `python3 scripts/validate_vcluster_live_gate.py --live --production-shaped --gateway-url http://ani-gateway.ani-system.svc:8080/api/v1 --ani-bearer-token <redacted> --tenant-id 11111111-1111-4111-8111-111111111111 --namespace ani-tenant-11111111-1111-4111-8111-111111111111 --cluster-id k8sclu-prodshape-s02 --vcluster-server https://{cluster_id}.ani-tenant-11111111-1111-4111-8111-111111111111:443 --kubeconfig /tmp/incluster.kubeconfig --chart-name /tmp/vcluster-0.34.1.tgz --chart-repo none --chart-version= --helm-set controlPlane.statefulSet.persistence.volumeClaim.storageClass=ani-rbd-ssd --evidence-output development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json` |
 | evidence 输出路径 | `repo/development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json` |
-| 失败边界 | 本次只证明 S02 workload list real-provider evidence passed；不代表 production ready，不证明生产 per-cluster metadata target、KMS token 管理、长期 workload 生命周期管理、跨 namespace 策略或 S03-S07 完成。Production-shaped gate: **PENDING**，`production_shape.status=pending`。 |
+| 边界 | Production-shaped gate passed 只证明 S02 provider、metadata target TLS、Gateway proxy/list 生产形态门禁通过；不代表 production ready / full platform release，不代表 Auth/Dex production gate、镜像仓库发布、长期租户集群策略全部完成。 |
 
 ## 关键输出
 
@@ -25,52 +21,32 @@
 M1-K8S-LIVE-A live checks valid; evidence written to development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json
 ```
 
-Evidence 摘要：
+## Evidence 摘要
 
 ```json
 {
-  "cleanup": "deleted",
-  "core_cluster_id": "k8sclu-22cb0b6a-1fc2-4eb2-b487-528d1601a9fd",
-  "id": "vcluster-live-gate",
+  "core_cluster_id": "k8sclu-60c3ae97-8fa0-4a84-8c45-3061ef495009",
   "kubectl_version": "v1.35.0",
+  "proxy_status": 200,
+  "workloads_status": 200,
+  "workload_count": 1,
+  "cleanup": "deleted",
   "production_shape": {
-    "missing_items": [
+    "status": "passed",
+    "transport_profile": "metadata_target_tls",
+    "missing_items": [],
+    "proof_items": [
+      "production_gateway",
       "production_per_cluster_metadata_target",
       "production_tls_and_token_management"
-    ],
-    "status": "pending",
-    "transport_profile": "lab_proxy"
-  },
-  "profile": "M1-K8S-LIVE-A",
-  "proxy_status": 200,
-  "status": "passed",
-  "workload_count": 1,
-  "workload_name": "ani-s02-live-workload",
-  "workloads_status": 200
+    ]
+  }
 }
 ```
 
-## 恢复与清理核验
+## 代码与部署闭环
 
-- 已恢复 vCluster CLI：`/private/tmp/vcluster-v0.34.1-darwin-arm64 --version` 返回 `vcluster version 0.34.1`。
-- 本次发现 validator 未 pin chart version 会升级到最新 chart，已修正为默认 `--version 0.34.1`；误触发的 `vcluster-0.35.0` revision 已回滚到 `vcluster-0.34.1` 轨道。
-- vCluster StatefulSet 已恢复 `1/1 Running`，Helm release `deployed`。
-- 临时 Deployment `ani-s02-live-workload` 在 vCluster `default` namespace 中已删除，cleanup 查询返回 NotFound。
-
-## 代码与契约边界
-
-- `scripts/validate_vcluster_live_gate.py` 保持默认 vCluster CLI connect 路径，同时新增显式 `--proxy-server` 稳定路径，用于已由 vCluster CLI 打开的本地 Kubernetes API proxy。
-- live gate 固定 `VCLUSTER_CHART_VERSION=0.34.1` 默认值，避免未来执行时隐式升级真实组件。
-- Core workload observe 仍经 Gateway `/api/v1/k8s-clusters/{id}/workloads`，handler 与 `ports.K8sClusterService` 签名不变。
-- evidence 不记录 token、kubeconfig、服务器 IP 或 workload 敏感内容。
-
-## 非目标
-
-- 不声明 K8s workloads production ready。
-- Production-shaped gate: **PENDING**；`production_shape.status=pending`。进入生产形态前必须补齐 `production_per_cluster_metadata_target` 与 `production_tls_and_token_management`，并使用正式 per-cluster target 而非本地 proxy 重新产出 evidence。
-- 不声明 S03-S07 已完成真实 live gate。
-- 不把本机 kubectl proxy 路径等同于生产 per-cluster metadata resolver、TLS/credential 管理或长期租户集群生命周期能力。
-
-## Post-closure note
-
-2026-06-20 的 `SPRINT13-B-TRACK-PRODUCTION-SHAPED-CLOSURE` 已为 `validate_vcluster_live_gate.py` 增加 `--production-shaped` 模式；该模式拒绝 `--proxy-server` 与本地 Gateway，并要求 production metadata target server。本文 evidence 仍是 historical lab evidence，不能自动升级为 `production_shape.status=passed`。S02 若要标 production-shaped passed，必须重新跑 production-shaped live gate 并通过 `validate-sprint13-b-track-production-shape`。
+- `validate_vcluster_live_gate.py --production-shaped` 不再预装第二个 vCluster；它由 Gateway provider 创建真实 vCluster，再使用返回的 Core cluster ID 校验 metadata target。
+- `VCLUSTER_PROXY_SERVER_TEMPLATE` 与 `VCLUSTER_KUBECONFIG_SERVER_TEMPLATE` 固定为 `https://{cluster_id}.{namespace}:443`，避免 `.svc` 后缀与 vCluster 0.34.1 证书 SAN 不匹配。
+- `K8sClusterProxyTarget` 支持 BearerToken 与 mTLS kubeconfig credential；vCluster 0.34.1 当前使用 client certificate/key。
+- 本次使用 UUID tenant 以匹配 metadata/RLS schema；临时 workload 与本次创建的 vCluster release/PVC 已清理。

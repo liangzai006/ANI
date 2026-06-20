@@ -26,6 +26,7 @@ type VClusterHelmProviderConfig struct {
 	VClusterBinary           string
 	ChartName                string
 	ChartRepo                string
+	HelmSetValues            []string
 	Runner                   VClusterHelmRunner
 	ProxyServerTemplate      string
 	ProxyBearerToken         string
@@ -38,6 +39,7 @@ type VClusterHelmProviderAdapter struct {
 	vclusterBinary           string
 	chartName                string
 	chartRepo                string
+	helmSetValues            []string
 	runner                   VClusterHelmRunner
 	proxyServerTemplate      string
 	proxyBearerToken         string
@@ -58,7 +60,8 @@ func NewVClusterHelmProviderAdapter(config VClusterHelmProviderConfig) *VCluster
 		helmBinary:               firstNonEmpty(config.HelmBinary, defaultVClusterHelmBinary),
 		vclusterBinary:           firstNonEmpty(config.VClusterBinary, defaultVClusterBinary),
 		chartName:                firstNonEmpty(config.ChartName, defaultVClusterChartName),
-		chartRepo:                firstNonEmpty(config.ChartRepo, defaultVClusterChartRepo),
+		chartRepo:                normalizeVClusterChartRepo(config.ChartRepo),
+		helmSetValues:            normalizeVClusterHelmSetValues(config.HelmSetValues),
 		runner:                   runner,
 		proxyServerTemplate:      strings.TrimSpace(config.ProxyServerTemplate),
 		proxyBearerToken:         strings.TrimSpace(config.ProxyBearerToken),
@@ -73,13 +76,41 @@ func (a *VClusterHelmProviderAdapter) ApplyK8sCluster(ctx context.Context, reque
 	}
 	namespace := tenantNamespace(request.TenantID)
 	releaseName := request.ClusterID
+	args := a.helmUpgradeInstallArgs(releaseName, namespace)
+	if _, err := a.runner.Run(ctx, a.helmBinary, args...); err != nil {
+		return ports.K8sClusterProviderApplyResult{}, fmt.Errorf("apply vCluster Helm release: %w", err)
+	}
+	proxyServer := a.proxyServer(request, namespace)
+	proxyCredentials := ports.K8sClusterProxyTarget{BearerToken: a.proxyBearerToken}
+	if proxyServer != "" && proxyCredentials.BearerToken == "" {
+		credentials, err := a.printProxyCredentials(ctx, request, namespace, proxyServer)
+		if err != nil {
+			return ports.K8sClusterProviderApplyResult{}, err
+		}
+		proxyCredentials = credentials
+	}
+	return ports.K8sClusterProviderApplyResult{
+		Applied:      true,
+		Provider:     "vcluster",
+		ResourceRefs: []string{"vcluster/HelmRelease/" + releaseName},
+		ProxyTarget: ports.K8sClusterProxyTarget{
+			Server:                proxyServer,
+			BearerToken:           proxyCredentials.BearerToken,
+			CAData:                proxyCredentials.CAData,
+			ClientCertificateData: proxyCredentials.ClientCertificateData,
+			ClientKeyData:         proxyCredentials.ClientKeyData,
+		},
+		Reason:    "vCluster Helm release applied",
+		AppliedAt: a.now().UTC(),
+	}, nil
+}
+
+func (a *VClusterHelmProviderAdapter) helmUpgradeInstallArgs(releaseName string, namespace string) []string {
 	args := []string{
 		"upgrade",
 		"--install",
 		releaseName,
 		a.chartName,
-		"--repo",
-		a.chartRepo,
 		"--namespace",
 		namespace,
 		"--create-namespace",
@@ -87,20 +118,13 @@ func (a *VClusterHelmProviderAdapter) ApplyK8sCluster(ctx context.Context, reque
 		"--set",
 		"sync.toHost.services.enabled=true",
 	}
-	if _, err := a.runner.Run(ctx, a.helmBinary, args...); err != nil {
-		return ports.K8sClusterProviderApplyResult{}, fmt.Errorf("apply vCluster Helm release: %w", err)
+	if a.chartRepo != "" {
+		args = append(args[:4], append([]string{"--repo", a.chartRepo}, args[4:]...)...)
 	}
-	return ports.K8sClusterProviderApplyResult{
-		Applied:      true,
-		Provider:     "vcluster",
-		ResourceRefs: []string{"vcluster/HelmRelease/" + releaseName},
-		ProxyTarget: ports.K8sClusterProxyTarget{
-			Server:      a.proxyServer(request, namespace),
-			BearerToken: a.proxyBearerToken,
-		},
-		Reason:    "vCluster Helm release applied",
-		AppliedAt: a.now().UTC(),
-	}, nil
+	for _, value := range a.helmSetValues {
+		args = append(args, "--set", value)
+	}
+	return args
 }
 
 func (a *VClusterHelmProviderAdapter) UpgradeK8sCluster(ctx context.Context, request ports.K8sClusterProviderUpgradeRequest) (ports.K8sClusterProviderUpgradeResult, error) {
@@ -109,22 +133,10 @@ func (a *VClusterHelmProviderAdapter) UpgradeK8sCluster(ctx context.Context, req
 	}
 	namespace := tenantNamespace(request.TenantID)
 	releaseName := request.ClusterID
-	args := []string{
-		"upgrade",
-		"--install",
-		releaseName,
-		a.chartName,
-		"--repo",
-		a.chartRepo,
-		"--namespace",
-		namespace,
-		"--create-namespace",
-		"--repository-config=",
+	args := append(a.helmUpgradeInstallArgs(releaseName, namespace),
 		"--set",
-		"sync.toHost.services.enabled=true",
-		"--set",
-		"controlPlane.distro.k8s.version=" + request.TargetVersion,
-	}
+		"controlPlane.distro.k8s.version="+request.TargetVersion,
+	)
 	if _, err := a.runner.Run(ctx, a.helmBinary, args...); err != nil {
 		return ports.K8sClusterProviderUpgradeResult{}, fmt.Errorf("upgrade vCluster Helm release: %w", err)
 	}
@@ -174,6 +186,25 @@ func (a *VClusterHelmProviderAdapter) GetK8sClusterKubeconfig(ctx context.Contex
 	}, nil
 }
 
+func normalizeVClusterChartRepo(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.EqualFold(trimmed, "none") || strings.EqualFold(trimmed, "local") || trimmed == "-" {
+		return ""
+	}
+	return firstNonEmpty(trimmed, defaultVClusterChartRepo)
+}
+
+func normalizeVClusterHelmSetValues(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return normalized
+}
+
 func (a *VClusterHelmProviderAdapter) proxyServer(request ports.K8sClusterProviderApplyRequest, namespace string) string {
 	if a.proxyServerTemplate == "" {
 		return ""
@@ -185,6 +216,33 @@ func (a *VClusterHelmProviderAdapter) proxyServer(request ports.K8sClusterProvid
 		"{namespace}", namespace,
 	)
 	return replacer.Replace(a.proxyServerTemplate)
+}
+
+func (a *VClusterHelmProviderAdapter) printProxyCredentials(ctx context.Context, request ports.K8sClusterProviderApplyRequest, namespace string, server string) (ports.K8sClusterProxyTarget, error) {
+	args := []string{
+		"connect",
+		request.ClusterID,
+		"--namespace",
+		namespace,
+		"--print",
+		"--server",
+		server,
+	}
+	output, err := a.runner.Run(ctx, a.vclusterBinary, args...)
+	if err != nil {
+		return ports.K8sClusterProxyTarget{}, fmt.Errorf("print vCluster proxy kubeconfig: %w", err)
+	}
+	kubeconfig := string(output)
+	credentials := ports.K8sClusterProxyTarget{
+		BearerToken:           parseKubeconfigToken(kubeconfig),
+		CAData:                parseKubeconfigValue(kubeconfig, "certificate-authority-data:"),
+		ClientCertificateData: parseKubeconfigValue(kubeconfig, "client-certificate-data:"),
+		ClientKeyData:         parseKubeconfigValue(kubeconfig, "client-key-data:"),
+	}
+	if credentials.BearerToken == "" && (credentials.ClientCertificateData == "" || credentials.ClientKeyData == "") {
+		return ports.K8sClusterProxyTarget{}, fmt.Errorf("%w: vCluster proxy kubeconfig missing bearer token or client certificate", ports.ErrInvalid)
+	}
+	return credentials, nil
 }
 
 func (a *VClusterHelmProviderAdapter) kubeconfigServer(request ports.K8sClusterKubeconfigProviderRequest, namespace string) string {
@@ -226,10 +284,14 @@ func validateK8sClusterKubeconfigProviderRequest(request ports.K8sClusterKubecon
 }
 
 func parseKubeconfigToken(kubeconfig string) string {
+	return parseKubeconfigValue(kubeconfig, "token:")
+}
+
+func parseKubeconfigValue(kubeconfig string, prefix string) string {
 	for _, line := range strings.Split(kubeconfig, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "token:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "token:"))
+		if strings.HasPrefix(line, prefix) {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, prefix)), `"`)
 		}
 	}
 	return ""

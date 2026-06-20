@@ -25,26 +25,28 @@ class FakeRunner:
         if "get crd" in joined:
             return '{"metadata":{"name":"vpcs.kubeovn.io"}}'
         if "get vpc" in joined:
+            name = command[-3]
             document: dict[str, object] = {
                 "kind": "Vpc",
-                "metadata": {"name": "vpc-ani-live-net"},
+                "metadata": {"name": name},
                 "status": {"conditions": [{"type": "Ready", "status": "True"}]},
             }
-            if self.route_applied:
+            if self.route_applied or name == "vpc-vpc-gateway":
                 document["spec"] = {"staticRoutes": [{"cidr": "0.0.0.0/0", "nextHopIP": "10.244.80.1", "policy": "policyDst"}]}
             return json.dumps(document)
         if "get subnet" in joined:
+            name = command[-3]
             return json.dumps(
                 {
                     "kind": "Subnet",
-                    "metadata": {"name": "subnet-ani-live-subnet"},
+                    "metadata": {"name": name},
                     "status": {"conditions": [{"type": "Ready", "status": "True"}]},
                 }
             )
         if "get networkpolicy" in joined:
-            return '{"kind":"NetworkPolicy","metadata":{"name":"sg-ani-live-sg"}}'
+            return json.dumps({"kind": "NetworkPolicy", "metadata": {"name": command[3]}})
         if "get service" in joined:
-            return '{"kind":"Service","metadata":{"name":"lb-ani-live-lb"},"spec":{"type":"LoadBalancer"}}'
+            return json.dumps({"kind": "Service", "metadata": {"name": command[3]}, "spec": {"type": "LoadBalancer"}})
         if "auth can-i" in joined:
             return "yes\n"
         if "delete " in joined:
@@ -57,6 +59,36 @@ class FakeRunner:
                 self.route_applied = True
             return "created\n"
         raise AssertionError(f"unexpected command: {joined}")
+
+
+class FakeHTTPClient:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, str, str, dict[str, object] | None]] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        bearer_token: str,
+        tenant_id: str,
+        body: dict[str, object] | None = None,
+    ) -> tuple[int, dict[str, object]]:
+        self.requests.append((method, url, bearer_token, tenant_id, body))
+        if method == "POST" and url.endswith("/networks/vpcs"):
+            return 201, {"id": "vpc-gateway", "cidr": body["cidr"] if body else ""}
+        if method == "POST" and url.endswith("/networks/subnets"):
+            return 201, {"id": "subnet-gateway", "vpc_id": body["vpc_id"] if body else ""}
+        if method == "POST" and url.endswith("/networks/routes"):
+            return 201, {
+                "id": "rt-gateway",
+                "vpc_id": body["vpc_id"] if body else "",
+                "destination_cidr": body["destination_cidr"] if body else "",
+                "next_hop_type": body["next_hop_type"] if body else "",
+                "next_hop_id": body["next_hop_id"] if body else "",
+            }
+        if method == "GET" and "/networks/routes" in url:
+            return 200, {"items": [{"id": "rt-gateway"}], "total": 1, "next_cursor": None}
+        raise AssertionError(f"unexpected HTTP request: {method} {url}")
 
 
 class FakeExternalLBRunner:
@@ -289,6 +321,83 @@ class KubeOVNNetworkLiveGateTest(unittest.TestCase):
                 "kubectl delete namespace ani-tenant-tenant-a --ignore-not-found",
             ],
             delete_commands,
+        )
+
+    def test_production_shaped_live_config_rejects_local_gateway(self) -> None:
+        config = gate.LiveConfig(
+            tenant_id="tenant-a",
+            vpc_name="ani-live-net",
+            subnet_name="ani-live-subnet",
+            security_group_name="ani-live-sg",
+            load_balancer_name="ani-live-lb",
+            gateway_url="http://127.0.0.1:8080/api/v1",
+            ani_bearer_token="dev-token",
+            production_shaped=True,
+        )
+
+        with patch.object(gate.shutil, "which", return_value="/usr/bin/kubectl"):
+            with self.assertRaises(SystemExit) as raised:
+                gate.validate_live_config(config)
+
+        self.assertIn("production-shaped live mode requires a non-local production gateway URL", str(raised.exception))
+
+    def test_production_shaped_live_config_requires_bearer_token(self) -> None:
+        config = gate.LiveConfig(
+            tenant_id="tenant-a",
+            vpc_name="ani-live-net",
+            subnet_name="ani-live-subnet",
+            security_group_name="ani-live-sg",
+            load_balancer_name="ani-live-lb",
+            gateway_url="https://ani-gateway.example.test/api/v1",
+            production_shaped=True,
+        )
+
+        with patch.object(gate.shutil, "which", return_value="/usr/bin/kubectl"):
+            with self.assertRaises(SystemExit) as raised:
+                gate.validate_live_config(config)
+
+        self.assertIn("production-shaped live mode requires --ani-bearer-token", str(raised.exception))
+
+    def test_production_shaped_live_gate_writes_s01_proof_items(self) -> None:
+        runner = FakeRunner()
+        http_client = FakeHTTPClient()
+        result = gate.run_live(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                vpc_name="ani-live-net",
+                subnet_name="ani-live-subnet",
+                security_group_name="ani-live-sg",
+                load_balancer_name="ani-live-lb",
+                namespace="ani-tenant-tenant-a",
+                gateway_url="https://ani-gateway.example.test/api/v1",
+                ani_bearer_token="dev-token",
+                production_shaped=True,
+            ),
+            runner=runner,
+            cleanup=True,
+            http_client=http_client,
+        )
+
+        self.assertEqual(result["production_shape"]["status"], "passed")
+        self.assertEqual(result["gateway_route_create_status"], 201)
+        self.assertEqual(result["gateway_route_list_status"], 200)
+        self.assertEqual(result["gateway_route_id"], "rt-gateway")
+        self.assertEqual(result["vpc"], "vpc-vpc-gateway")
+        self.assertEqual(result["subnet"], "subnet-subnet-gateway")
+        self.assertEqual(result["cleanup"]["resources"][2], "subnet/subnet-subnet-gateway")
+        self.assertEqual(result["cleanup"]["resources"][3], "vpc/vpc-vpc-gateway")
+        self.assertEqual([request[0] for request in http_client.requests], ["POST", "POST", "POST", "GET"])
+        self.assertTrue(http_client.requests[-1][1].endswith("/networks/routes?vpc_id=vpc-gateway"))
+        self.assertTrue(all(request[2] == "dev-token" for request in http_client.requests))
+        self.assertEqual(result["production_shape"]["missing_items"], [])
+        self.assertEqual(result["production_shape"]["transport_profile"], "production_gateway_in_cluster_serviceaccount")
+        self.assertEqual(
+            {
+                "production_gateway",
+                "in_cluster_serviceaccount_rbac",
+                "persistent_route_metadata_reconciliation",
+            },
+            set(result["production_shape"]["proof_items"]),
         )
 
     def test_external_lb_live_gate_patches_helper_and_proves_curl_results(self) -> None:

@@ -10,6 +10,9 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +42,7 @@ REQUIRED_DOC_TOKENS = [
 ]
 PROFILE = "M1-NETWORK-LIVE-A"
 GATE_ID = "kubeovn-network-live-gate"
+COMMAND_TIMEOUT_SECONDS = 120
 
 
 def fail(message: str) -> None:
@@ -133,6 +137,9 @@ class LiveConfig:
     route_next_hop: str = "10.244.80.1"
     kubeconfig: str = ""
     kubectl_binary: str = "kubectl"
+    gateway_url: str = ""
+    ani_bearer_token: str = ""
+    production_shaped: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,11 +165,42 @@ class ExternalLBConfig:
 
 class LiveRunner:
     def run(self, command: list[str], input_text: str | None = None) -> str:
-        result = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False)
+        result = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(f"{' '.join(command)} failed: {detail}")
         return result.stdout
+
+
+class HTTPClient:
+    def request(
+        self,
+        method: str,
+        url: str,
+        bearer_token: str,
+        tenant_id: str,
+        body: dict[str, object] | None = None,
+    ) -> tuple[int, dict[str, object]]:
+        payload = None
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {bearer_token}",
+            "X-Dev-Tenant-ID": tenant_id,
+        }
+        if body is not None:
+            payload = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(url, data=payload, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=COMMAND_TIMEOUT_SECONDS) as response:
+                raw = response.read().decode("utf-8")
+                return response.status, json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as err:
+            raw = err.read().decode("utf-8", errors="replace")
+            detail = raw or err.reason
+            raise RuntimeError(f"{method} {url} failed: HTTP {err.code} {detail}") from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"{method} {url} failed: {err.reason}") from err
 
 
 def kubernetes_name(prefix: str, value: str) -> str:
@@ -171,6 +209,14 @@ def kubernetes_name(prefix: str, value: str) -> str:
         normalized = "resource"
     name = f"{prefix}-{normalized}"
     return name[:63].rstrip("-")
+
+
+def network_provider_name(prefix: str, value: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9.-]+", "-", value.strip()).lower().strip("-.")
+    if not clean:
+        clean = "resource"
+    name = f"{prefix}-{clean}"
+    return name[:63].rstrip("-.")
 
 
 def tenant_namespace(config: LiveConfig) -> str:
@@ -219,6 +265,28 @@ def validate_live_config(config: LiveConfig) -> None:
         fail(f"{', '.join(whitespace)} must not contain surrounding whitespace")
     if shutil.which(config.kubectl_binary) is None:
         fail(f"{config.kubectl_binary} is required for --live")
+    if config.production_shaped:
+        validate_production_shaped_live_config(config)
+
+
+def is_local_transport(value: str) -> bool:
+    lowered = value.strip().lower()
+    return (
+        "127.0.0.1" in lowered
+        or "localhost" in lowered
+        or "kubectl proxy" in lowered
+        or "kubectl-proxy" in lowered
+        or "port-forward" in lowered
+    )
+
+
+def validate_production_shaped_live_config(config: LiveConfig) -> None:
+    if not config.gateway_url.strip():
+        fail("production-shaped live mode requires --gateway-url")
+    if not config.ani_bearer_token.strip():
+        fail("production-shaped live mode requires --ani-bearer-token")
+    if is_local_transport(config.gateway_url):
+        fail("production-shaped live mode requires a non-local production gateway URL")
 
 
 def validate_external_lb_config(config: ExternalLBConfig) -> None:
@@ -712,12 +780,97 @@ def run_external_lb_live(config: ExternalLBConfig, runner: LiveRunner | None = N
     }
 
 
-def cleanup_live_resources(config: LiveConfig, runner: LiveRunner) -> dict[str, object]:
+def gateway_url(config: LiveConfig, path: str, query: dict[str, str] | None = None) -> str:
+    url = config.gateway_url.rstrip("/") + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    return url
+
+
+def create_gateway_network_resources(config: LiveConfig, http_client: HTTPClient) -> dict[str, object]:
+    vpc_status, vpc = http_client.request(
+        "POST",
+        gateway_url(config, "/networks/vpcs"),
+        config.ani_bearer_token,
+        config.tenant_id,
+        {
+            "idempotency_key": f"live-vpc-{config.vpc_name}",
+            "name": config.vpc_name,
+            "cidr": config.cidr,
+        },
+    )
+    vpc_id = str(vpc.get("id", "")).strip()
+    if vpc_status != 201 or not vpc_id:
+        fail("production-shaped S01 Gateway VPC create must return 201 and id")
+
+    subnet_status, subnet = http_client.request(
+        "POST",
+        gateway_url(config, "/networks/subnets"),
+        config.ani_bearer_token,
+        config.tenant_id,
+        {
+            "idempotency_key": f"live-subnet-{config.subnet_name}",
+            "vpc_id": vpc_id,
+            "name": config.subnet_name,
+            "cidr": config.cidr,
+            "gateway": config.gateway,
+        },
+    )
+    subnet_id = str(subnet.get("id", "")).strip()
+    if subnet_status != 201 or not subnet_id:
+        fail("production-shaped S01 Gateway subnet create must return 201 and id")
+
+    route_status, route = http_client.request(
+        "POST",
+        gateway_url(config, "/networks/routes"),
+        config.ani_bearer_token,
+        config.tenant_id,
+        {
+            "idempotency_key": f"live-route-{config.route_name}",
+            "vpc_id": vpc_id,
+            "destination_cidr": config.route_destination,
+            "next_hop_type": "gateway",
+            "next_hop_id": config.route_next_hop,
+            "description": "Sprint 13 S01 production-shaped live gate route",
+        },
+    )
+    route_id = str(route.get("id", "")).strip()
+    if route_status != 201 or not route_id:
+        fail("production-shaped S01 Gateway route create must return 201 and id")
+    if route.get("destination_cidr") != config.route_destination or route.get("next_hop_id") != config.route_next_hop:
+        fail("production-shaped S01 Gateway route response must match requested destination and next hop")
+
+    list_status, route_list = http_client.request(
+        "GET",
+        gateway_url(config, "/networks/routes", {"vpc_id": vpc_id}),
+        config.ani_bearer_token,
+        config.tenant_id,
+    )
+    items = route_list.get("items")
+    if list_status != 200 or not isinstance(items, list):
+        fail("production-shaped S01 Gateway route list must return 200 with items")
+    if not any(isinstance(item, dict) and item.get("id") == route_id for item in items):
+        fail("production-shaped S01 Gateway route list must include created route")
+
+    return {
+        "gateway_vpc_create_status": vpc_status,
+        "gateway_subnet_create_status": subnet_status,
+        "gateway_route_create_status": route_status,
+        "gateway_route_list_status": list_status,
+        "gateway_route_count": len(items),
+        "gateway_vpc_id": vpc_id,
+        "gateway_subnet_id": subnet_id,
+        "gateway_route_id": route_id,
+    }
+
+
+def cleanup_live_resources(config: LiveConfig, runner: LiveRunner, resource_names: dict[str, str] | None = None) -> dict[str, object]:
     namespace = tenant_namespace(config)
-    vpc_name = kubernetes_name("vpc", config.vpc_name)
-    subnet_name = kubernetes_name("subnet", config.subnet_name)
-    security_group_name = kubernetes_name("sg", config.security_group_name)
-    load_balancer_name = kubernetes_name("lb", config.load_balancer_name)
+    names = resource_names or {}
+    vpc_name = names.get("vpc") or kubernetes_name("vpc", config.vpc_name)
+    subnet_name = names.get("subnet") or kubernetes_name("subnet", config.subnet_name)
+    security_group_name = names.get("security_group") or kubernetes_name("sg", config.security_group_name)
+    load_balancer_name = names.get("load_balancer") or kubernetes_name("lb", config.load_balancer_name)
     deleted = [
         f"service/{load_balancer_name}",
         f"networkpolicy/{security_group_name}",
@@ -733,14 +886,22 @@ def cleanup_live_resources(config: LiveConfig, runner: LiveRunner) -> dict[str, 
     return {"status": "deleted", "resources": deleted}
 
 
-def run_live(config: LiveConfig, runner: LiveRunner | None = None, cleanup: bool = False) -> dict[str, object]:
+def run_live(
+    config: LiveConfig,
+    runner: LiveRunner | None = None,
+    cleanup: bool = False,
+    http_client: HTTPClient | None = None,
+) -> dict[str, object]:
     runner = runner or LiveRunner()
+    http_client = http_client or HTTPClient()
     namespace = tenant_namespace(config)
     vpc_name = kubernetes_name("vpc", config.vpc_name)
     subnet_name = kubernetes_name("subnet", config.subnet_name)
     route_name = kubernetes_name("route", config.route_name)
     security_group_name = kubernetes_name("sg", config.security_group_name)
     load_balancer_name = kubernetes_name("lb", config.load_balancer_name)
+    gateway_result: dict[str, object] = {}
+    cleanup_names: dict[str, str] = {}
 
     runner.run(kubectl(config, ["get", "crd", "vpcs.kubeovn.io", "-o", "json"]))
     runner.run(kubectl(config, ["get", "crd", "subnets.kubeovn.io", "-o", "json"]))
@@ -749,9 +910,16 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None, cleanup: bool
         fail("kubectl auth can-i create vpcs.kubeovn.io must return yes")
 
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=namespace_manifest(config))
-    runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=vpc_manifest(config))
-    runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=subnet_manifest(config))
-    runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=route_manifest(config))
+    if config.production_shaped:
+        gateway_result = create_gateway_network_resources(config, http_client)
+        vpc_name = network_provider_name("vpc", str(gateway_result["gateway_vpc_id"]))
+        subnet_name = network_provider_name("subnet", str(gateway_result["gateway_subnet_id"]))
+        route_name = network_provider_name("route", str(gateway_result["gateway_route_id"]))
+        cleanup_names = {"vpc": vpc_name, "subnet": subnet_name}
+    else:
+        runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=vpc_manifest(config))
+        runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=subnet_manifest(config))
+        runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=route_manifest(config))
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=networkpolicy_manifest(config))
     runner.run(kubectl(config, ["apply", "-f", "-"]), input_text=service_manifest(config))
 
@@ -781,8 +949,20 @@ def run_live(config: LiveConfig, runner: LiveRunner | None = None, cleanup: bool
         "security_group": security_group_name,
         "load_balancer": load_balancer_name,
     }
+    result.update(gateway_result)
+    if config.production_shaped:
+        result["production_shape"] = {
+            "status": "passed",
+            "transport_profile": "production_gateway_in_cluster_serviceaccount",
+            "missing_items": [],
+            "proof_items": [
+                "production_gateway",
+                "in_cluster_serviceaccount_rbac",
+                "persistent_route_metadata_reconciliation",
+            ],
+        }
     if cleanup:
-        result["cleanup"] = cleanup_live_resources(config, runner)
+        result["cleanup"] = cleanup_live_resources(config, runner, cleanup_names)
     return result
 
 
@@ -845,6 +1025,9 @@ def main() -> int:
         default=os.getenv("ANI_LIVE_ROUTE_NEXT_HOP", os.getenv("ANI_LIVE_SUBNET_GATEWAY", "10.244.80.1")),
     )
     parser.add_argument("--kubeconfig", default=os.getenv("KUBECONFIG", ""))
+    parser.add_argument("--gateway-url", default=os.getenv("ANI_GATEWAY_URL", ""))
+    parser.add_argument("--ani-bearer-token", default=os.getenv("ANI_BEARER_TOKEN", ""))
+    parser.add_argument("--production-shaped", action="store_true", help="require production-shaped S01 transport and write production_shape evidence")
     parser.add_argument("--external-lb-live", action="store_true", help="also prove external Kube-OVN LoadBalancer reachability")
     parser.add_argument("--external-lb-namespace", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_NAMESPACE", "default"))
     parser.add_argument("--external-lb-service-name", default=os.getenv("ANI_KUBEOVN_EXTERNAL_LB_SERVICE", "ani-kubeovn-external-lb-smoke"))
@@ -894,6 +1077,9 @@ def main() -> int:
             route_destination=args.route_destination,
             route_next_hop=args.route_next_hop,
             kubeconfig=args.kubeconfig,
+            gateway_url=args.gateway_url,
+            ani_bearer_token=args.ani_bearer_token,
+            production_shaped=args.production_shaped,
         )
         validate_live_config(config)
         external_config = None

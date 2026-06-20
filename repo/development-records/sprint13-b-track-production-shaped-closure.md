@@ -3,7 +3,7 @@
 > 记录类型：Sprint 13 B-track production-shaped closure
 > 日期：2026-06-20
 > 范围：仅 ANI Core S01-S04 production-shaped 代码、部署契约与门禁闭环；不改 Services，不推远端
-> 状态：**production-shaped acceptance standard ready; historical S01-S04 lab evidence remains pending until rerun with production-shaped live mode**。
+> 状态：**production-shaped acceptance passed for S01-S04**；不代表 full platform production ready。
 
 ## 目标
 
@@ -20,6 +20,7 @@
 | 切片 | 修复内容 | 生产验收影响 |
 |---|---|---|
 | S01 网络路由 Kube-OVN | `NetworkResourceStore.UpsertRoute`、`MetadataNetworkStore.UpsertRoute`、`LocalNetworkService.CreateRoute` 持久化 pending/success/failed route；新增 `network_routes` migration | route provider 不再只有内存态，具备持久 route metadata reconciliation 基础 |
+| S01 network provider closure | `LocalNetworkService` provider pipeline 从 route-only 提升为 VPC/Subnet/SecurityGroup/LoadBalancer/Route 通用 provider；`KubernetesRESTClient.ServerSideDryRun` 改为 server-side apply PATCH `dryRun=All`，避免 route 更新既有 VPC 时 POST create 409 | S01 production-shaped gate 现在强制经 ANI Gateway create/list 后再观测底层 Kube-OVN，禁止 kubectl-only evidence 标 passed |
 | S01/S03/S04 Kubernetes provider | `KubernetesRESTClient` 支持 in-cluster ServiceAccount token/CA；Gateway network/storage/gpu runtime 与 `pkg/bootstrap` provider 装配均透传 service host/port/token/CA file | Gateway 与 bootstrap 能力装配路径均可用正式 ServiceAccount/RBAC 访问 Kubernetes API |
 | S02 K8s workloads vCluster | `validate_vcluster_live_gate.py --production-shaped` 拒绝 `--proxy-server` 与本地 Gateway，要求非本地 metadata target server | 后续 S02 passed evidence 必须证明 per-cluster metadata target + TLS/token |
 | S03 storage Rook-Ceph | `validate_storage_live_gate.py --production-shaped` 拒绝本地 Gateway，并写入 S03 production proof items | 后续 S03 passed evidence 必须经 production gateway / in-cluster RBAC 路径 |
@@ -40,19 +41,21 @@ make validate-sprint13-b-track-production-shape
 
 该门禁现在同时检查：
 
-- S01-S04 historical evidence 仍必须显式保留 `production_shape.status=pending`，不能误标 production ready。
-- 若未来某切片把 `production_shape.status` 改为 `passed`，必须：
+- S01-S04 passed evidence 必须：
   - `transport_profile` 不含 lab/local/dev gateway/kubectl proxy/port-forward；
   - `missing_items` 为空；
   - `proof_items` 包含该切片要求的生产证明项。
+- S01 passed evidence 还必须包含 Gateway VPC/Subnet/Route create status、Route list status、Gateway route id 与 route count，禁止 kubectl-only evidence。
+- S02/S03/S04 passed evidence 还必须包含各自正向业务证据：S02 `proxy_status=200` / `workloads_status=200` / workload count / cleanup，S03 volume/snapshot/filesystem/mount-target lifecycle status / cleanup，S04 Core GPU inventory/occupancy status、GPU capacity、GPU node count 与 DCGM metric evidence。
 - `deploy/real-k8s-lab/sprint13-production-shaped-gateway-profile.yaml` 必须覆盖 S01-S07 的 proof 标准。
 - `deploy/real-k8s-lab/sprint13-production-shaped-gateway-rbac.yaml` 必须包含 Gateway ServiceAccount、ClusterRole、ClusterRoleBinding 和最小 Kubernetes/Kube-OVN/CSI/GPU 资源权限，且不得授予 wildcard resources。
 
 ## 重要边界
 
-本批次没有把旧 S01-S04 lab evidence 改写为 production-shaped passed，因为尚未在正式 Gateway + in-cluster ServiceAccount/RBAC + metadata target / cluster Service 路径重新执行真实写操作。
+S01-S04 已在正式 Gateway + in-cluster ServiceAccount/RBAC + metadata target / cluster Service 路径重新执行对应 `--production-shaped` live gate，并产出新的非敏感 evidence JSON，四份 evidence 均为 `production_shape.status=passed`。
 
-S01-S04 现在达到的是 **production-shaped acceptance standard ready**：代码、部署契约、迁移和门禁已经具备生产验收形态；要把单个切片标 `production_shape.status=passed`，必须重新跑对应 `--production-shaped` live gate 并产出新的非敏感 evidence JSON。
+该结论只代表 **production-shaped acceptance passed**，不是 full platform production ready：Auth/Dex production gate、正式镜像发布/升级、长期 SLA/soak、备份/恢复和故障注入仍需后续单独门禁。
+S01 也尚未证明 Gateway delete / provider delete 全生命周期；本轮 cleanup 是 live gate 对底层临时资源的受控清理。
 
 ## 验证
 

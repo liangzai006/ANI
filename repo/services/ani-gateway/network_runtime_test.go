@@ -26,7 +26,7 @@ func TestGatewayNetworkServiceFromConfigUsesKubeOVNProvider(t *testing.T) {
 		ProviderMode:         "kubeovn_rest",
 		ProviderApply:        true,
 		ProviderUserID:       "ani-core-network-provider",
-		ProviderProof:        "rbac-scope:networks.routes.write",
+		ProviderProof:        "rbac-scope:networks.write",
 		KubernetesAPIHost:    "https://kubernetes.example.test",
 		KubernetesHTTPClient: &http.Client{Transport: transport},
 	})
@@ -58,8 +58,8 @@ func TestGatewayNetworkServiceFromConfigUsesKubeOVNProvider(t *testing.T) {
 	if route.State != ports.NetworkResourceAvailable {
 		t.Fatalf("route state = %s, want available from Kube-OVN observe", route.State)
 	}
-	if transport.postCalls != 1 || transport.patchCalls != 1 || transport.getCalls != 1 {
-		t.Fatalf("transport post=%d patch=%d get=%d, want dry-run/apply/observe", transport.postCalls, transport.patchCalls, transport.getCalls)
+	if transport.postCalls != 0 || transport.patchCalls != 4 || transport.getCalls != 2 {
+		t.Fatalf("transport post=%d patch=%d get=%d, want VPC + route dry-run/apply PATCH and observe", transport.postCalls, transport.patchCalls, transport.getCalls)
 	}
 }
 

@@ -23,6 +23,8 @@ class FakeRunner:
     def run(self, command: list[str], env: dict[str, str] | None = None) -> str:
         self.commands.append(command)
         self.envs.append(env)
+        if command[0] == "vcluster" and "--print" in command:
+            return "apiVersion: v1\nkind: Config\n"
         if command[0] == "vcluster":
             return '{"major":"1","minor":"35","gitVersion":"v1.35.0"}'
         if command[0] == "kubectl":
@@ -373,6 +375,129 @@ class VClusterLiveGateTest(unittest.TestCase):
                 "get",
                 "--raw",
                 "/version",
+            ],
+        )
+
+    def test_production_shaped_live_gate_uses_metadata_target_kubeconfig_for_kubectl(self) -> None:
+        runner = FakeRunner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = gate.run_live(
+                gate.LiveConfig(
+                    tenant_id="tenant-a",
+                    cluster_id="k8sclu-live",
+                    gateway_url="https://ani-gateway.ani-system.svc:8080/api/v1",
+                    ani_bearer_token="ani-token",
+                    kubeconfig="/tmp/real-lab.kubeconfig",
+                    vcluster_server="https://{cluster_id}.ani-tenant-tenant-a:443",
+                    production_shaped=True,
+                    work_dir=Path(tmpdir),
+                ),
+                runner=runner,
+            )
+
+            direct_kubeconfig = str(Path(tmpdir) / "k8sclu-core-live.kubeconfig")
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["production_shape"]["status"], "passed")
+        self.assertEqual(
+            runner.posts[0],
+            (
+                "https://ani-gateway.ani-system.svc:8080/api/v1/k8s-clusters",
+                {
+                    "idempotency_key": "live-core-k8sclu-live",
+                    "name": "k8sclu-live",
+                    "version": "v1.35.0",
+                },
+                "ani-token",
+                "tenant-a",
+            ),
+        )
+        self.assertEqual(
+            runner.commands[0],
+            [
+                "vcluster",
+                "connect",
+                "k8sclu-core-live",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--print",
+                "--server",
+                "https://k8sclu-core-live.ani-tenant-tenant-a:443",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[1],
+            [
+                "kubectl",
+                "--kubeconfig",
+                direct_kubeconfig,
+                "get",
+                "--raw",
+                "/version",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[2],
+            [
+                "kubectl",
+                "--kubeconfig",
+                direct_kubeconfig,
+                "-n",
+                "default",
+                "delete",
+                "deployment",
+                "ani-s02-live-workload",
+                "--ignore-not-found=true",
+            ],
+        )
+        self.assertEqual(
+            runner.commands[3],
+            [
+                "kubectl",
+                "--kubeconfig",
+                direct_kubeconfig,
+                "-n",
+                "default",
+                "create",
+                "deployment",
+                "ani-s02-live-workload",
+                "--image",
+                "registry.k8s.io/pause:3.10",
+                "--replicas",
+                "1",
+            ],
+        )
+        self.assertEqual(runner.commands[4], runner.commands[2])
+
+    def test_helm_install_command_supports_local_chart_archive(self) -> None:
+        command = gate.helm_install_command(
+            gate.LiveConfig(
+                tenant_id="tenant-a",
+                cluster_id="k8sclu-live",
+                gateway_url="https://ani-gateway.example.test/api/v1",
+                ani_bearer_token="ani-token",
+                kubeconfig="/tmp/kubeconfig",
+                chart_name="/tmp/vcluster-0.34.1.tgz",
+                chart_repo="none",
+            )
+        )
+
+        self.assertEqual(
+            command,
+            [
+                "helm",
+                "upgrade",
+                "--install",
+                "k8sclu-live",
+                "/tmp/vcluster-0.34.1.tgz",
+                "--namespace",
+                "ani-tenant-tenant-a",
+                "--create-namespace",
+                "--repository-config=",
+                "--set",
+                "sync.toHost.services.enabled=true",
+                "--version",
+                "0.34.1",
             ],
         )
 

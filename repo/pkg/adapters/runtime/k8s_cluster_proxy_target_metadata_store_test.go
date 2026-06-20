@@ -18,6 +18,7 @@ func TestMetadataK8sClusterProxyTargetStoreUpsertsTarget(t *testing.T) {
 		ClusterID:   "k8sclu-a",
 		Server:      "https://vc-a.example/",
 		BearerToken: "token-a",
+		CAData:      "ca-data",
 	})
 	if err != nil {
 		t.Fatalf("UpsertK8sClusterProxyTarget() error = %v", err)
@@ -34,6 +35,9 @@ func TestMetadataK8sClusterProxyTargetStoreUpsertsTarget(t *testing.T) {
 	if got, want := tx.args[3], "token-a"; got != want {
 		t.Fatalf("bearer_token arg = %v, want %s", got, want)
 	}
+	if got, want := tx.args[4], "ca-data"; got != want {
+		t.Fatalf("ca_data arg = %v, want %s", got, want)
+	}
 }
 
 func TestMetadataK8sClusterProxyTargetStoreResolvesTarget(t *testing.T) {
@@ -43,6 +47,9 @@ func TestMetadataK8sClusterProxyTargetStoreResolvesTarget(t *testing.T) {
 			"k8sclu-a",
 			"https://vc-a.example",
 			"token-a",
+			"ca-data",
+			"cert-data",
+			"key-data",
 		}},
 	}
 	store := NewMetadataK8sClusterProxyTargetStore(fakeMetadataStore{tx: tx})
@@ -57,7 +64,7 @@ func TestMetadataK8sClusterProxyTargetStoreResolvesTarget(t *testing.T) {
 	if !strings.Contains(tx.queryRowSQL, "FROM k8s_cluster_proxy_targets") {
 		t.Fatalf("query sql = %q, want proxy target lookup", tx.queryRowSQL)
 	}
-	if got.Server != "https://vc-a.example" || got.BearerToken != "token-a" {
+	if got.Server != "https://vc-a.example" || got.BearerToken != "token-a" || got.CAData != "ca-data" || got.ClientCertificateData != "cert-data" || got.ClientKeyData != "key-data" {
 		t.Fatalf("resolved target = %+v", got)
 	}
 }

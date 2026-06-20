@@ -8,12 +8,14 @@
   "occupancy_status": 200,
   "occupancy_total": 6,
   "production_shape": {
-    "missing_items": [
-      "production_in_cluster_kubernetes_api",
+    "missing_items": [],
+    "proof_items": [
+      "production_gateway",
+      "in_cluster_kubernetes_api",
       "production_dcgm_service_or_prometheus_query"
     ],
-    "status": "pending",
-    "transport_profile": "lab_proxy"
+    "status": "passed",
+    "transport_profile": "in_cluster_kubernetes_api_and_cluster_metrics_service"
   },
   "profile": "SPRINT13-GPU-INVENTORY-DCGM-A",
   "status": "passed"

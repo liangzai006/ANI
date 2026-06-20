@@ -3,6 +3,9 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -171,7 +174,11 @@ func (s *k8sClusterProxyForwardingService) ListWorkloads(ctx context.Context, re
 		if target.BearerToken != "" {
 			httpReq.Header.Set("Authorization", "Bearer "+target.BearerToken)
 		}
-		resp, err := s.httpClient.Do(httpReq)
+		client, err := s.httpClientForTarget(target)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(httpReq)
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +250,11 @@ func (s *k8sClusterProxyForwardingService) Proxy(ctx context.Context, req ports.
 	if target.BearerToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+target.BearerToken)
 	}
-	resp, err := s.httpClient.Do(httpReq)
+	client, err := s.httpClientForTarget(target)
+	if err != nil {
+		return ports.K8sClusterProxyRecord{}, err
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return ports.K8sClusterProxyRecord{}, err
 	}
@@ -267,6 +278,50 @@ func (s *k8sClusterProxyForwardingService) Proxy(ctx context.Context, req ports.
 		Body:       decoded,
 		ProxiedAt:  s.now().UTC().Unix(),
 	}, nil
+}
+
+func (s *k8sClusterProxyForwardingService) httpClientForTarget(target ports.K8sClusterProxyTarget) (*http.Client, error) {
+	if target.CAData == "" && target.ClientCertificateData == "" && target.ClientKeyData == "" {
+		return s.httpClient, nil
+	}
+	certPEM, err := decodeKubeconfigPEM("client certificate", target.ClientCertificateData)
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := decodeKubeconfigPEM("client key", target.ClientKeyData)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid k8s proxy client certificate: %v", ports.ErrInvalid, err)
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	if target.CAData != "" {
+		caPEM, err := decodeKubeconfigPEM("certificate authority", target.CAData)
+		if err != nil {
+			return nil, err
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("%w: invalid k8s proxy certificate authority data", ports.ErrInvalid)
+		}
+		tlsConfig.RootCAs = pool
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	return &http.Client{Transport: transport, Timeout: s.httpClient.Timeout}, nil
+}
+
+func decodeKubeconfigPEM(label string, value string) ([]byte, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, fmt.Errorf("%w: k8s proxy %s data is required", ports.ErrInvalid, label)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid k8s proxy %s data: %v", ports.ErrInvalid, label, err)
+	}
+	return decoded, nil
 }
 
 func k8sProxyUpstreamURL(server string, path string, query map[string]string) (string, error) {

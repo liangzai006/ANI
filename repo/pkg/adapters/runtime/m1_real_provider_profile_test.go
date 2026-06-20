@@ -42,7 +42,7 @@ func TestM1RealProviderProfileCreateLifecycleAndOps(t *testing.T) {
 	if created.Apply.Provider != "kubernetes" || len(created.Apply.ResourceRefs) != 1 {
 		t.Fatalf("provider apply = %#v, want kubernetes resource ref", created.Apply)
 	}
-	if !provider.seen("POST", "/apis/apps/v1/namespaces/ani-tenant-tenant-a/deployments", "dryRun=All") {
+	if !provider.seen("PATCH", "/apis/apps/v1/namespaces/ani-tenant-tenant-a/deployments/app-01", "dryRun=All") {
 		t.Fatalf("provider requests = %#v, want server-side dry-run", provider.requests)
 	}
 	if !provider.seen("PATCH", "/apis/apps/v1/namespaces/ani-tenant-tenant-a/deployments/app-01", "fieldManager=ani-test") {

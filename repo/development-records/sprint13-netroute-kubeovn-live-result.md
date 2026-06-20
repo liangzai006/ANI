@@ -1,90 +1,50 @@
-# SPRINT13-NETROUTE-KUBEOVN-LIVE-A — 网络路由 Kube-OVN live gate 结果
+# SPRINT13-NETROUTE-KUBEOVN-LIVE-A - Network route Kube-OVN live gate result
 
-> 记录类型：Sprint 13 B-track live result
+> 记录类型：Sprint 13 B-track production-shaped live result
 > 完成日期：2026-06-20
-> 范围：仅 ANI Core S01 网络路由 Kube-OVN real-provider evidence；不代表 production ready
-> 状态：**real-provider evidence passed for S01 route gate, production-shaped gate pending**
-
-## 目标
-
-在人工确认真实写操作后，对 Sprint 13 S01 网络路由 Kube-OVN 执行真实 live gate，证明临时 Vpc/Subnet/route/NetworkPolicy/Service 能在真实 Kubernetes + Kube-OVN lab 中 create/observe，并在成功后清理临时资源。
+> 范围：ANI Core S01 network route Kube-OVN provider / route metadata / cleanup
+> 状态：**production-shaped gate passed**；不代表 full platform production ready
 
 ## §153 五项实测结果
 
 | 项 | 实测结果 |
 |---|---|
-| 当前状态 | S01 网络路由 Kube-OVN real-provider evidence passed。Core route provider 已通过 `NETWORK_PROVIDER=kubeovn_rest` 显式路径接入 `RenderRoute -> DryRun -> Apply -> Observe`；Gateway 可注入 provider-backed `ports.NetworkService`，handler 不绕过 port。 |
-| 真实组件 + 版本 | Kubernetes `v1.36.1`，Kube-OVN `v1.15.8`。执行前已确认三节点 Ready、Kube-OVN 组件 Running，`Vpc.spec.staticRoutes` API 字段存在。 |
-| live gate 命令 | `python scripts/validate_kubeovn_network_live_gate.py --live --cleanup --tenant-id sprint13-s01-b --vpc-name sprint13-s01-route --subnet-name sprint13-s01-subnet --route-name sprint13-s01-route --security-group-name sprint13-s01-sg --load-balancer-name sprint13-s01-lb --cidr 10.244.180.0/24 --gateway 10.244.180.1 --route-destination 10.250.0.0/16 --route-next-hop 10.244.180.1 --evidence-output development-records/live-evidence/sprint13-netroute-kubeovn-live-evidence.json` |
+| 当前状态 | S01 已重新执行严格版 `--production-shaped` live gate 并通过。ANI Gateway 先经 Core API 创建 VPC/Subnet/Route 并通过 `GET /networks/routes` list 校验，再用 kubectl 只做真实 Kubernetes + Kube-OVN 底层对象 observe/cleanup。 |
+| 真实组件 + 版本 | Kubernetes `v1.36.1`；Kube-OVN `v1.15.8`；route 写入 `Vpc.spec.staticRoutes`。 |
+| live gate 命令 | `python3 scripts/validate_kubeovn_network_live_gate.py --live --cleanup --production-shaped --gateway-url http://ani-gateway.ani-system.svc:8080/api/v1 --ani-bearer-token <redacted> --kubeconfig /tmp/incluster.kubeconfig --tenant-id tenant-a --vpc-name ani-s01-prodshape-gateway-vpc3 --subnet-name ani-s01-prodshape-gateway-subnet3 --route-name ani-s01-prodshape-gateway-route3 --security-group-name ani-s01-prodshape-gateway-sg3 --load-balancer-name ani-s01-prodshape-gateway-lb3 --evidence-output development-records/live-evidence/sprint13-netroute-kubeovn-live-evidence.json` |
 | evidence 输出路径 | `repo/development-records/live-evidence/sprint13-netroute-kubeovn-live-evidence.json` |
-| 失败边界 | 本次已通过，因此 S01 route provider 可标 real-provider evidence passed；但不代表 production ready，不证明生产 RBAC/凭据管理、持久 route 元数据、`instance`/`nat` next hop 映射、外部负载均衡可达性或其他 Sprint 13 切片已完成。Production-shaped gate: **PENDING**，`production_shape.status=pending`。 |
+| 边界 | Production-shaped gate passed 只证明 S01 Gateway create/list、provider apply/observe、in-cluster RBAC 与 route metadata reconciliation 门禁通过；cleanup 由 live gate 对底层临时资源执行，不证明 Gateway delete / provider delete 全生命周期；不代表 production ready / full platform release，不代表外部 LB 数据面 SLA、生产凭据轮换或所有网络高级能力完成。 |
 
-## 关键输出
-
-```text
-M1-NETWORK-LIVE-A live checks valid; evidence written to development-records/live-evidence/sprint13-netroute-kubeovn-live-evidence.json
-```
-
-Evidence 摘要：
+## Evidence 摘要
 
 ```json
 {
-  "id": "kubeovn-network-live-gate",
-  "profile": "M1-NETWORK-LIVE-A",
   "status": "passed",
-  "namespace": "ani-tenant-sprint13-s01-b",
-  "vpc": "vpc-sprint13-s01-route",
-  "subnet": "subnet-sprint13-s01-subnet",
-  "route": "route-sprint13-s01-route",
-  "security_group": "sg-sprint13-s01-sg",
-  "load_balancer": "lb-sprint13-s01-lb",
+  "namespace": "ani-tenant-tenant-a",
+  "cleanup": {"status": "deleted"},
+  "gateway_vpc_create_status": 201,
+  "gateway_subnet_create_status": 201,
+  "gateway_route_create_status": 201,
+  "gateway_route_list_status": 200,
+  "gateway_route_count": 1,
   "production_shape": {
-    "missing_items": [
-      "production_rbac_and_credential_management",
+    "status": "passed",
+    "transport_profile": "production_gateway_in_cluster_serviceaccount",
+    "missing_items": [],
+    "proof_items": [
+      "production_gateway",
+      "in_cluster_serviceaccount_rbac",
       "persistent_route_metadata_reconciliation"
-    ],
-    "status": "pending",
-    "transport_profile": "lab_kubeconfig"
-  },
-  "cleanup": {
-    "status": "deleted",
-    "resources": [
-      "service/lb-sprint13-s01-lb",
-      "networkpolicy/sg-sprint13-s01-sg",
-      "subnet/subnet-sprint13-s01-subnet",
-      "vpc/vpc-sprint13-s01-route",
-      "namespace/ani-tenant-sprint13-s01-b"
     ]
   }
 }
 ```
 
-## 清理核验
+## 代码与部署闭环
 
-已使用真实 Kubernetes API 查询以下临时资源，均为空输出：
-
-```bash
-kubectl get ns ani-tenant-sprint13-s01-b --ignore-not-found
-kubectl get vpc vpc-sprint13-s01-route --ignore-not-found
-kubectl get subnet subnet-sprint13-s01-subnet --ignore-not-found
-kubectl get networkpolicy sg-sprint13-s01-sg -n ani-tenant-sprint13-s01-b --ignore-not-found
-kubectl get service lb-sprint13-s01-lb -n ani-tenant-sprint13-s01-b --ignore-not-found
-```
-
-## 代码与契约边界
-
-- `ports.NetworkProviderRenderer.RenderRoute` 已纳入 port，route 渲染经 `KubeOVNNetworkRenderer` 输出 `Vpc.spec.staticRoutes` manifest。
-- `LocalNetworkService.CreateRoute` 在显式 provider 配置下执行 `RenderRoute -> DryRun -> Apply -> Observe`；默认未配置时仍为 Tier1 local profile。
-- Gateway `RegisterWithOptions` 支持注入 `ports.NetworkService`，`services/ani-gateway/main.go` 可由 `NETWORK_PROVIDER=kubeovn_rest` 构造 provider-backed network service。
-- `scripts/validate_kubeovn_network_live_gate.py --cleanup` 成功后清理临时 Service、NetworkPolicy、Subnet、Vpc 与 Namespace。
-
-## 非目标
-
-- 不声明 network route production ready。
-- Production-shaped gate: **PENDING**；`production_shape.status=pending`。进入生产形态前必须补齐 `production_rbac_and_credential_management` 与 `persistent_route_metadata_reconciliation`，并用正式控制面凭据/RBAC 与持久化 route reconcile 路径重新产出 evidence。
-- 不声明 S02-S07 已完成真实 live gate。
-- 不把 Kube-OVN external LB 可达性、生产镜像供应链、生产凭据管理或多租户长期资源生命周期纳入本次结论。
-
-## Post-closure note
-
-2026-06-20 的 `SPRINT13-B-TRACK-PRODUCTION-SHAPED-CLOSURE` 已补齐 in-cluster ServiceAccount/RBAC profile 与 S01 route metadata persistence；本文件中的 evidence 仍是 historical lab evidence，不能自动升级为 `production_shape.status=passed`。S01 若要标 production-shaped passed，必须使用正式 Gateway / in-cluster RBAC / 持久 route metadata 路径重新产出非敏感 evidence，并通过 `validate-sprint13-b-track-production-shape`。
+- S01 live gate 禁止本地 Gateway / kubectl proxy 形态标 passed，并强制 production-shaped evidence 包含 Gateway VPC/Subnet/Route create 与 Route list 字段。
+- 本次修复了 S01 network provider route-only 缺口：Gateway network provider 现在覆盖 VPC/Subnet/SecurityGroup/LoadBalancer/Route；Kubernetes dry-run 使用 server-side apply PATCH `dryRun=All`，避免 route 更新既有 VPC 时 POST create 409。
+- Kube-OVN tenant subnet 不使用物理管理网 `10.10.0.0/22` 或 Tailscale `100.64.128.0/24`，避免和三台物理服务器管理/远程访问网段重叠。
+- 本次临时 Service、NetworkPolicy、Subnet、Vpc 与 Namespace 底层资源已 cleanup；Core route metadata 作为持久 metadata reconciliation 证据保留，不等同底层临时资源未清理。
+- 当前 Kube-OVN provider adapter 仍只允许 create/apply/observe；若后续要把 S01 标为完整 network lifecycle production ready，必须补 Gateway delete -> provider delete 的代码路径、live gate 和 evidence。
+- S01 live gate 使用的临时 Gateway builder Pod/Service 已在验证后清理，复查 `ani-system` 与 `ani-tenant-tenant-a` 无本次临时对象残留。

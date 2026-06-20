@@ -181,10 +181,13 @@ type K8sClusterWorkloadListRequest struct {
 }
 
 type K8sClusterProxyTarget struct {
-	TenantID    string
-	ClusterID   string
-	Server      string
-	BearerToken string
+	TenantID              string
+	ClusterID             string
+	Server                string
+	BearerToken           string
+	CAData                string
+	ClientCertificateData string
+	ClientKeyData         string
 }
 
 type K8sClusterProxyTargetResolver interface {

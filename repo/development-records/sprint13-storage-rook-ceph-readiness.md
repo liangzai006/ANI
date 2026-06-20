@@ -3,7 +3,7 @@
 > 记录类型：Per-slice readiness（ANI-06「真实底座组件引入强制门禁」§153 的执行前声明）
 > 工件归属：Sprint 13 / Core real provider 与 live gate 收敛
 > 执行地图：[`sprint13-real-provider-readiness-plan.md`](sprint13-real-provider-readiness-plan.md)
-> 状态：**real-provider evidence passed for S03 storage snapshot / mount-target gate**（A 轨与 B 轨 live gate 均已完成）。不代表 production ready。
+> 状态：**production-shaped gate passed for S03 storage snapshot / mount-target gate**（A 轨与 B 轨 live gate 均已完成；`production_shape.status=passed`）。不代表 full platform production ready。
 
 ---
 
@@ -18,11 +18,11 @@
 
 | 项 | 内容 |
 |---|---|
-| **当前状态** | S03 storage snapshot / mount-target real-provider evidence passed；`LocalStorageService` 在显式 provider 配置下可对 volume、filesystem、snapshot 与 mount-target 执行 `Render -> DryRun -> Apply -> Observe`，Gateway 可注入 provider-backed `ports.StorageService`。 |
+| **当前状态** | S03 storage snapshot / mount-target production-shaped gate passed；`LocalStorageService` 在显式 provider 配置下可对 volume、filesystem、snapshot 与 mount-target 执行 `Render -> DryRun -> Apply -> Observe`，Gateway 可注入 provider-backed `ports.StorageService` 并经 in-cluster ServiceAccount/RBAC 访问 Kubernetes/Rook-Ceph。 |
 | **真实组件 + 版本** | Kubernetes `v1.36.1`；Rook `v1.20.0`；Ceph `v19.2.3`；CSI driver `rook-ceph.rbd.csi.ceph.com`；snapshot CRDs 已安装；运行中的 `snapshot-controller` 镜像为 `registry.k8s.io/sig-storage/snapshot-controller:v8.4.0`；Rook RBD CSI ctrlplugin sidecar `csi-snapshotter` 为 `registry.k8s.io/sig-storage/csi-snapshotter:v8.5.0`；StorageClass `ani-rbd-ssd`；VolumeSnapshotClass `csi-rbdplugin-snapclass`。 |
-| **live gate 命令** | `python scripts/validate_storage_live_gate.py --live --gateway-url http://127.0.0.1:8080/api/v1 --ani-bearer-token dev-token --tenant-id tenant-a --namespace ani-tenant-tenant-a --storage-class ani-rbd-ssd --snapshot-class csi-rbdplugin-snapclass --filesystem-backend nfs --kubeconfig ../local-secrets/real-k8s-lab.kubeconfig --evidence-output development-records/live-evidence/sprint13-storage-rook-ceph-live-evidence.json` |
+| **live gate 命令** | `python scripts/validate_storage_live_gate.py --live --production-shaped --gateway-url <in-cluster-core-api>/api/v1 --ani-bearer-token <redacted> --tenant-id <tenant> --namespace <tenant-namespace> --storage-class ani-rbd-ssd --snapshot-class csi-rbdplugin-snapclass --filesystem-backend nfs --kubeconfig <in-cluster-kubeconfig> --evidence-output development-records/live-evidence/sprint13-storage-rook-ceph-live-evidence.json` |
 | **evidence 输出路径** | `repo/development-records/sprint13-storage-rook-ceph-live-result.md` + `repo/development-records/live-evidence/sprint13-storage-rook-ceph-live-evidence.json`。 |
-| **失败边界（不得声称）** | S03 已可标 real-provider evidence passed；仍不得标 production ready，不证明长期租户存储生命周期、PVC 真实数据面读写、生产凭据管理、备份/恢复策略、CephFS/NFS 后端生产形态或 S04-S07 完成。 |
+| **失败边界（不得声称）** | S03 已可标 production-shaped acceptance passed；仍不得标 full platform production ready，不证明长期租户存储生命周期、PVC 真实数据面读写、备份/恢复策略、CephFS/NFS 后端生产形态或 S04-S07 完成。 |
 
 ## 2. 代码边界
 

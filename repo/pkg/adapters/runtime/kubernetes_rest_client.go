@@ -149,8 +149,8 @@ func (c *KubernetesRESTClient) ServerSideDryRun(ctx context.Context, manifests [
 		if err != nil {
 			return ports.WorkloadProviderDryRunResult{}, err
 		}
-		endpoint := c.collectionURL(resource, "dryRun=All")
-		if _, err := c.do(ctx, http.MethodPost, endpoint, "application/json", []byte(manifest.Content)); err != nil {
+		query := "fieldManager=" + url.QueryEscape(c.fieldManager) + "&force=true&dryRun=All"
+		if _, err := c.do(ctx, http.MethodPatch, c.resourceURL(resource, query), kubernetesApplyPatchContentType, []byte(manifest.Content)); err != nil {
 			return ports.WorkloadProviderDryRunResult{}, err
 		}
 	}

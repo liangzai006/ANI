@@ -3,26 +3,26 @@
 > 记录类型：Per-slice readiness（ANI-06「真实底座组件引入强制门禁」§153 的执行前声明）
 > 工件归属：Sprint 13 / Core real provider 与 live gate 收敛
 > 执行地图：[`sprint13-real-provider-readiness-plan.md`](sprint13-real-provider-readiness-plan.md)
-> 状态：**real-provider evidence passed for S01 route gate**。已跑通真实 live gate 并归档 evidence；不代表 production ready。
+> 状态：**production-shaped gate passed for S01 network route gate**。已跑通 Gateway create/list + Kube-OVN bottom observation 并归档 evidence；不代表 full platform production ready。
 
 ---
 
 ## 0. 已核对的真实事实（禁止臆测）
 
 1. Sprint 12 已落地路由契约与本地实现：`ports.NetworkService.CreateRoute/ListRoutes`（`pkg/ports/network_resources.go`），网关 `GET/POST /networks/routes`（`services/ani-gateway/internal/router/network_resources.go`），当前由 in-memory `NetworkService`（`pkg/adapters/runtime/network_service.go`）支撑 = Tier1 local profile。
-2. 网络真实 provider 既有管线：`ports.NetworkProvider`（`DryRun`/`Apply`/`Observe`）+ `KubeOVNNetworkProviderAdapter`（`pkg/adapters/runtime/kubeovn_network_provider.go`）+ `KubernetesNetworkProviderClient`。VPC/Subnet/SG/LB 已按 render→apply→observe 走真实 provider（Sprint 5 evidence：`m1-network-live-c-kubeovn-real-lab-result.md`）。S01 B 轨已将 `RenderRoute` 纳入 `ports.NetworkProviderRenderer`，并让 `LocalNetworkService.CreateRoute` 在显式 `NETWORK_PROVIDER=kubeovn_rest` 时进入 route renderer→dry-run→apply→observe 管线；Gateway runtime 已支持注入 provider-backed `ports.NetworkService`。
-3. live gate 入口：`make validate-kubeovn-network-live-gate` → `scripts/validate_kubeovn_network_live_gate.py`(+test)；fixtures 在 `deploy/real-k8s-lab/kubeovn-network-live-gate.yaml`。S01 A 轨已将 `kubeovn-route-created` 加入契约校验，B 轨已执行真实 `--live --cleanup` 并归档 evidence。
+2. 网络真实 provider 管线：`ports.NetworkProvider`（`DryRun`/`Apply`/`Observe`）+ `KubeOVNNetworkProviderAdapter`（`pkg/adapters/runtime/kubeovn_network_provider.go`）+ `KubernetesNetworkProviderClient`。S01 production-shaped closure 已将 `LocalNetworkService` provider pipeline 从 route-only 提升为 VPC/Subnet/SecurityGroup/LoadBalancer/Route 通用 provider；Gateway runtime 已支持注入 provider-backed `ports.NetworkService`。
+3. live gate 入口：`make validate-kubeovn-network-live-gate` → `scripts/validate_kubeovn_network_live_gate.py`(+test)；fixtures 在 `deploy/real-k8s-lab/kubeovn-network-live-gate.yaml`。S01 production-shaped gate 强制 Gateway `POST/GET /networks/routes` create/list，再由 kubectl 观测底层 Kube-OVN 对象与 cleanup。
 4. 底座（Sprint 5/11 已部署，三台物理服务器）：Kube-OVN `v1.15.8`、Kubernetes `v1.36.1`、CNI/CoreDNS Ready。
 
 ## 1. §153 五项声明
 
 | 项 | 内容 |
 |---|---|
-| **当前状态** | S01 网络路由 Kube-OVN real-provider evidence passed。默认仍为 Tier1 local profile；显式 `NETWORK_PROVIDER=kubeovn_rest`、`NETWORK_PROVIDER_APPLY_ENABLED=true`、`NETWORK_PROVIDER_USER_ID`、`NETWORK_PROVIDER_PERMISSION_PROOF` 时，`CreateRoute` 可进入 Kube-OVN renderer→dry-run→apply→observe；真实 lab 已跑通 route create/observe/cleanup。 |
+| **当前状态** | S01 网络路由 Kube-OVN production-shaped gate passed。默认仍为 Tier1 local profile；显式 `NETWORK_PROVIDER=kubeovn_rest`、`NETWORK_PROVIDER_APPLY_ENABLED=true`、`NETWORK_PROVIDER_USER_ID`、`NETWORK_PROVIDER_PERMISSION_PROOF=rbac-scope:networks.write` 时，VPC/Subnet/Route 等网络资源可进入 Kube-OVN renderer→dry-run(PATCH dryRun=All)→apply→observe；真实 lab 已跑通 Gateway route create/list/observe/cleanup。 |
 | **真实组件 + 版本** | Kube-OVN `v1.15.8`，Kubernetes `v1.36.1`（三台物理开发服务器）。 |
-| **live gate 命令** | 本地契约：`make validate-kubeovn-network-live-gate`；真实 B 轨：`python scripts/validate_kubeovn_network_live_gate.py --live --cleanup --tenant-id <tenant> --evidence-output <path>`（执行前人工只读盘点与确认；成功观察后删除临时资源）。 |
+| **live gate 命令** | 本地契约：`make validate-kubeovn-network-live-gate`；真实 B 轨：`python scripts/validate_kubeovn_network_live_gate.py --live --cleanup --production-shaped --gateway-url <in-cluster-gateway>/api/v1 --ani-bearer-token <redacted> --tenant-id <tenant> --evidence-output <path>`（执行前人工只读盘点与确认；成功观察后删除临时底层资源）。 |
 | **evidence 输出路径** | `repo/development-records/sprint13-netroute-kubeovn-live-result.md` + `repo/development-records/live-evidence/sprint13-netroute-kubeovn-live-evidence.json`。 |
-| **失败边界（不得声称）** | 本次 S01 route live gate 已通过，可标 real-provider evidence passed；但不得标 production ready，不得声称生产 RBAC/凭据管理、持久 route 元数据、`instance`/`nat` next hop 映射、外部负载均衡可达性或 S02-S07 已完成。 |
+| **失败边界（不得声称）** | 本次 S01 production-shaped gate 已通过，可标 production-shaped acceptance passed；但不得标 full platform production ready，不得声称 Auth/Dex、正式镜像发布/升级、长期 SLA、`instance`/`nat` next hop 映射、外部负载均衡数据面 SLA 或 S05-S07 已完成。 |
 
 ## 2. 代码边界（不改 handler、不改 port 签名）
 

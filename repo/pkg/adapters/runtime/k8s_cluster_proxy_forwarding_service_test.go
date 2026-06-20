@@ -2,9 +2,18 @@ package runtime
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +192,66 @@ func TestK8sClusterProxyForwardingServiceListsWorkloadsFromResolvedAPIServer(t *
 	}
 }
 
+func TestK8sClusterProxyForwardingServiceUsesClientCertificateTarget(t *testing.T) {
+	base := NewLocalK8sClusterService()
+	cluster, err := base.CreateCluster(context.Background(), ports.K8sClusterCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "create-mtls-vc",
+		Name:           "mtls-vc",
+		Version:        "v1.35.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCertPEM, clientKeyPEM, clientCert := mustSelfSignedClientCertificate(t)
+	clientCAPool := x509.NewCertPool()
+	clientCAPool.AddCert(clientCert)
+
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || len(r.TLS.PeerCertificates) != 1 {
+			t.Fatalf("upstream did not receive client certificate")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"major":"1","minor":"35","gitVersion":"v1.35.0"}`))
+	}))
+	upstream.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  clientCAPool,
+	}
+	upstream.StartTLS()
+	defer upstream.Close()
+
+	resolver := staticK8sProxyTargetResolver{target: ports.K8sClusterProxyTarget{
+		TenantID:              "tenant-a",
+		ClusterID:             cluster.ClusterID,
+		Server:                upstream.URL,
+		CAData:                base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw})),
+		ClientCertificateData: base64.StdEncoding.EncodeToString(clientCertPEM),
+		ClientKeyData:         base64.StdEncoding.EncodeToString(clientKeyPEM),
+	}}
+	service := NewK8sClusterProxyForwardingService(
+		base,
+		resolver,
+		WithK8sClusterProxyForwardingClock(func() time.Time { return time.Unix(800, 0) }),
+	)
+
+	result, err := service.Proxy(context.Background(), ports.K8sClusterProxyRequest{
+		TenantID:       "tenant-a",
+		ClusterID:      cluster.ClusterID,
+		IdempotencyKey: "proxy-mtls",
+		Method:         "GET",
+		Path:           "/version",
+	})
+	if err != nil {
+		t.Fatalf("Proxy() error = %v", err)
+	}
+	if result.StatusCode != http.StatusOK || result.Body["gitVersion"] != "v1.35.0" {
+		t.Fatalf("proxy result = %+v, want Kubernetes version through mTLS target", result)
+	}
+}
+
 type staticK8sProxyTargetResolver struct {
 	target ports.K8sClusterProxyTarget
 }
@@ -227,4 +296,32 @@ func (t *capturingK8sProxyRoundTripper) RoundTrip(req *http.Request) (*http.Resp
 		Body:       io.NopCloser(strings.NewReader(t.body)),
 		Request:    req,
 	}, nil
+}
+
+func mustSelfSignedClientCertificate(t *testing.T) ([]byte, []byte, *x509.Certificate) {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ani-sprint13-vcluster-client"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return certPEM, keyPEM, cert
 }

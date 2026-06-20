@@ -68,7 +68,7 @@ func TestConfigEnvironmentOverridesNetworkProvider(t *testing.T) {
 	t.Setenv("NETWORK_PROVIDER", "kubeovn_rest")
 	t.Setenv("NETWORK_PROVIDER_APPLY_ENABLED", "true")
 	t.Setenv("NETWORK_PROVIDER_USER_ID", "ani-core-network-provider")
-	t.Setenv("NETWORK_PROVIDER_PERMISSION_PROOF", "rbac-scope:networks.routes.write")
+	t.Setenv("NETWORK_PROVIDER_PERMISSION_PROOF", "rbac-scope:networks.write")
 
 	cfg := (Config{}).withEnvironmentOverrides()
 
@@ -81,7 +81,7 @@ func TestConfigEnvironmentOverridesNetworkProvider(t *testing.T) {
 	if cfg.NetworkProviderUserID != "ani-core-network-provider" {
 		t.Fatalf("NetworkProviderUserID = %q, want ani-core-network-provider", cfg.NetworkProviderUserID)
 	}
-	if cfg.NetworkProviderPermissionProof != "rbac-scope:networks.routes.write" {
+	if cfg.NetworkProviderPermissionProof != "rbac-scope:networks.write" {
 		t.Fatalf("NetworkProviderPermissionProof = %q, want rbac scope proof", cfg.NetworkProviderPermissionProof)
 	}
 }

@@ -890,7 +890,7 @@ image: image-gateway
 image-gateway:
 	docker build -t $(REGISTRY)/ani-gateway:$(VERSION) \
 		-f services/ani-gateway/Dockerfile \
-		services/ani-gateway
+		.
 
 # ── 清理 ──────────────────────────────────────────────────────────────────────
 clean:

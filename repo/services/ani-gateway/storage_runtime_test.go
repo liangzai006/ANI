@@ -58,7 +58,7 @@ func TestGatewayStorageServiceFromConfigUsesKubernetesProvider(t *testing.T) {
 	if snapshot.Status != ports.VolumeSnapshotAvailable {
 		t.Fatalf("snapshot status = %s, want available from Kubernetes observe", snapshot.Status)
 	}
-	if transport.postCalls != 2 || transport.patchCalls != 2 || transport.getCalls != 2 {
+	if transport.postCalls != 0 || transport.patchCalls != 4 || transport.getCalls != 2 {
 		t.Fatalf("transport post=%d patch=%d get=%d, want volume and snapshot dry-run/apply/observe", transport.postCalls, transport.patchCalls, transport.getCalls)
 	}
 }

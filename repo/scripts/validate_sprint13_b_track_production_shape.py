@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 RECORD_ROOT = ROOT / "development-records"
 PRODUCTION_PROFILE = ROOT / "deploy/real-k8s-lab/sprint13-production-shaped-gateway-profile.yaml"
 PRODUCTION_RBAC = ROOT / "deploy/real-k8s-lab/sprint13-production-shaped-gateway-rbac.yaml"
+PRODUCTION_DEPLOYMENT = ROOT / "deploy/real-k8s-lab/sprint13-production-shaped-gateway-deployment.yaml"
+GATEWAY_DOCKERFILE = ROOT / "services/ani-gateway/Dockerfile"
+MAKEFILE = ROOT / "Makefile"
 
 SLICES = {
     "S01": {
@@ -73,8 +76,62 @@ SLICES = {
 ALLOWED_PRODUCTION_STATUSES = {"pending", "passed"}
 PRODUCTION_FORBIDDEN_TRANSPORT_TOKENS = {"lab", "local", "port_forward", "port-forward", "dev_gateway", "dev-gateway", "kubectl_proxy", "kubectl-proxy"}
 REQUIRED_RBAC_KINDS = {"ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
-REQUIRED_RBAC_RESOURCES = {"nodes", "services", "persistentvolumeclaims", "networkpolicies", "vpcs", "subnets", "volumesnapshots"}
+REQUIRED_RBAC_RESOURCES = {
+    "customresourcedefinitions",
+    "configmaps",
+    "clusterrolebindings",
+    "clusterroles",
+    "deployments",
+    "endpoints",
+    "endpointslices",
+    "events",
+    "namespaces",
+    "nodes",
+    "persistentvolumes",
+    "pods",
+    "pods/attach",
+    "pods/ephemeralcontainers",
+    "pods/exec",
+    "pods/log",
+    "pods/portforward",
+    "pods/resize",
+    "pods/status",
+    "replicasets",
+    "roles",
+    "rolebindings",
+    "secrets",
+    "serviceaccounts",
+    "services",
+    "statefulsets",
+    "persistentvolumeclaims",
+    "networkpolicies",
+    "storageclasses",
+    "vpcs",
+    "subnets",
+    "volumesnapshotclasses",
+    "volumesnapshotcontents",
+    "volumesnapshots",
+}
 REQUIRED_STANDARD_SLICES = {"S01", "S02", "S03", "S04", "S05", "S06", "S07"}
+REQUIRED_DEPLOYMENT_ENVS = {
+    "ANI_AUTH_MODE",
+    "KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE",
+    "KUBERNETES_SERVICE_ACCOUNT_CA_FILE",
+    "KUBERNETES_PROVIDER_FIELD_MANAGER",
+    "NETWORK_PROVIDER",
+    "NETWORK_PROVIDER_APPLY_ENABLED",
+    "STORAGE_PROVIDER",
+    "STORAGE_PROVIDER_APPLY_ENABLED",
+    "GPU_INVENTORY_PROVIDER",
+    "K8S_CLUSTER_PROVIDER_MODE",
+    "K8S_CLUSTER_PROXY_MODE",
+    "DATABASE_URL",
+    "VCLUSTER_HELM_BINARY",
+    "VCLUSTER_BINARY",
+    "VCLUSTER_HELM_SET_VALUES",
+    "VCLUSTER_PROXY_SERVER_TEMPLATE",
+    "VCLUSTER_KUBECONFIG_SERVER_TEMPLATE",
+}
 
 
 def fail(message: str) -> None:
@@ -140,6 +197,91 @@ def validate_evidence(slice_id: str, path: Path) -> None:
     absent_proof = set(required_proof) - proof_set
     if absent_proof:
         fail(f"{slice_id} production_shape proof_items must include {', '.join(sorted(absent_proof))}")
+    if slice_id == "S01":
+        validate_s01_gateway_production_evidence(payload)
+    if slice_id == "S02":
+        validate_s02_gateway_workload_evidence(payload)
+    if slice_id == "S03":
+        validate_s03_storage_lifecycle_evidence(payload)
+    if slice_id == "S04":
+        validate_s04_gpu_dcgm_evidence(payload)
+
+
+def validate_s01_gateway_production_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "gateway_vpc_create_status": 201,
+        "gateway_subnet_create_status": 201,
+        "gateway_route_create_status": 201,
+        "gateway_route_list_status": 200,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S01 production_shape passed requires {field}={expected}")
+    for field in ("gateway_vpc_id", "gateway_subnet_id", "gateway_route_id"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            fail(f"S01 production_shape passed requires non-empty {field}")
+    route_count = payload.get("gateway_route_count")
+    if not isinstance(route_count, int) or route_count < 1:
+        fail("S01 production_shape passed requires gateway_route_count >= 1")
+
+
+def validate_s02_gateway_workload_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "proxy_status": 200,
+        "workloads_status": 200,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S02 production_shape passed requires {field}={expected}")
+    core_cluster_id = payload.get("core_cluster_id")
+    if not isinstance(core_cluster_id, str) or not core_cluster_id.strip():
+        fail("S02 production_shape passed requires non-empty core_cluster_id")
+    workload_name = payload.get("workload_name")
+    if not isinstance(workload_name, str) or not workload_name.strip():
+        fail("S02 production_shape passed requires non-empty workload_name")
+    workload_count = payload.get("workload_count")
+    if not isinstance(workload_count, int) or workload_count < 1:
+        fail("S02 production_shape passed requires workload_count >= 1")
+    if payload.get("cleanup") != "deleted":
+        fail("S02 production_shape passed requires cleanup=deleted")
+
+
+def validate_s03_storage_lifecycle_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "volume_status": 201,
+        "snapshot_status": 202,
+        "filesystem_status": 201,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S03 production_shape passed requires {field}={expected}")
+    mount_target_count = payload.get("mount_target_count")
+    if not isinstance(mount_target_count, int) or mount_target_count < 1:
+        fail("S03 production_shape passed requires mount_target_count >= 1")
+    if payload.get("cleanup") != "deleted":
+        fail("S03 production_shape passed requires cleanup=deleted")
+
+
+def validate_s04_gpu_dcgm_evidence(payload: dict[str, Any]) -> None:
+    expected_statuses = {
+        "inventory_status": 200,
+        "occupancy_status": 200,
+    }
+    for field, expected in expected_statuses.items():
+        if payload.get(field) != expected:
+            fail(f"S04 production_shape passed requires {field}={expected}")
+    gpu_capacity_total = payload.get("gpu_capacity_total")
+    if not isinstance(gpu_capacity_total, int) or gpu_capacity_total < 1:
+        fail("S04 production_shape passed requires gpu_capacity_total >= 1")
+    gpu_node_count = payload.get("gpu_node_count")
+    if not isinstance(gpu_node_count, int) or gpu_node_count < 1:
+        fail("S04 production_shape passed requires gpu_node_count >= 1")
+    inventory_count = payload.get("inventory_count")
+    if not isinstance(inventory_count, int) or inventory_count < 1:
+        fail("S04 production_shape passed requires inventory_count >= 1")
+    if payload.get("dcgm_metric_present") is not True:
+        fail("S04 production_shape passed requires dcgm_metric_present=true")
 
 
 def validate_result_doc(slice_id: str, path: Path) -> None:
@@ -172,6 +314,8 @@ def validate_production_profile() -> None:
         fail("production profile must include gateway block")
     if gateway.get("deployment_mode") != "in_cluster":
         fail("production profile gateway deployment_mode must be in_cluster")
+    if gateway.get("deployment_manifest") != "deploy/real-k8s-lab/sprint13-production-shaped-gateway-deployment.yaml":
+        fail("production profile gateway deployment_manifest must reference sprint13 production-shaped deployment")
     kube_client = gateway.get("kubernetes_client")
     if not isinstance(kube_client, dict):
         fail("production profile must include gateway.kubernetes_client")
@@ -217,8 +361,76 @@ def validate_production_profile() -> None:
         fail("production RBAC must not grant wildcard resources")
 
 
+def validate_production_deployment_contract() -> None:
+    if not GATEWAY_DOCKERFILE.exists():
+        fail(f"missing gateway Dockerfile {GATEWAY_DOCKERFILE.relative_to(ROOT)}")
+    dockerfile = GATEWAY_DOCKERFILE.read_text(encoding="utf-8")
+    for token in ("COPY pkg ./pkg", "COPY services/ani-gateway ./services/ani-gateway", "go build -tags stdjson", "vcluster-linux-amd64", "helm-", "USER 65532:65532"):
+        if token not in dockerfile:
+            fail(f"gateway Dockerfile must include {token}")
+
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    required_make_tokens = [
+        "-f services/ani-gateway/Dockerfile",
+        "\n\t\t.",
+    ]
+    for token in required_make_tokens:
+        if token not in makefile:
+            fail("image-gateway target must build from repo root with services/ani-gateway/Dockerfile")
+
+    if not PRODUCTION_DEPLOYMENT.exists():
+        fail(f"missing production deployment {PRODUCTION_DEPLOYMENT.relative_to(ROOT)}")
+    try:
+        docs = [doc for doc in yaml.safe_load_all(PRODUCTION_DEPLOYMENT.read_text(encoding="utf-8")) if isinstance(doc, dict)]
+    except yaml.YAMLError as exc:
+        fail(f"malformed production deployment {PRODUCTION_DEPLOYMENT.relative_to(ROOT)}: {exc}")
+    deployments = [doc for doc in docs if doc.get("kind") == "Deployment"]
+    services = [doc for doc in docs if doc.get("kind") == "Service"]
+    if len(deployments) != 1:
+        fail("production deployment manifest must include exactly one Deployment")
+    if len(services) != 1:
+        fail("production deployment manifest must include exactly one Service")
+
+    deployment = deployments[0]
+    spec = deployment.get("spec", {})
+    template = spec.get("template", {}) if isinstance(spec, dict) else {}
+    pod_spec = template.get("spec", {}) if isinstance(template, dict) else {}
+    if pod_spec.get("serviceAccountName") != "ani-gateway":
+        fail("production Deployment must use ani-gateway ServiceAccount")
+    containers = pod_spec.get("containers")
+    if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
+        fail("production Deployment must define exactly one Gateway container")
+    container = containers[0]
+    if container.get("imagePullPolicy") != "IfNotPresent":
+        fail("production Deployment must use imagePullPolicy IfNotPresent for lab-imported images")
+    env = container.get("env")
+    if not isinstance(env, list):
+        fail("production Deployment must define env")
+    env_by_name = {item.get("name"): item for item in env if isinstance(item, dict)}
+    absent_env = REQUIRED_DEPLOYMENT_ENVS - set(env_by_name)
+    if absent_env:
+        fail(f"production Deployment missing env {', '.join(sorted(absent_env))}")
+    database_env = env_by_name.get("DATABASE_URL", {})
+    if "value" in database_env:
+        fail("production Deployment must not commit DATABASE_URL literal")
+    value_from = database_env.get("valueFrom")
+    if not isinstance(value_from, dict) or "secretKeyRef" not in value_from:
+        fail("production Deployment DATABASE_URL must come from secretKeyRef")
+    proxy_template = env_by_name.get("VCLUSTER_PROXY_SERVER_TEMPLATE", {}).get("value")
+    kubeconfig_template = env_by_name.get("VCLUSTER_KUBECONFIG_SERVER_TEMPLATE", {}).get("value")
+    if proxy_template != "https://{cluster_id}.{namespace}:443":
+        fail("production Deployment VCLUSTER_PROXY_SERVER_TEMPLATE must match vCluster TLS SAN service namespace")
+    if kubeconfig_template != proxy_template:
+        fail("production Deployment VCLUSTER_KUBECONFIG_SERVER_TEMPLATE must match proxy server template")
+    service = services[0]
+    service_spec = service.get("spec", {})
+    if not isinstance(service_spec, dict) or service_spec.get("type") != "NodePort":
+        fail("production Gateway Service must be NodePort for non-local live-gate access")
+
+
 def validate_all() -> None:
     validate_production_profile()
+    validate_production_deployment_contract()
     for slice_id, spec in SLICES.items():
         validate_evidence(slice_id, spec["evidence"])
         validate_result_doc(slice_id, spec["result"])
