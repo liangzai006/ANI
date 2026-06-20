@@ -91,14 +91,17 @@ func NewCapabilities(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *re
 
 func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *redis.Client, cfg Config) (Capabilities, error) {
 	metadata := postgresadapter.NewMetadataStore(db)
-	gpuInventory := gpu.NotConfigured{}
-	planner := runtimeadapter.NewPlanningRuntime(runtimeadapter.WithGPUInventory(gpuInventory))
 	admission := runtimeadapter.NewLocalAdmissionGuard()
 	audit := runtimeadapter.NewMetadataPlanAuditStore(metadata)
 	dryRun, apply, statusReader, kubeClient, err := workloadProviderAdapters(cfg)
 	if err != nil {
 		return Capabilities{}, err
 	}
+	gpuInventory, err := gpuInventoryAdapter(cfg, kubeClient)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	planner := runtimeadapter.NewPlanningRuntime(runtimeadapter.WithGPUInventory(gpuInventory))
 	lifecycle, err := workloadLifecycleExecutor(cfg, kubeClient)
 	if err != nil {
 		return Capabilities{}, err
@@ -251,6 +254,29 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		StorageReconcile:      runtimeadapter.NewLocalStorageStatusReconciler(storageStore),
 		StorageResources:      runtimeadapter.NewLocalStorageService(storageServiceOptions...),
 	}, nil
+}
+
+func gpuInventoryAdapter(cfg Config, kubeClient *runtimeadapter.KubernetesRESTClient) (ports.GPUInventory, error) {
+	switch strings.TrimSpace(cfg.GPUInventoryProvider) {
+	case "", "local", "not_configured":
+		return gpu.NotConfigured{}, nil
+	case "kubernetes_rest":
+		client := kubeClient
+		if client == nil {
+			var err error
+			client, err = runtimeadapter.NewKubernetesRESTClient(runtimeadapter.KubernetesRESTClientConfig{
+				Host:         cfg.KubernetesAPIHost,
+				BearerToken:  cfg.KubernetesBearerToken,
+				FieldManager: cfg.KubernetesProviderFieldManager,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+		return runtimeadapter.NewKubernetesGPUInventory(client), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported GPU inventory provider %q", ports.ErrUnsupported, cfg.GPUInventoryProvider)
+	}
 }
 
 func networkProviderAdapter(cfg Config, kubeClient *runtimeadapter.KubernetesRESTClient) (*runtimeadapter.KubeOVNNetworkProviderAdapter, error) {

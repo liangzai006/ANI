@@ -18,6 +18,7 @@ import (
 type gpuInventoryAPI struct {
 	inventory ports.GPUInventory
 	templates ports.SandboxTemplateCatalog
+	profile   coreDevProfileResponse
 }
 
 type gpuInventoryListResponse struct {
@@ -77,14 +78,34 @@ type sandboxTemplateResponse struct {
 }
 
 func newGPUInventoryAPI() *gpuInventoryAPI {
+	return newGPUInventoryAPIWithInventory(nil)
+}
+
+func newGPUInventoryAPIWithInventory(inventory ports.GPUInventory) *gpuInventoryAPI {
+	profile := localCoreDevProfile("local-gpu-inventory", "Core dev/local profile; real GPU discovery is gated separately")
+	if inventory == nil {
+		inventory = runtimeadapter.NewLocalGPUInventory()
+	} else {
+		profile = coreDevProfileResponse{
+			Mode:         "real",
+			Provider:     "kubernetes-gpu-inventory",
+			RealProvider: true,
+			Reason:       "GPU inventory is read from the configured Kubernetes provider",
+		}
+	}
 	return &gpuInventoryAPI{
-		inventory: runtimeadapter.NewLocalGPUInventory(),
+		inventory: inventory,
 		templates: runtimeadapter.NewLocalSandboxTemplateCatalog(),
+		profile:   profile,
 	}
 }
 
 func registerGPUInventoryResources(v1 *route.RouterGroup) {
-	api := newGPUInventoryAPI()
+	registerGPUInventoryResourcesWithInventory(v1, nil)
+}
+
+func registerGPUInventoryResourcesWithInventory(v1 *route.RouterGroup, inventory ports.GPUInventory) {
+	api := newGPUInventoryAPIWithInventory(inventory)
 	v1.GET("/gpu-inventory", api.listGPUInventory)
 	v1.GET("/gpu-inventory/occupancy", api.getGPUOccupancy)
 	v1.GET("/sandbox-templates", api.listSandboxTemplates)
@@ -137,7 +158,7 @@ func (api *gpuInventoryAPI) gpuInventoryListFromNodes(nodes []ports.GPUNodeClass
 			continue
 		}
 		for index, device := range node.Devices {
-			item := gpuInventoryRecordFromDevice(node, device, index)
+			item := api.gpuInventoryRecordFromDevice(node, device, index)
 			if strings.TrimSpace(gpuType) != "" && !strings.EqualFold(item.GPUType, strings.TrimSpace(gpuType)) {
 				continue
 			}
@@ -151,19 +172,19 @@ func (api *gpuInventoryAPI) gpuInventoryListFromNodes(nodes []ports.GPUNodeClass
 		Items:      items,
 		Total:      len(items),
 		NextCursor: nil,
-		DevProfile: localCoreDevProfile("local-gpu-inventory", "Core dev/local profile; real GPU discovery is gated separately"),
+		DevProfile: api.profile,
 	}
 }
 
 func (api *gpuInventoryAPI) gpuOccupancyFromNodes(nodes []ports.GPUNodeClass) gpuOccupancyResponse {
 	response := gpuOccupancyResponse{
 		ByGPUType:  []gpuOccupancyTypeBucket{},
-		DevProfile: localCoreDevProfile("local-gpu-inventory", "Core dev/local profile; real GPU discovery is gated separately"),
+		DevProfile: api.profile,
 	}
 	buckets := map[string]*gpuOccupancyTypeBucket{}
 	for _, node := range nodes {
 		for index, device := range node.Devices {
-			item := gpuInventoryRecordFromDevice(node, device, index)
+			item := api.gpuInventoryRecordFromDevice(node, device, index)
 			response.Total++
 			switch item.Status {
 			case "available":
@@ -221,7 +242,7 @@ func (api *gpuInventoryAPI) sandboxTemplateListFromResult(result ports.SandboxTe
 	}
 }
 
-func gpuInventoryRecordFromDevice(node ports.GPUNodeClass, device ports.GPUDeviceClass, index int) gpuInventoryRecordResponse {
+func (api *gpuInventoryAPI) gpuInventoryRecordFromDevice(node ports.GPUNodeClass, device ports.GPUDeviceClass, index int) gpuInventoryRecordResponse {
 	status := "available"
 	if !node.Ready {
 		status = "fault"
@@ -237,7 +258,7 @@ func gpuInventoryRecordFromDevice(node ports.GPUNodeClass, device ports.GPUDevic
 		Status:        status,
 		TenantID:      nil,
 		InstanceID:    nil,
-		DevProfile:    localCoreDevProfile("local-gpu-inventory", "Core dev/local profile; real GPU discovery is gated separately"),
+		DevProfile:    api.profile,
 	}
 }
 

@@ -44,6 +44,7 @@ type Config struct {
 
 	WorkloadProvider                   string
 	WorkloadProviderApplyEnabled       bool
+	GPUInventoryProvider               string
 	NetworkProvider                    string
 	NetworkProviderApplyEnabled        bool
 	NetworkProviderUserID              string
@@ -129,6 +130,9 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("WORKLOAD_PROVIDER_APPLY_ENABLED"); value != "" {
 		c.WorkloadProviderApplyEnabled = parseBool(value)
+	}
+	if value := os.Getenv("GPU_INVENTORY_PROVIDER"); value != "" {
+		c.GPUInventoryProvider = value
 	}
 	if value := os.Getenv("NETWORK_PROVIDER"); value != "" {
 		c.NetworkProvider = value

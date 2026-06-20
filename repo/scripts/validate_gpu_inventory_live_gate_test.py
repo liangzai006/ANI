@@ -64,6 +64,66 @@ class GPUInventoryLiveGateTest(unittest.TestCase):
 
         validate_docs.assert_called_once()
 
+    def test_live_requires_dcgm_metrics_url(self) -> None:
+        document = gate.load_gate(gate.DEFAULT_GATE)
+        with (
+            patch("sys.argv", ["validate_gpu_inventory_live_gate.py", "--live", "--gateway-url", "http://core.example/api/v1"]),
+            patch.object(gate, "load_gate", return_value=document),
+            patch.object(gate, "validate_docs"),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                gate.main()
+
+        self.assertIn("live mode requires --dcgm-metrics-url", str(raised.exception))
+
+    def test_live_writes_non_sensitive_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "gpu-evidence.json"
+            args = gate.LiveArgs(
+                gateway_url="http://core.example/api/v1",
+                ani_bearer_token="dev-token",
+                kubectl_binary="kubectl",
+                kubeconfig="local-secrets/kubeconfig",
+                dcgm_metrics_url="http://dcgm.example/metrics",
+                evidence_output=str(evidence),
+            )
+
+            gate.validate_live(
+                args,
+                command_runner=lambda _: """{
+  "items": [{
+    "metadata": {"name": "gpu-node-a"},
+    "status": {
+      "capacity": {"nvidia.com/gpu": "2"},
+      "allocatable": {"nvidia.com/gpu": "2"}
+    }
+  }]
+}""",
+                json_getter=lambda url, _: (
+                    200,
+                    {
+                        "items": [{"id": "gpu-0"}, {"id": "gpu-1"}],
+                        "total": 2,
+                        "dev_profile": {"mode": "real", "provider": "kubernetes-gpu-inventory", "real_provider": True},
+                    }
+                    if url.endswith("/gpu-inventory")
+                    else {
+                        "total": 2,
+                        "available": 2,
+                        "in_use": 0,
+                        "fault": 0,
+                        "dev_profile": {"mode": "real", "provider": "kubernetes-gpu-inventory", "real_provider": True},
+                    },
+                ),
+                text_getter=lambda _: (200, "DCGM_FI_DEV_GPU_UTIL{gpu=\"0\"} 0\n"),
+            )
+
+            content = evidence.read_text(encoding="utf-8")
+            self.assertIn('"status": "passed"', content)
+            self.assertIn('"gpu_capacity_total": 2', content)
+            self.assertNotIn("dev-token", content)
+            self.assertNotIn("local-secrets/kubeconfig", content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -39,6 +39,11 @@ func main() {
 		logger.Error("failed to configure secret provider runtime", "err", err)
 		os.Exit(1)
 	}
+	gpuInventory, err := newGatewayGPUInventory(gatewayGPUInventoryRuntimeConfigFromEnv())
+	if err != nil {
+		logger.Error("failed to configure gpu inventory provider runtime", "err", err)
+		os.Exit(1)
+	}
 	networkService, err := newGatewayNetworkService(gatewayNetworkRuntimeConfigFromEnv())
 	if err != nil {
 		logger.Error("failed to configure network provider runtime", "err", err)
@@ -55,6 +60,7 @@ func main() {
 		K8sClusterService: k8sClusterService,
 		EncryptionService: encryptionService,
 		SecretService:     secretService,
+		GPUInventory:      gpuInventory,
 		NetworkService:    networkService,
 		StorageService:    storageService,
 	})

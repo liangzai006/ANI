@@ -121,6 +121,20 @@ func TestNewCapabilitiesCanWireKubernetesRESTProvider(t *testing.T) {
 	}
 }
 
+func TestNewCapabilitiesCanWireKubernetesGPUInventoryProvider(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		GPUInventoryProvider:           "kubernetes_rest",
+		KubernetesAPIHost:              "https://kubernetes.example.test",
+		KubernetesProviderFieldManager: "ani-test",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.GPUInventory.(*runtimeadapter.KubernetesGPUInventory); !ok {
+		t.Fatalf("GPUInventory = %T, want KubernetesGPUInventory", capabilities.GPUInventory)
+	}
+}
+
 func TestNewCapabilitiesCanWireKubeOVNNetworkRouteProvider(t *testing.T) {
 	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
 		NetworkProvider:                "kubeovn_rest",

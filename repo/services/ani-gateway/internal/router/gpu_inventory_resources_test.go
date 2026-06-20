@@ -3,6 +3,8 @@ package router
 import (
 	"context"
 	"testing"
+
+	"github.com/kubercloud/ani/pkg/ports"
 )
 
 func TestGPUInventoryAPIListsInventoryAndOccupancy(t *testing.T) {
@@ -46,4 +48,55 @@ func TestGPUInventoryAPISandboxTemplatesUseLocalCatalog(t *testing.T) {
 	}
 	requireLocalCoreDevProfile(t, response.DevProfile, "local-sandbox-template-catalog")
 	requireLocalCoreDevProfile(t, response.Items[0].DevProfile, "local-sandbox-template-catalog")
+}
+
+func TestGPUInventoryAPIWithProviderMarksRealDevProfile(t *testing.T) {
+	api := newGPUInventoryAPIWithInventory(fakeGPUInventory{nodes: []ports.GPUNodeClass{{
+		NodeName: "gpu-node-a",
+		Vendor:   ports.GPUVendorNVIDIA,
+		Model:    "NVIDIA-L40S",
+		Ready:    true,
+		Devices: []ports.GPUDeviceClass{{
+			Vendor:        ports.GPUVendorNVIDIA,
+			Model:         "NVIDIA-L40S",
+			ResourceName:  "nvidia.com/gpu",
+			DriverVersion: "device-plugin",
+		}},
+	}}})
+
+	records, err := api.inventory.ListNodeClasses(context.Background(), api.gpuFilter("", "", ""))
+	if err != nil {
+		t.Fatalf("ListNodeClasses error = %v", err)
+	}
+	listResponse := api.gpuInventoryListFromNodes(records, "", "", "")
+	if listResponse.DevProfile.Mode != "real" || !listResponse.DevProfile.RealProvider || listResponse.DevProfile.Provider != "kubernetes-gpu-inventory" {
+		t.Fatalf("list dev_profile = %+v, want Kubernetes GPU real provider", listResponse.DevProfile)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].DevProfile.Provider != "kubernetes-gpu-inventory" || !listResponse.Items[0].DevProfile.RealProvider {
+		t.Fatalf("items = %+v, want real provider item profile", listResponse.Items)
+	}
+
+	occupancy := api.gpuOccupancyFromNodes(records)
+	if occupancy.DevProfile.Mode != "real" || !occupancy.DevProfile.RealProvider || occupancy.DevProfile.Provider != "kubernetes-gpu-inventory" {
+		t.Fatalf("occupancy dev_profile = %+v, want Kubernetes GPU real provider", occupancy.DevProfile)
+	}
+}
+
+type fakeGPUInventory struct {
+	nodes []ports.GPUNodeClass
+}
+
+func (f fakeGPUInventory) ListNodeClasses(context.Context, ports.GPUDiscoveryFilter) ([]ports.GPUNodeClass, error) {
+	return f.nodes, nil
+}
+
+func (f fakeGPUInventory) GetNodeClass(context.Context, string) (ports.GPUNodeClass, error) {
+	if len(f.nodes) == 0 {
+		return ports.GPUNodeClass{}, ports.ErrNotFound
+	}
+	return f.nodes[0], nil
+}
+
+func (f fakeGPUInventory) PlanScheduling(context.Context, ports.GPUSchedulingRequest) (ports.GPUSchedulingDecision, error) {
+	return ports.GPUSchedulingDecision{}, ports.ErrUnsupported
 }

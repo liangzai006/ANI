@@ -13,6 +13,7 @@ type RegisterOptions struct {
 	K8sClusterService ports.K8sClusterService
 	EncryptionService ports.EncryptionService
 	SecretService     ports.SecretService
+	GPUInventory      ports.GPUInventory
 	NetworkService    ports.NetworkService
 	StorageService    ports.StorageService
 }
@@ -34,7 +35,7 @@ func RegisterWithOptions(h *server.Hertz, options RegisterOptions) {
 	registerMetering(v1)
 	registerHarbor(v1)
 	registerDemoInstances(v1)
-	registerGPUInventoryResources(v1)
+	registerGPUInventoryResourcesWithInventory(v1, options.GPUInventory)
 	registerNetworkResourcesWithService(v1, options.NetworkService)
 	registerStorageResourcesWithService(v1, options.StorageService)
 	registerVectorStoreResources(v1)

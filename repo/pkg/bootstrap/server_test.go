@@ -108,6 +108,16 @@ func TestConfigEnvironmentOverridesStorageProvider(t *testing.T) {
 	}
 }
 
+func TestConfigEnvironmentOverridesGPUInventoryProvider(t *testing.T) {
+	t.Setenv("GPU_INVENTORY_PROVIDER", "kubernetes_rest")
+
+	cfg := (Config{}).withEnvironmentOverrides()
+
+	if cfg.GPUInventoryProvider != "kubernetes_rest" {
+		t.Fatalf("GPUInventoryProvider = %q, want kubernetes_rest", cfg.GPUInventoryProvider)
+	}
+}
+
 func TestStartWorkloadReconcileControllerRequiresOptIn(t *testing.T) {
 	controller := &fakeWorkloadReconcileController{
 		started: make(chan struct{}),

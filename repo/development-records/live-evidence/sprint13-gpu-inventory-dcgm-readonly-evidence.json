@@ -1,0 +1,36 @@
+{
+  "dcgm_exporter_resources_found": false,
+  "device_plugin_daemonset": "nvidia-device-plugin-daemonset",
+  "device_plugin_image": "nvcr.io/nvidia/k8s-device-plugin:v0.19.2",
+  "device_plugin_ready": "3/3",
+  "gpu_capacity_total": 6,
+  "gpu_node_count": 3,
+  "id": "gpu-inventory-dcgm-readonly",
+  "kubernetes_version": "v1.36.1",
+  "nodes": [
+    {
+      "allocatable": 2,
+      "capacity": 2,
+      "container_runtime": "containerd://2.2.4",
+      "kubelet": "v1.36.1",
+      "name": "dev-phys-02"
+    },
+    {
+      "allocatable": 2,
+      "capacity": 2,
+      "container_runtime": "containerd://2.2.4",
+      "kubelet": "v1.36.1",
+      "name": "dev-phys-03"
+    },
+    {
+      "allocatable": 2,
+      "capacity": 2,
+      "container_runtime": "containerd://2.2.4",
+      "kubelet": "v1.36.1",
+      "name": "kubercloud"
+    }
+  ],
+  "profile": "SPRINT13-GPU-INVENTORY-DCGM-A",
+  "status": "blocked",
+  "reason": "DCGM exporter metrics endpoint was not found during B-track read-only inventory; live gate cannot pass without DCGM_FI_DEV_GPU_UTIL evidence."
+}
