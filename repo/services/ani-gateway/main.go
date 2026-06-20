@@ -44,6 +44,11 @@ func main() {
 		logger.Error("failed to configure network provider runtime", "err", err)
 		os.Exit(1)
 	}
+	storageService, err := newGatewayStorageService(gatewayStorageRuntimeConfigFromEnv())
+	if err != nil {
+		logger.Error("failed to configure storage provider runtime", "err", err)
+		os.Exit(1)
+	}
 	middleware.StartAuditWorker()
 	middleware.Register(h)
 	router.RegisterWithOptions(h, router.RegisterOptions{
@@ -51,6 +56,7 @@ func main() {
 		EncryptionService: encryptionService,
 		SecretService:     secretService,
 		NetworkService:    networkService,
+		StorageService:    storageService,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

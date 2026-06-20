@@ -149,6 +149,76 @@ func TestLocalStorageServiceSnapshotsAndMountTargets(t *testing.T) {
 	}
 }
 
+func TestLocalStorageServiceCanUseKubernetesStorageProviderPipeline(t *testing.T) {
+	provider := &fakeStorageProvider{}
+	service := NewLocalStorageService(
+		WithStorageProvider(
+			NewKubernetesStorageRenderer(),
+			provider,
+			provider,
+			provider,
+			StorageProviderExecutionConfig{
+				UserID:          "ani-core-storage-provider",
+				PermissionProof: "rbac-scope:storage.write",
+			},
+		),
+		WithStorageServiceClock(func() time.Time { return time.Unix(3000, 0) }),
+	)
+
+	volume, err := service.CreateVolume(context.Background(), ports.StorageVolumeCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "provider-volume-a",
+		Name:           "provider-data",
+		SizeGiB:        1,
+		StorageClass:   "ani-rbd-ssd",
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume error = %v", err)
+	}
+	snapshot, err := service.CreateVolumeSnapshot(context.Background(), ports.VolumeSnapshotCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "provider-snapshot-a",
+		VolumeID:       volume.VolumeID,
+		Name:           "provider-data-snap",
+	})
+	if err != nil {
+		t.Fatalf("CreateVolumeSnapshot error = %v", err)
+	}
+	filesystem, err := service.CreateFilesystem(context.Background(), ports.StorageFilesystemCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "provider-fs-a",
+		Name:           "provider-shared",
+		Protocol:       "nfs",
+		SizeGiB:        1,
+	})
+	if err != nil {
+		t.Fatalf("CreateFilesystem error = %v", err)
+	}
+	targets, err := service.ListFilesystemMountTargets(context.Background(), ports.FilesystemMountTargetListRequest{
+		TenantID:     "tenant-a",
+		FilesystemID: filesystem.FilesystemID,
+	})
+	if err != nil {
+		t.Fatalf("ListFilesystemMountTargets error = %v", err)
+	}
+
+	if volume.State != ports.StorageResourceAvailable || snapshot.Status != ports.VolumeSnapshotAvailable || len(targets) != 1 {
+		t.Fatalf("provider resources volume=%+v snapshot=%+v targets=%+v, want available", volume, snapshot, targets)
+	}
+	if provider.dryRuns != 4 || provider.applies != 4 || provider.observes != 4 {
+		t.Fatalf("provider calls dry=%d apply=%d observe=%d, want 4/4/4", provider.dryRuns, provider.applies, provider.observes)
+	}
+	wantKinds := []string{"volume", "volume_snapshot", "filesystem", "filesystem_mount_target"}
+	for i, want := range wantKinds {
+		if provider.dryRunKinds[i] != want {
+			t.Fatalf("provider dry-run kinds = %#v, want %s at index %d", provider.dryRunKinds, want, i)
+		}
+	}
+	if provider.lastDryRun.UserID != "ani-core-storage-provider" || provider.lastDryRun.PermissionProof == "" {
+		t.Fatalf("provider execution identity = %#v, want explicit storage provider identity", provider.lastDryRun)
+	}
+}
+
 func TestLocalStorageServiceBucketsAndSignedObjectURLsUseObjectStorePort(t *testing.T) {
 	objectStore := &fakeObjectStore{
 		uploadURL:   "https://objects.local/upload/model.bin",
@@ -266,3 +336,56 @@ func (s *fakeObjectStore) SignedDownloadURL(_ context.Context, ref ports.ObjectR
 	s.downloadRef = ref
 	return ports.SignedURL{URL: s.downloadURL, ExpiresAt: s.expiresAt}, nil
 }
+
+type fakeStorageProvider struct {
+	dryRuns     int
+	applies     int
+	observes    int
+	dryRunKinds []string
+	lastDryRun  ports.StorageProviderDryRunRequest
+}
+
+func (p *fakeStorageProvider) DryRun(_ context.Context, request ports.StorageProviderDryRunRequest) (ports.StorageProviderDryRunResult, error) {
+	p.dryRuns++
+	p.dryRunKinds = append(p.dryRunKinds, request.ResourceKind)
+	p.lastDryRun = request
+	return ports.StorageProviderDryRunResult{
+		Accepted:      true,
+		Provider:      "kubernetes",
+		ManifestCount: len(request.Manifests),
+		ResourceRefs:  []string{"kubernetes/" + request.Manifests[0].Kind + "/" + request.Manifests[0].Name},
+		Reason:        "accepted by fake Kubernetes storage provider",
+		CheckedAt:     time.Unix(3001, 0),
+	}, nil
+}
+
+func (p *fakeStorageProvider) Apply(_ context.Context, request ports.StorageProviderApplyRequest) (ports.StorageProviderApplyResult, error) {
+	p.applies++
+	return ports.StorageProviderApplyResult{
+		Applied:       true,
+		Provider:      "kubernetes",
+		ManifestCount: len(request.Manifests),
+		Operation:     request.Operation,
+		ResourceRefs:  append([]string(nil), request.DryRunResult.ResourceRefs...),
+		Reason:        "applied by fake Kubernetes storage provider",
+		AppliedAt:     time.Unix(3002, 0),
+	}, nil
+}
+
+func (p *fakeStorageProvider) Observe(_ context.Context, request ports.StorageProviderStatusRequest) (ports.StorageProviderStatusResult, error) {
+	p.observes++
+	return ports.StorageProviderStatusResult{
+		TenantID:     request.TenantID,
+		ResourceKind: request.ResourceKind,
+		ResourceID:   request.ResourceID,
+		Provider:     request.ApplyResult.Provider,
+		ResourceRefs: append([]string(nil), request.ApplyResult.ResourceRefs...),
+		State:        ports.StorageResourceAvailable,
+		Reason:       "observed by fake Kubernetes storage provider",
+		ObservedAt:   time.Unix(3003, 0),
+	}, nil
+}
+
+var _ ports.StorageProviderDryRun = (*fakeStorageProvider)(nil)
+var _ ports.StorageProviderApply = (*fakeStorageProvider)(nil)
+var _ ports.StorageProviderStatusReader = (*fakeStorageProvider)(nil)

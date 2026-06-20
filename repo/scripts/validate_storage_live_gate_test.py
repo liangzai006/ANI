@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from copy import deepcopy
@@ -77,6 +78,84 @@ class StorageLiveGateTest(unittest.TestCase):
             gate.main()
 
         validate_docs.assert_called_once()
+
+    def test_live_gate_runs_core_storage_checks_and_writes_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            evidence = Path(tmpdir) / "storage-live-evidence.json"
+            result = gate.run_live(
+                gate.LiveConfig(
+                    gateway_url="http://127.0.0.1:8080/api/v1",
+                    ani_bearer_token="dev-token",
+                    tenant_id="tenant-a",
+                    namespace="ani-tenant-tenant-a",
+                    storage_class="ani-rbd-ssd",
+                    snapshot_class="csi-rbdplugin-snapclass",
+                    filesystem_backend="nfs",
+                    evidence_output=evidence,
+                ),
+                http_client=FakeHTTPClient(),
+                runner=FakeRunner(),
+            )
+
+            self.assertEqual("passed", result["status"])
+            self.assertEqual(201, result["volume_status"])
+            self.assertEqual(202, result["snapshot_status"])
+            self.assertEqual(1, result["snapshot_count"])
+            self.assertEqual(1, result["mount_target_count"])
+            written = json.loads(evidence.read_text(encoding="utf-8"))
+            self.assertEqual("SPRINT13-STORAGE-ROOK-CEPH-A", written["profile"])
+            self.assertNotIn("dev-token", json.dumps(written))
+
+    def test_cli_live_mode_requires_evidence_output(self) -> None:
+        document = gate.load_gate(gate.DEFAULT_GATE)
+        with (
+            patch("sys.argv", ["validate_storage_live_gate.py", "--live", "--gateway-url", "http://127.0.0.1:8080/api/v1", "--ani-bearer-token", "dev-token"]),
+            patch.object(gate, "load_gate", return_value=document),
+            patch.object(gate, "validate_docs"),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                gate.main()
+
+        self.assertIn("live mode requires evidence_output", str(raised.exception))
+
+
+class FakeHTTPClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def request(self, method: str, url: str, bearer_token: str, body: dict[str, object] | None = None) -> tuple[int, dict[str, object]]:
+        self.calls.append((method, url))
+        if method == "POST" and url.endswith("/volumes"):
+            return 201, {"id": "vol_live", "state": "available"}
+        if method == "POST" and url.endswith("/volumes/vol_live/snapshots"):
+            return 202, {"id": "task-live", "result": {"snapshot": {"id": "snap_live", "status": "available"}}}
+        if method == "GET" and url.endswith("/volumes/vol_live/snapshots"):
+            return 200, {"items": [{"id": "snap_live", "status": "available"}], "total": 1, "next_cursor": None}
+        if method == "POST" and url.endswith("/filesystems"):
+            return 201, {"id": "fs_live", "state": "available"}
+        if method == "GET" and url.endswith("/filesystems/fs_live/mount-targets"):
+            return 200, {"items": [{"id": "mt_live", "status": "available"}], "total": 1, "next_cursor": None}
+        raise AssertionError(f"unexpected HTTP call: {method} {url}")
+
+
+class FakeRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str], input_text: str | None = None) -> str:
+        self.commands.append(command)
+        joined = " ".join(command)
+        if "get namespace ani-tenant-tenant-a" in joined:
+            return '{"metadata":{"name":"ani-tenant-tenant-a"}}'
+        if "get sc ani-rbd-ssd" in joined:
+            return '{"metadata":{"name":"ani-rbd-ssd"}}'
+        if "get volumesnapshotclass csi-rbdplugin-snapclass" in joined:
+            return '{"metadata":{"name":"csi-rbdplugin-snapclass"}}'
+        if "get crd volumesnapshots.snapshot.storage.k8s.io" in joined:
+            return '{"metadata":{"name":"volumesnapshots.snapshot.storage.k8s.io"}}'
+        if "delete " in joined:
+            return "deleted\n"
+        raise AssertionError(f"unexpected command: {joined}")
 
 
 if __name__ == "__main__":

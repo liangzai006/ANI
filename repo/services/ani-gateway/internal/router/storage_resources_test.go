@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -73,6 +74,26 @@ func TestStorageAPIServiceKeepsTenantIsolation(t *testing.T) {
 		ResourceID: volume.VolumeID,
 	}); err == nil {
 		t.Fatalf("GetVolume from another tenant succeeded, want isolation error")
+	}
+}
+
+func TestStorageAPIUsesInjectedService(t *testing.T) {
+	service := runtimeadapter.NewLocalStorageService()
+	api := newStorageAPIWithService(service)
+	if api.service != service {
+		t.Fatalf("api.service = %T, want injected storage service", api.service)
+	}
+	volume, err := api.service.CreateVolume(context.Background(), ports.StorageVolumeCreateRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "api-injected-volume",
+		Name:           "injected",
+		SizeGiB:        1,
+	})
+	if err != nil {
+		t.Fatalf("CreateVolume error = %v", err)
+	}
+	if volume.VolumeID == "" {
+		t.Fatalf("volume = %+v, want injected service to create volume", volume)
 	}
 }
 

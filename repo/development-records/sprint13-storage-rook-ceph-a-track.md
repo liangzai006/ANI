@@ -3,7 +3,7 @@
 > 记录类型：Sprint 13 A-track completion record
 > 日期：2026-06-19
 > 范围：ANI Core only
-> 状态：code+contract ready, LIVE PENDING
+> 状态：A-track historical record；后续 B-track live result 已通过，见 [`sprint13-storage-rook-ceph-live-result.md`](sprint13-storage-rook-ceph-live-result.md)
 
 ## 目标
 
@@ -58,4 +58,4 @@ git diff --check passed
 
 ## 后续 B 轨
 
-人工确认真实 namespace、storage class、snapshot class、filesystem backend、kubeconfig/token 来源后，执行 human-gated live gate 并归档非敏感 evidence。真实 evidence 归档前，S03 保持 Tier1 local profile / LIVE PENDING。
+后续 B 轨已在人工确认真实 namespace、storage class、snapshot class、filesystem backend、kubeconfig/token 来源后执行 human-gated live gate，并归档非敏感 evidence。当前结论以 [`sprint13-storage-rook-ceph-live-result.md`](sprint13-storage-rook-ceph-live-result.md) 为准；该结论只证明 S03 real-provider evidence passed，不代表 production ready。

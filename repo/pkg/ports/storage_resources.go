@@ -234,6 +234,8 @@ type StorageProviderRenderer interface {
 	RenderVolume(ctx context.Context, record StorageVolumeRecord) ([]WorkloadManifest, error)
 	RenderFilesystem(ctx context.Context, record StorageFilesystemRecord) ([]WorkloadManifest, error)
 	RenderObject(ctx context.Context, record StorageObjectRecord) ([]WorkloadManifest, error)
+	RenderVolumeSnapshot(ctx context.Context, record VolumeSnapshotRecord) ([]WorkloadManifest, error)
+	RenderFilesystemMountTarget(ctx context.Context, record FilesystemMountTargetRecord) ([]WorkloadManifest, error)
 }
 
 type StorageProviderOperation string

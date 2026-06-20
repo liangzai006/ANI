@@ -163,11 +163,22 @@ type storageSnapshotTaskResponse struct {
 }
 
 func newStorageAPI() *storageAPI {
-	return &storageAPI{service: runtimeadapter.NewLocalStorageService()}
+	return newStorageAPIWithService(nil)
+}
+
+func newStorageAPIWithService(service ports.StorageService) *storageAPI {
+	if service == nil {
+		service = runtimeadapter.NewLocalStorageService()
+	}
+	return &storageAPI{service: service}
 }
 
 func registerStorageResources(v1 *route.RouterGroup) {
-	api := newStorageAPI()
+	registerStorageResourcesWithService(v1, nil)
+}
+
+func registerStorageResourcesWithService(v1 *route.RouterGroup, service ports.StorageService) {
+	api := newStorageAPIWithService(service)
 	v1.GET("/volumes", api.listVolumes)
 	v1.POST("/volumes", api.createVolume)
 	v1.GET("/volumes/:volume_id", api.getVolume)

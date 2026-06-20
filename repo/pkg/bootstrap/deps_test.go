@@ -150,6 +150,35 @@ func TestNewCapabilitiesRejectsKubeOVNNetworkProviderWithoutExecutionProof(t *te
 	}
 }
 
+func TestNewCapabilitiesCanWireKubernetesStorageProvider(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		StorageProvider:                "kubernetes_rest",
+		StorageProviderApplyEnabled:    true,
+		StorageProviderUserID:          "ani-core-storage-provider",
+		StorageProviderPermissionProof: "rbac-scope:storage.write",
+		KubernetesAPIHost:              "https://kubernetes.example.test",
+		KubernetesProviderFieldManager: "ani-test",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.StorageResources.(*runtimeadapter.LocalStorageService); !ok {
+		t.Fatalf("StorageResources = %T, want LocalStorageService with Kubernetes storage provider", capabilities.StorageResources)
+	}
+	if _, ok := capabilities.StorageDryRun.(*runtimeadapter.KubernetesStorageProviderAdapter); !ok {
+		t.Fatalf("StorageDryRun = %T, want KubernetesStorageProviderAdapter", capabilities.StorageDryRun)
+	}
+}
+
+func TestNewCapabilitiesRejectsKubernetesStorageProviderWithoutExecutionProof(t *testing.T) {
+	if _, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		StorageProvider:   "kubernetes_rest",
+		KubernetesAPIHost: "https://kubernetes.example.test",
+	}); err == nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = nil, want missing storage provider proof error")
+	}
+}
+
 func TestNewCapabilitiesCanWireMinIOObjectStoreProvider(t *testing.T) {
 	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
 		ObjectStoreProvider:        "minio",

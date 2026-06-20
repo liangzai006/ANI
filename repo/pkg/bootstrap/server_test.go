@@ -86,6 +86,28 @@ func TestConfigEnvironmentOverridesNetworkProvider(t *testing.T) {
 	}
 }
 
+func TestConfigEnvironmentOverridesStorageProvider(t *testing.T) {
+	t.Setenv("STORAGE_PROVIDER", "kubernetes_rest")
+	t.Setenv("STORAGE_PROVIDER_APPLY_ENABLED", "true")
+	t.Setenv("STORAGE_PROVIDER_USER_ID", "ani-core-storage-provider")
+	t.Setenv("STORAGE_PROVIDER_PERMISSION_PROOF", "rbac-scope:storage.write")
+
+	cfg := (Config{}).withEnvironmentOverrides()
+
+	if cfg.StorageProvider != "kubernetes_rest" {
+		t.Fatalf("StorageProvider = %q, want kubernetes_rest", cfg.StorageProvider)
+	}
+	if !cfg.StorageProviderApplyEnabled {
+		t.Fatalf("StorageProviderApplyEnabled = false, want true")
+	}
+	if cfg.StorageProviderUserID != "ani-core-storage-provider" {
+		t.Fatalf("StorageProviderUserID = %q, want ani-core-storage-provider", cfg.StorageProviderUserID)
+	}
+	if cfg.StorageProviderPermissionProof != "rbac-scope:storage.write" {
+		t.Fatalf("StorageProviderPermissionProof = %q, want storage write proof", cfg.StorageProviderPermissionProof)
+	}
+}
+
 func TestStartWorkloadReconcileControllerRequiresOptIn(t *testing.T) {
 	controller := &fakeWorkloadReconcileController{
 		started: make(chan struct{}),

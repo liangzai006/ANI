@@ -156,12 +156,14 @@ def validate_gateway(root: Path, errors: list[str]) -> None:
     store_go = (root / "pkg/adapters/runtime/storage_store.go").read_text(encoding="utf-8")
     renderer_go = (root / "pkg/adapters/runtime/storage_renderer.go").read_text(encoding="utf-8")
     provider_go = (root / "pkg/adapters/runtime/storage_provider.go").read_text(encoding="utf-8")
+    dryrun_go = (root / "pkg/adapters/runtime/provider_dryrun.go").read_text(encoding="utf-8")
+    kube_client_go = (root / "pkg/adapters/runtime/kubernetes_rest_client.go").read_text(encoding="utf-8")
     reconciler_go = (root / "pkg/adapters/runtime/storage_status_reconciler.go").read_text(encoding="utf-8")
     bootstrap_go = (root / "pkg/bootstrap/deps.go").read_text(encoding="utf-8")
     for route in EXPECTED_ROUTES:
         if route not in routes_go:
             errors.append(f"storage_resources.go missing route token {route}")
-    if "registerStorageResources(v1)" not in router_go:
+    if "registerStorageResources(v1)" not in router_go and "registerStorageResourcesWithService(v1, options.StorageService)" not in router_go:
         errors.append("router.go must register storage resources")
     for token in ("StorageService interface", "StorageResourceStore interface", "StorageProviderRenderer interface", "StorageProviderDryRun interface", "StorageProviderApply interface", "StorageProviderStatusReader interface", "StorageStatusReconciler interface", "StorageResourceState", "StorageVolumeRecord", "StorageFilesystemRecord", "StorageObjectRecord", "VolumeSnapshotRecord", "VolumeSnapshotCreateRequest", "VolumeSnapshotListRequest", "FilesystemMountTargetRecord", "FilesystemMountTargetListRequest"):
         if token not in ports_go:
@@ -175,12 +177,15 @@ def validate_gateway(root: Path, errors: list[str]) -> None:
     for token in ("MetadataStorageStore", "UpsertVolume", "UpsertFilesystem", "UpsertObject", "UpdateResourceState"):
         if token not in store_go:
             errors.append(f"storage_store.go missing token {token}")
-    for token in ("KubernetesStorageRenderer", "RenderVolume", "RenderFilesystem", "RenderObject", "PersistentVolumeClaim", "ObjectMetadata"):
+    for token in ("KubernetesStorageRenderer", "RenderVolume", "RenderFilesystem", "RenderObject", "RenderVolumeSnapshot", "RenderFilesystemMountTarget", "PersistentVolumeClaim", "ObjectMetadata", "VolumeSnapshot"):
         if token not in renderer_go:
             errors.append(f"storage_renderer.go missing token {token}")
-    for token in ("KubernetesStorageProviderAdapter", "DryRun", "Apply", "Observe", "WithKubernetesStorageProviderApplyEnabled", "Kubernetes PVC manifests only"):
+    for token in ("KubernetesStorageProviderAdapter", "DryRun", "Apply", "Observe", "WithKubernetesStorageProviderApplyEnabled", "validateStorageProviderManifests"):
         if token not in provider_go:
             errors.append(f"storage_provider.go missing token {token}")
+    for token in ("VolumeSnapshot", "snapshot.storage.k8s.io"):
+        if token not in dryrun_go or token not in kube_client_go:
+            errors.append(f"storage provider Kubernetes allowlist missing token {token}")
     for token in ("LocalStorageStatusReconciler", "Reconcile", "StorageResourceStateUpdateRequest", "resource refs"):
         if token not in reconciler_go:
             errors.append(f"storage_status_reconciler.go missing token {token}")

@@ -158,6 +158,29 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 	storageServiceOptions := []runtimeadapter.StorageServiceOption{
 		runtimeadapter.WithStorageResourceStore(storageStore),
 	}
+	switch strings.TrimSpace(cfg.StorageProvider) {
+	case "", "local", "not_configured":
+	case "kubernetes_rest":
+		if strings.TrimSpace(cfg.StorageProviderUserID) == "" || strings.TrimSpace(cfg.StorageProviderPermissionProof) == "" {
+			return Capabilities{}, fmt.Errorf("%w: storage provider requires STORAGE_PROVIDER_USER_ID and STORAGE_PROVIDER_PERMISSION_PROOF", ports.ErrInvalid)
+		}
+		storageProvider = runtimeadapter.NewKubernetesStorageProviderAdapter(
+			kubeClient,
+			runtimeadapter.WithKubernetesStorageProviderApplyEnabled(cfg.StorageProviderApplyEnabled),
+		)
+		storageServiceOptions = append(storageServiceOptions, runtimeadapter.WithStorageProvider(
+			runtimeadapter.NewKubernetesStorageRenderer(),
+			storageProvider,
+			storageProvider,
+			storageProvider,
+			runtimeadapter.StorageProviderExecutionConfig{
+				UserID:          cfg.StorageProviderUserID,
+				PermissionProof: cfg.StorageProviderPermissionProof,
+			},
+		))
+	default:
+		return Capabilities{}, fmt.Errorf("%w: unsupported storage provider %q", ports.ErrUnsupported, cfg.StorageProvider)
+	}
 	if strings.TrimSpace(cfg.ObjectStoreProvider) == "minio" {
 		storageServiceOptions = append(storageServiceOptions, runtimeadapter.WithStorageObjectStore(objectStore))
 	}
