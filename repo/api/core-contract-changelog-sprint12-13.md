@@ -10,13 +10,13 @@
 
 | 契约文件 | 是否变更 | 说明 |
 |---|---|---|
-| `repo/api/openapi/v1.yaml`（**Core 对外 / 跨层控制面契约**） | **是** | 仅在 **Sprint 12** 变更（+72 / −32 行）；Sprint 13 全部为真实 provider / live gate 收敛，**未改契约**。 |
-| `repo/api/openapi/services/v1.yaml`（**Services 业务契约**） | **否** | 自 Sprint 12 起 **零变更**。Services 资源（models / inference-services / knowledge-bases 等）仍由外部团队在该文件维护，Core 未回流。 |
+| `repo/api/openapi/v1.yaml`（**Core 对外 / 跨层控制面契约**） | **是** | 仅在 **Sprint 12** 变更。以 Sprint 11 收尾提交 `d52efda` 为基线，当前 diff 为 **+784 / -5**；其中 Sprint 12 主体提交 `6d052d3` 为 **+742 / -3**，后续对齐提交 `6d052d3..HEAD` 为 **+72 / -32**。Sprint 13 全部为真实 provider / live gate 收敛，**未改契约**。 |
+| `repo/api/openapi/services/v1.yaml`（**Services 业务契约**） | **是（上下文）** | Sprint 12 起点提交 `6d052d3` 同步扩展了 Services 业务契约；`6d052d3..HEAD` 之后未再变更。本文只展开 Core API 对 Services 客户端的影响，不替代 Services 业务契约 changelog。Services 资源仍由外部团队在该文件维护，Core 未回流。 |
 
-**Services 团队需要做的事**：只有两类改动会影响调用 Core 的 Services 客户端 —— ID 字段类型放宽（§3.4）与卷快照创建改为异步任务（§3.5）。其余均为**向后兼容的新增字段/枚举**，无需改造即可继续工作。
+**Services 团队需要做的事**：先确认新增的 19 个 Core operationId（§3.0）是否已纳入客户端调用面；其中需要改造调用假设的是两类 —— ID 字段类型放宽（§3.4）与卷快照创建改为异步任务（§3.5）。其余均为**向后兼容的新增端点、字段或枚举**，无需破坏性改造即可继续工作。
 
-变更全部位于 Sprint 12 的 4 个提交：
-`779f84e` align b1 support schemas · `dbd1fe8` add core netstore support endpoints · `b78ee4a` align netstore review closure contracts · `e9ae3ec` align objvec storage bucket contract docs。
+Core API 变更全部位于 Sprint 12 的 5 个提交：
+`6d052d3` Core +19 operationId / +16 path 主体扩展 · `779f84e` align b1 support schemas · `dbd1fe8` add core netstore support endpoints · `b78ee4a` align netstore review closure contracts · `e9ae3ec` align objvec storage bucket contract docs。
 
 ---
 
@@ -30,20 +30,50 @@
 
 ## 2. 受影响的端点与 Schema 一览
 
-| 资源域 | 端点 | 受影响 Schema |
-|---|---|---|
-| 实例可观测性 | `/instances/{instance_id}/logs`、`/events`、`/metrics`、`/security-events`、`/exec` | InstanceLogListResponse、InstanceEventListResponse、InstanceMetrics、InstanceSecurityEventListResponse、InstanceExecSession |
-| 网络路由 | `/networks/routes`（list/create） | NetworkRoute、NetworkRouteListResponse、CreateNetworkRouteRequest |
-| 卷快照 | `/volumes/{volume_id}/snapshots`（list/**create**） | VolumeSnapshotRecord、VolumeSnapshotListResponse、AsyncTask |
-| 文件系统挂载点 | `/filesystems/{filesystem_id}/mount-targets` | FilesystemMountTarget、FilesystemMountTargetListResponse |
-| 对象存储桶 | `/buckets` | StorageBucketListResponse |
-| K8s 工作负载 | `/k8s-clusters/{cluster_id}/workloads` | K8sClusterWorkload、K8sClusterWorkloadListResponse |
-| GPU 库存 | `/gpu-inventory`、`/gpu-inventory/occupancy` | GPUInventoryRecord、GPUInventoryListResponse、GPUOccupancyStats |
-| 沙箱模板 | `/sandbox-templates` | SandboxTemplate、SandboxTemplateListResponse |
+| 资源域 | 端点 | 类型 | 受影响 Schema |
+|---|---|---|---|
+| 实例可观测性 | `/instances/{instance_id}/logs`、`/events`、`/metrics`、`/security-events`、`/exec` | 新增端点 | InstanceLogListResponse、InstanceEventListResponse、InstanceMetrics、InstanceSecurityEventListResponse、InstanceExecSession、CreateInstanceExecSessionRequest |
+| 网络路由 | `/networks/routes`（list/create） | 新增端点 | NetworkRoute、NetworkRouteListResponse、CreateNetworkRouteRequest |
+| 卷快照 | `/volumes/{volume_id}/snapshots`（list/**create**） | 新增端点；create 响应在 Sprint 12 内改为异步 | VolumeSnapshotRecord、VolumeSnapshotListResponse、CreateVolumeSnapshotRequest、AsyncTask |
+| 文件系统挂载点 | `/filesystems/{filesystem_id}/mount-targets` | 新增端点 | FilesystemMountTarget、FilesystemMountTargetListResponse |
+| 对象存储桶 | `/buckets`（list/create） | 新增端点 | StorageBucketRecord、StorageBucketListResponse、CreateStorageBucketRequest |
+| 对象上传/下载 | `/objects/upload`、`/objects/{object_id}/download` | 新增端点 | StorageObjectUploadRequest、StorageObjectUploadResponse、StorageObjectDownloadInfo |
+| 向量文档写入 | `/vector-stores/{vector_store_id}/documents` | 新增端点 | VectorStoreDocumentInsertRequest、VectorStoreDocumentInsertResponse |
+| K8s 工作负载 | `/k8s-clusters/{cluster_id}/workloads` | 新增端点 | K8sClusterWorkload、K8sClusterWorkloadListResponse |
+| GPU 库存 | `/gpu-inventory`、`/gpu-inventory/occupancy` | 新增端点 | GPUInventoryRecord、GPUInventoryListResponse、GPUOccupancyStats |
+| 沙箱模板 | `/sandbox-templates` | 新增端点 | SandboxTemplate、SandboxTemplateListResponse |
 
 ---
 
 ## 3. 变更明细
+
+### 3.0 Sprint 12 主体新增操作与端点（新增 / 向后兼容）
+
+Sprint 12 主体提交 `6d052d3` 从 Sprint 11 收尾基线 `d52efda` 上新增 **16 条 path / 19 个 operationId**。这些端点在 Sprint 13 继续接入真实 provider 与 live gate，但 Sprint 13 未再修改 OpenAPI 契约。
+
+| operationId | 方法 | 路径 | 资源域 |
+|---|---|---|---|
+| `listInstanceLogs` | GET | `/instances/{instance_id}/logs` | 实例可观测性 |
+| `listInstanceEvents` | GET | `/instances/{instance_id}/events` | 实例可观测性 |
+| `getInstanceMetrics` | GET | `/instances/{instance_id}/metrics` | 实例可观测性 |
+| `createInstanceExecSession` | POST | `/instances/{instance_id}/exec` | 实例可观测性 |
+| `listInstanceSecurityEvents` | GET | `/instances/{instance_id}/security-events` | 实例可观测性 |
+| `listNetworkRoutes` | GET | `/networks/routes` | 网络路由 |
+| `createNetworkRoute` | POST | `/networks/routes` | 网络路由 |
+| `listVolumeSnapshots` | GET | `/volumes/{volume_id}/snapshots` | 卷快照 |
+| `createVolumeSnapshot` | POST | `/volumes/{volume_id}/snapshots` | 卷快照 |
+| `listFilesystemMountTargets` | GET | `/filesystems/{filesystem_id}/mount-targets` | 文件系统挂载点 |
+| `listStorageBuckets` | GET | `/buckets` | 对象存储桶 |
+| `createStorageBucket` | POST | `/buckets` | 对象存储桶 |
+| `uploadStorageObject` | POST | `/objects/upload` | 对象上传 |
+| `downloadStorageObject` | GET | `/objects/{object_id}/download` | 对象下载 |
+| `insertVectorStoreDocuments` | POST | `/vector-stores/{vector_store_id}/documents` | 向量文档写入 |
+| `listK8sClusterWorkloads` | GET | `/k8s-clusters/{cluster_id}/workloads` | K8s 工作负载 |
+| `listGPUInventory` | GET | `/gpu-inventory` | GPU 库存 |
+| `getGPUOccupancy` | GET | `/gpu-inventory/occupancy` | GPU 占用 |
+| `listSandboxTemplates` | GET | `/sandbox-templates` | 沙箱模板 |
+
+同一范围还新增了 `PreconditionFailed` 标准响应组件（`code=PRECONDITION_FAILED`）。当前 Core 契约中引用该 422 响应的操作为：`createK8sCluster`、`searchVectorStore`、`insertVectorStoreDocuments`。
 
 ### 3.1 新增异步任务枚举值（新增 / 向后兼容）
 
@@ -58,13 +88,15 @@
 
 以下 list 响应新增 `total: integer`（部分被标为 `required`，由服务端保证返回）：
 
-InstanceLogListResponse、InstanceEventListResponse、InstanceSecurityEventListResponse、NetworkRouteListResponse、VolumeSnapshotListResponse、FilesystemMountTargetListResponse、StorageBucketListResponse、SandboxTemplateListResponse、GPUInventoryListResponse（原已含 `total`，本次改为 required）。
+InstanceLogListResponse、InstanceEventListResponse、InstanceSecurityEventListResponse、NetworkRouteListResponse、VolumeSnapshotListResponse、FilesystemMountTargetListResponse、StorageBucketListResponse、SandboxTemplateListResponse、K8sClusterWorkloadListResponse、GPUInventoryListResponse。
+
+其中 `K8sClusterWorkloadListResponse` 与 `GPUInventoryListResponse` 在 `6d052d3` 新增时已包含 `total` 属性，后续 Sprint 12 对齐提交将 `total` 纳入 `required`；`GPUInventoryListResponse` 后续还新增并要求返回 `dev_profile`。
 
 **影响**：纯新增 response 字段，无需客户端改造；可选用于分页总数展示。
 
 ### 3.3 新增 `dev_profile` 溯源字段（新增 / 向后兼容，但需理解语义）
 
-多个 record / list 响应新增 `dev_profile`，引用新 schema：
+多个 record / list 响应新增 `dev_profile`，引用既有 schema `CoreDevProfileInfo`（该 schema 首次引入于 Sprint 3 提交 `bea9eb3`；下方定义仅供 Services 对接时参考）：
 
 ```yaml
 CoreDevProfileInfo:
@@ -130,9 +162,11 @@ CoreDevProfileInfo:
 ## 5. 验证与真实来源
 
 - Core 契约：[`repo/api/openapi/v1.yaml`](openapi/v1.yaml)
-- Services 契约：[`repo/api/openapi/services/v1.yaml`](openapi/services/v1.yaml)（本期未变更）
-- 差异复核命令：`git diff 6d052d3..HEAD -- repo/api/openapi/v1.yaml`
-- Services 契约未变更复核：`git log a49dc2a..HEAD -- repo/api/openapi/services/v1.yaml`（输出为空）
+- Services 契约：[`repo/api/openapi/services/v1.yaml`](openapi/services/v1.yaml)（Sprint 12 起点同步扩展；本文不展开 Services 业务 API 变更）
+- Core 差异复核命令：`git diff d52efda..HEAD -- repo/api/openapi/v1.yaml`
+- Core 主体扩展复核命令：`git diff d52efda..6d052d3 -- repo/api/openapi/v1.yaml`
+- Core 后续对齐复核命令：`git diff 6d052d3..HEAD -- repo/api/openapi/v1.yaml`
+- Services 契约上下文复核：`git diff d52efda..HEAD -- repo/api/openapi/services/v1.yaml`；`git diff 6d052d3..HEAD -- repo/api/openapi/services/v1.yaml`（后者输出为空）
 
 ---
 
@@ -147,13 +181,53 @@ contract_change_report:
       path: repo/api/openapi/v1.yaml
       changed: true
       changed_in_sprint: 12        # Sprint 13 = no contract change
-      diff_range: 6d052d3..HEAD
-      net_lines: "+72/-32"
-      commits: [779f84e, dbd1fe8, b78ee4a, e9ae3ec]
+      diff_range: d52efda..HEAD
+      net_lines_current: "+784/-5"
+      main_expansion:
+        commit: 6d052d3
+        diff_range: d52efda..6d052d3
+        net_lines: "+742/-3"
+        paths_added: 16
+        operations_added: 19
+      followup_alignment:
+        diff_range: 6d052d3..HEAD
+        net_lines: "+72/-32"
+      commits: [6d052d3, 779f84e, dbd1fe8, b78ee4a, e9ae3ec]
     services_openapi:
       path: repo/api/openapi/services/v1.yaml
-      changed: false
+      changed: true
+      context_only: true
+      diff_range: d52efda..HEAD
+      changed_at_sprint12_start: 6d052d3
+      changed_after_sprint12_start: false
   changes:
+    - id: sprint12-new-core-operations
+      type: additive
+      breaking: false
+      paths_added: 16
+      operations:
+        - { operationId: listInstanceLogs, method: GET, path: "/instances/{instance_id}/logs" }
+        - { operationId: listInstanceEvents, method: GET, path: "/instances/{instance_id}/events" }
+        - { operationId: getInstanceMetrics, method: GET, path: "/instances/{instance_id}/metrics" }
+        - { operationId: createInstanceExecSession, method: POST, path: "/instances/{instance_id}/exec" }
+        - { operationId: listInstanceSecurityEvents, method: GET, path: "/instances/{instance_id}/security-events" }
+        - { operationId: listNetworkRoutes, method: GET, path: "/networks/routes" }
+        - { operationId: createNetworkRoute, method: POST, path: "/networks/routes" }
+        - { operationId: listVolumeSnapshots, method: GET, path: "/volumes/{volume_id}/snapshots" }
+        - { operationId: createVolumeSnapshot, method: POST, path: "/volumes/{volume_id}/snapshots" }
+        - { operationId: listFilesystemMountTargets, method: GET, path: "/filesystems/{filesystem_id}/mount-targets" }
+        - { operationId: listStorageBuckets, method: GET, path: "/buckets" }
+        - { operationId: createStorageBucket, method: POST, path: "/buckets" }
+        - { operationId: uploadStorageObject, method: POST, path: "/objects/upload" }
+        - { operationId: downloadStorageObject, method: GET, path: "/objects/{object_id}/download" }
+        - { operationId: insertVectorStoreDocuments, method: POST, path: "/vector-stores/{vector_store_id}/documents" }
+        - { operationId: listK8sClusterWorkloads, method: GET, path: "/k8s-clusters/{cluster_id}/workloads" }
+        - { operationId: listGPUInventory, method: GET, path: "/gpu-inventory" }
+        - { operationId: getGPUOccupancy, method: GET, path: "/gpu-inventory/occupancy" }
+        - { operationId: listSandboxTemplates, method: GET, path: "/sandbox-templates" }
+      added_response_components: [PreconditionFailed]
+      operations_with_precondition_failed: [createK8sCluster, searchVectorStore, insertVectorStoreDocuments]
+      services_action: "Regenerate/update Core SDK clients and decide which newly available Core operations each Services module consumes."
     - id: async-task-enums
       type: additive
       breaking: false
@@ -168,13 +242,15 @@ contract_change_report:
       field: total
       schemas: [InstanceLogListResponse, InstanceEventListResponse, InstanceSecurityEventListResponse,
                 NetworkRouteListResponse, VolumeSnapshotListResponse, FilesystemMountTargetListResponse,
-                StorageBucketListResponse, SandboxTemplateListResponse, GPUInventoryListResponse]
+                StorageBucketListResponse, SandboxTemplateListResponse, K8sClusterWorkloadListResponse,
+                GPUInventoryListResponse]
       services_action: none
     - id: dev-profile-field
       type: additive
       breaking: false
       field: dev_profile
       ref_schema: CoreDevProfileInfo
+      ref_schema_status: "existing since Sprint 3 / bea9eb3"
       semantics: "mode=local|real distinguishes dev-profile success from real-provider success"
       services_action: "read to distinguish local vs real; do not treat mode=local as production"
     - id: id-format-loosened
