@@ -772,6 +772,7 @@ validate-sdk-alpha:
 
 validate-sdk-beta:
 	@echo "→ 校验 Sprint 4 SDK Beta helper..."
+	python scripts/validate_sdk_beta_test.py
 	python scripts/validate_sdk_beta.py
 	$(MAKE) validate-sdk-alpha
 	@echo "✅ SDK Beta helpers valid"

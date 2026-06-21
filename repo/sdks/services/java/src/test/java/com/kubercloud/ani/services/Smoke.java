@@ -31,7 +31,7 @@ public final class Smoke {
         if (ApiClient.OPERATIONS.isEmpty()) {
             throw new IllegalStateException("expected generated operations");
         }
-        if (!client.hasOperation("listInferenceServices")) {
+        if (!client.hasOperation("listGpuContainers")) {
             throw new IllegalStateException("missing expected operation");
         }
 

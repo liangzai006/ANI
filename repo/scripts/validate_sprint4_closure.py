@@ -10,6 +10,8 @@ import re
 
 import yaml
 
+import validate_sdk_beta as sdk_beta
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ROOT = ROOT.parent
@@ -194,8 +196,10 @@ def validate_sdk_outputs() -> None:
         fail("Core SDK metadata must list cursorPaginationOperations")
     if not core_metadata.get("errorCodes"):
         fail("Core SDK metadata must list errorCodes")
-    if services_metadata.get("idempotencyOperations") != []:
-        fail("Services SDK must not declare Core idempotency operations")
+    try:
+        sdk_beta.validate_services_idempotency_separation(core_metadata, services_metadata)
+    except SystemExit as exc:
+        fail(str(exc).removeprefix("sdk beta invalid: "))
     examples = [
         "sdks/core/go/examples/basic/main.go",
         "sdks/core/python/examples/basic.py",

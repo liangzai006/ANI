@@ -15,6 +15,6 @@ api_error = sdk.APIError("BAD_REQUEST", "invalid request", "req_test")
 assert api_error.to_dict()["code"] == "BAD_REQUEST"
 assert sdk.is_api_error_code("BAD_REQUEST")
 assert sdk.OPERATIONS
-assert client.has_operation("listInferenceServices")
+assert client.has_operation("listGpuContainers")
 
 print("services python SDK alpha smoke ok")

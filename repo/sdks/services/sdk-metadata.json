@@ -5,6 +5,66 @@
   "serverURL": "https://{host}/api/v1/svc",
   "operations": [
     {
+      "operationId": "listGpuContainers",
+      "method": "GET",
+      "path": "/gpu-containers",
+      "scope": ""
+    },
+    {
+      "operationId": "createGpuContainer",
+      "method": "POST",
+      "path": "/gpu-containers",
+      "scope": ""
+    },
+    {
+      "operationId": "listAvailableGpus",
+      "method": "GET",
+      "path": "/gpu-containers/available-gpus",
+      "scope": ""
+    },
+    {
+      "operationId": "deleteGpuContainer",
+      "method": "DELETE",
+      "path": "/gpu-containers/{container_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getGpuContainer",
+      "method": "GET",
+      "path": "/gpu-containers/{container_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "patchGpuContainer",
+      "method": "PATCH",
+      "path": "/gpu-containers/{container_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getGpuContainerMetrics",
+      "method": "GET",
+      "path": "/gpu-containers/{container_id}/metrics",
+      "scope": ""
+    },
+    {
+      "operationId": "rebuildGpuContainer",
+      "method": "POST",
+      "path": "/gpu-containers/{container_id}/rebuild",
+      "scope": ""
+    },
+    {
+      "operationId": "rollbackGpuContainer",
+      "method": "POST",
+      "path": "/gpu-containers/{container_id}/rollback",
+      "scope": ""
+    },
+    {
+      "operationId": "listGpuContainerVersions",
+      "method": "GET",
+      "path": "/gpu-containers/{container_id}/versions",
+      "scope": ""
+    },
+    {
       "operationId": "listInferenceServices",
       "method": "GET",
       "path": "/inference-services",
@@ -26,6 +86,42 @@
       "operationId": "getInferenceService",
       "method": "GET",
       "path": "/inference-services/{service_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getInferenceServiceLogs",
+      "method": "GET",
+      "path": "/inference-services/{service_id}/logs",
+      "scope": ""
+    },
+    {
+      "operationId": "updateInferenceServicePolicies",
+      "method": "PUT",
+      "path": "/inference-services/{service_id}/policies",
+      "scope": ""
+    },
+    {
+      "operationId": "testInferenceService",
+      "method": "POST",
+      "path": "/inference-services/{service_id}/test",
+      "scope": ""
+    },
+    {
+      "operationId": "listIntegrations",
+      "method": "GET",
+      "path": "/integrations",
+      "scope": ""
+    },
+    {
+      "operationId": "createIntegration",
+      "method": "POST",
+      "path": "/integrations",
+      "scope": ""
+    },
+    {
+      "operationId": "createIntegrationBot",
+      "method": "POST",
+      "path": "/integrations/bots",
       "scope": ""
     },
     {
@@ -53,6 +149,12 @@
       "scope": ""
     },
     {
+      "operationId": "listKnowledgeBaseCitations",
+      "method": "GET",
+      "path": "/knowledge-bases/{kb_id}/citations",
+      "scope": ""
+    },
+    {
       "operationId": "listKnowledgeBaseDocuments",
       "method": "GET",
       "path": "/knowledge-bases/{kb_id}/documents",
@@ -71,6 +173,12 @@
       "scope": ""
     },
     {
+      "operationId": "updateKnowledgeBasePermissions",
+      "method": "PUT",
+      "path": "/knowledge-bases/{kb_id}/permissions",
+      "scope": ""
+    },
+    {
       "operationId": "queryKnowledgeBase",
       "method": "POST",
       "path": "/knowledge-bases/{kb_id}/query",
@@ -80,6 +188,12 @@
       "operationId": "streamQueryKnowledgeBase",
       "method": "GET",
       "path": "/knowledge-bases/{kb_id}/query/stream",
+      "scope": ""
+    },
+    {
+      "operationId": "listKnowledgeBaseSessions",
+      "method": "GET",
+      "path": "/knowledge-bases/{kb_id}/sessions",
       "scope": ""
     },
     {
@@ -117,32 +231,219 @@
       "method": "POST",
       "path": "/models/{model_id}/versions",
       "scope": ""
+    },
+    {
+      "operationId": "listSandboxes",
+      "method": "GET",
+      "path": "/sandboxes",
+      "scope": ""
+    },
+    {
+      "operationId": "createSandbox",
+      "method": "POST",
+      "path": "/sandboxes",
+      "scope": ""
+    },
+    {
+      "operationId": "deleteSandbox",
+      "method": "DELETE",
+      "path": "/sandboxes/{sandbox_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getSandbox",
+      "method": "GET",
+      "path": "/sandboxes/{sandbox_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "patchSandbox",
+      "method": "PATCH",
+      "path": "/sandboxes/{sandbox_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "extendSandbox",
+      "method": "POST",
+      "path": "/sandboxes/{sandbox_id}/extend",
+      "scope": ""
+    },
+    {
+      "operationId": "pauseSandbox",
+      "method": "POST",
+      "path": "/sandboxes/{sandbox_id}/pause",
+      "scope": ""
+    },
+    {
+      "operationId": "listSandboxSecurityEvents",
+      "method": "GET",
+      "path": "/sandboxes/{sandbox_id}/security-events",
+      "scope": ""
+    },
+    {
+      "operationId": "getSandboxSecurityOverview",
+      "method": "GET",
+      "path": "/sandboxes/{sandbox_id}/security-overview",
+      "scope": ""
+    },
+    {
+      "operationId": "listTenantMembers",
+      "method": "GET",
+      "path": "/tenant/members",
+      "scope": ""
+    },
+    {
+      "operationId": "inviteTenantMember",
+      "method": "POST",
+      "path": "/tenant/members",
+      "scope": ""
+    },
+    {
+      "operationId": "removeTenantMember",
+      "method": "DELETE",
+      "path": "/tenant/members/{member_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getTenantMember",
+      "method": "GET",
+      "path": "/tenant/members/{member_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "listTenantRoles",
+      "method": "GET",
+      "path": "/tenant/roles",
+      "scope": ""
+    },
+    {
+      "operationId": "updateTenantRole",
+      "method": "PUT",
+      "path": "/tenant/roles/{role_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "getSsoConfig",
+      "method": "GET",
+      "path": "/tenant/sso",
+      "scope": ""
+    },
+    {
+      "operationId": "updateSsoConfig",
+      "method": "PUT",
+      "path": "/tenant/sso",
+      "scope": ""
+    },
+    {
+      "operationId": "listWebhooks",
+      "method": "GET",
+      "path": "/tenant/webhooks",
+      "scope": ""
+    },
+    {
+      "operationId": "createWebhook",
+      "method": "POST",
+      "path": "/tenant/webhooks",
+      "scope": ""
+    },
+    {
+      "operationId": "deleteWebhook",
+      "method": "DELETE",
+      "path": "/tenant/webhooks/{webhook_id}",
+      "scope": ""
+    },
+    {
+      "operationId": "listWebhookDeliveries",
+      "method": "GET",
+      "path": "/tenant/webhooks/{webhook_id}/deliveries",
+      "scope": ""
     }
   ],
   "schemas": [
     "AsyncTask",
+    "AvailableGpu",
+    "CreateGpuContainerRequest",
     "CreateInferenceEndpointRequest",
+    "CreateIntegrationBotRequest",
+    "CreateIntegrationRequest",
     "CreateModelRequest",
+    "CreateSandboxRequest",
+    "CreateWebhookRequest",
     "CursorPage",
     "ErrorResponse",
+    "ExtendSandboxRequest",
+    "GpuContainer",
+    "GpuContainerMetrics",
+    "GpuContainerVersion",
     "InferenceEndpoint",
     "InferenceService",
+    "InferenceServiceLogEntry",
+    "InferenceServiceLogListResponse",
+    "InferenceServicePolicies",
+    "InferenceTestRequest",
+    "InferenceTestResponse",
+    "Integration",
+    "IntegrationBot",
+    "IntegrationListResponse",
+    "InviteMemberRequest",
+    "KBCitation",
+    "KBCitationListResponse",
     "KBDocument",
     "KBQueryRequest",
     "KBQueryResponse",
+    "KBSession",
+    "KBSessionListResponse",
     "KnowledgeBase",
     "Model",
-    "ModelVersion"
+    "ModelVersion",
+    "PatchGpuContainerRequest",
+    "PatchSandboxRequest",
+    "Sandbox",
+    "SecurityEvent",
+    "SecurityOverview",
+    "SsoConfig",
+    "TenantMember",
+    "TenantRole",
+    "UpdateInferenceServicePoliciesRequest",
+    "UpdateKBPermissionsRequest",
+    "UpdateSsoConfigRequest",
+    "UpdateTenantRoleRequest",
+    "Webhook",
+    "WebhookDelivery",
+    "WebhookDeliveryListResponse"
   ],
-  "idempotencyOperations": [],
+  "idempotencyOperations": [
+    "createGpuContainer",
+    "patchGpuContainer",
+    "updateInferenceServicePolicies",
+    "testInferenceService",
+    "createIntegration",
+    "createIntegrationBot",
+    "updateKnowledgeBasePermissions",
+    "createSandbox",
+    "patchSandbox",
+    "extendSandbox",
+    "inviteTenantMember",
+    "updateTenantRole",
+    "updateSsoConfig",
+    "createWebhook"
+  ],
   "cursorPaginationOperations": [
-    "listModels"
+    "listGpuContainers",
+    "getInferenceServiceLogs",
+    "listIntegrations",
+    "listKnowledgeBaseCitations",
+    "listKnowledgeBaseSessions",
+    "listModels",
+    "listSandboxes",
+    "listWebhookDeliveries"
   ],
   "errorCodes": [
     "BAD_REQUEST",
     "CONFLICT",
     "FORBIDDEN",
     "NOT_FOUND",
+    "PRECONDITION_FAILED",
     "UNAUTHORIZED"
   ]
 }

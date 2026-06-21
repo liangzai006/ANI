@@ -130,8 +130,15 @@ def validate_metadata(matrix: dict[str, Any], spec: dict[str, Any]) -> None:
     actual_errors = sorted(core_metadata.get("errorCodes", []))
     if actual_errors != expected_errors:
         fail(f"Core SDK errorCodes mismatch: got {actual_errors}, want {expected_errors}")
-    if services_metadata.get("idempotencyOperations", []) != []:
-        fail("Services SDK must not declare Core idempotency operations")
+    validate_services_idempotency_separation(core_metadata, services_metadata)
+
+
+def validate_services_idempotency_separation(core_metadata: dict[str, Any], services_metadata: dict[str, Any]) -> None:
+    core_operations = set(core_metadata.get("idempotencyOperations", []))
+    services_operations = set(services_metadata.get("idempotencyOperations", []))
+    leaked_operations = sorted(core_operations & services_operations)
+    if leaked_operations:
+        fail(f"Services SDK must not declare Core idempotency operations: {leaked_operations}")
 
 
 def validate_language_helpers() -> None:

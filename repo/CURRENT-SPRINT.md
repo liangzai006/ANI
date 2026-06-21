@@ -133,6 +133,8 @@ Sprint 13 基线回归入口：
 make test
 make validate-demo-instances validate-core-alpha validate-gpu-contracts
 make validate-network-alpha validate-storage-alpha validate-vector-alpha
+make validate-spec-split validate-core-beta validate-core-api-compatibility
+make validate-sdk-beta validate-mock-a validate-doc-api validate-sdk-mock-smoke validate-sprint4-closure
 make validate-instance-observability-live-gate
 python scripts/validate_yaml.py api/openapi/v1.yaml
 make validate-doc-entrypoints

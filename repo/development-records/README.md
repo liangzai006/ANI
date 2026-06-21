@@ -13,6 +13,12 @@
 
 ## 已完成批次（按完成时间排列）
 
+### SDK Regression Fixes（2026-06）
+
+| 批次 | 内容摘要 | 文件 |
+|---|---|---|
+| SDK-SERVICES-IDEMPOTENCY-SEPARATION-A | 修复 SDK beta 校验器把 Services 自有幂等 operationId 误判为 Core 泄漏的问题；`validate-sdk-beta` 改为只拒绝 Core/Services `idempotencyOperations` 交集，并新增回归测试；重生成 Core/Services 四语言 SDK 与各自 OpenAPI 契约对齐 | sdk-services-idempotency-separation-a.md |
+
 ### Sprint 12 Kickoff（2026-06）
 
 | 批次 | 内容摘要 | 文件 |
