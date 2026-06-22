@@ -136,6 +136,7 @@ func TestGatewayStorageConfigFromEnvIncludesInClusterKubernetesService(t *testin
 func TestGatewayStorageConfigFromEnvIncludesObjectStoreProvider(t *testing.T) {
 	t.Setenv("OBJECT_STORE_PROVIDER", "minio")
 	t.Setenv("OBJECT_STORE_ENDPOINT", "http://minio.example:9000")
+	t.Setenv("OBJECT_STORE_ENDPOINTS", "http://minio-a.example:9000,http://minio-b.example:9000")
 	t.Setenv("OBJECT_STORE_PUBLIC_ENDPOINT", "http://minio-public.example:30900")
 	t.Setenv("OBJECT_STORE_ACCESS_KEY_ID", "minio")
 	t.Setenv("OBJECT_STORE_SECRET_ACCESS_KEY", "secret")
@@ -146,6 +147,9 @@ func TestGatewayStorageConfigFromEnvIncludesObjectStoreProvider(t *testing.T) {
 	cfg := gatewayStorageRuntimeConfigFromEnv()
 	if cfg.ObjectStoreProvider != "minio" || cfg.ObjectStoreEndpoint != "http://minio.example:9000" || cfg.ObjectStorePublicEndpoint != "http://minio-public.example:30900" {
 		t.Fatalf("object store provider config not loaded from env: %#v", cfg)
+	}
+	if len(cfg.ObjectStoreEndpoints) != 2 || cfg.ObjectStoreEndpoints[0] != "http://minio-a.example:9000" || cfg.ObjectStoreEndpoints[1] != "http://minio-b.example:9000" {
+		t.Fatalf("object store endpoints = %#v, want parsed endpoint list", cfg.ObjectStoreEndpoints)
 	}
 	if cfg.ObjectStoreAccessKeyID == "" || cfg.ObjectStoreSecretAccessKey == "" || cfg.ObjectStoreBucketPrefix != "ani-s13-" {
 		t.Fatalf("object store credentials/prefix not loaded from env")

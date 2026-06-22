@@ -294,6 +294,22 @@ func TestNewCapabilitiesCanWireMinIOObjectStoreProvider(t *testing.T) {
 	}
 }
 
+func TestNewCapabilitiesCanWireMinIOEndpointList(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		ObjectStoreProvider:        "minio",
+		ObjectStoreEndpoints:       []string{"https://minio-a.example:9000", "https://minio-b.example:9000"},
+		ObjectStoreAccessKeyID:     "minio",
+		ObjectStoreSecretAccessKey: "secret",
+		ObjectStoreRegion:          "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.ObjectStore.(*objectstore.MinIOObjectStore); !ok {
+		t.Fatalf("ObjectStore = %T, want MinIOObjectStore", capabilities.ObjectStore)
+	}
+}
+
 func TestNewCapabilitiesCanWireMilvusVectorStoreProvider(t *testing.T) {
 	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
 		VectorStoreProvider: "milvus",
@@ -309,6 +325,21 @@ func TestNewCapabilitiesCanWireMilvusVectorStoreProvider(t *testing.T) {
 	}
 	if _, ok := capabilities.VectorStoreResources.(*runtimeadapter.LocalVectorStoreService); !ok {
 		t.Fatalf("VectorStoreResources = %T, want LocalVectorStoreService with backend", capabilities.VectorStoreResources)
+	}
+}
+
+func TestNewCapabilitiesCanWireMilvusEndpointList(t *testing.T) {
+	capabilities, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{
+		VectorStoreProvider:  "milvus",
+		VectorStoreEndpoints: []string{"http://milvus-a.example:19530", "http://milvus-b.example:19530"},
+		VectorStoreToken:     "milvus-token",
+		VectorStoreDatabase:  "ani",
+	})
+	if err != nil {
+		t.Fatalf("NewCapabilitiesWithConfig() error = %v", err)
+	}
+	if _, ok := capabilities.VectorStore.(*vectorstore.MilvusVectorStore); !ok {
+		t.Fatalf("VectorStore = %T, want MilvusVectorStore", capabilities.VectorStore)
 	}
 }
 

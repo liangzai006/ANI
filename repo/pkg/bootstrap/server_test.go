@@ -64,6 +64,27 @@ func TestConfigEnvironmentOverridesWorkloadReconcileController(t *testing.T) {
 	}
 }
 
+func TestConfigEnvironmentOverridesRedisFailover(t *testing.T) {
+	t.Setenv("REDIS_MODE", "sentinel")
+	t.Setenv("REDIS_ADDRS", "redis-sentinel-a:26379,redis-sentinel-b:26379")
+	t.Setenv("REDIS_MASTER_NAME", "ani-redis")
+	t.Setenv("REDIS_USERNAME", "ani")
+	t.Setenv("REDIS_PASSWORD", "secret")
+	t.Setenv("REDIS_DB", "2")
+
+	cfg := (Config{}).withEnvironmentOverrides()
+
+	if cfg.RedisMode != "sentinel" || cfg.RedisMasterName != "ani-redis" {
+		t.Fatalf("redis mode/master = %q/%q, want sentinel/ani-redis", cfg.RedisMode, cfg.RedisMasterName)
+	}
+	if len(cfg.RedisAddrs) != 2 || cfg.RedisAddrs[0] != "redis-sentinel-a:26379" || cfg.RedisAddrs[1] != "redis-sentinel-b:26379" {
+		t.Fatalf("redis addrs = %#v, want sentinel addrs", cfg.RedisAddrs)
+	}
+	if cfg.RedisUsername != "ani" || cfg.RedisPassword != "secret" || cfg.RedisDB != 2 {
+		t.Fatalf("redis auth/db = %q/%q/%d, want ani/secret/2", cfg.RedisUsername, cfg.RedisPassword, cfg.RedisDB)
+	}
+}
+
 func TestConfigEnvironmentOverridesNetworkProvider(t *testing.T) {
 	t.Setenv("NETWORK_PROVIDER", "kubeovn_rest")
 	t.Setenv("NETWORK_PROVIDER_APPLY_ENABLED", "true")

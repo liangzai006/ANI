@@ -3,7 +3,7 @@
 > 版本 V8.3 | 广州常青云科技有限公司 | 内部产品规划文件
 > 最后更新：2026-06-21
 > 当前摘要：Sprint 12 Core handler/local profile 已闭环；Sprint 13 S01-S07 real provider live gate 均为 `production_shape.status=passed`。这只表示组件级 production-shaped acceptance passed，不等于 full platform production ready。
-> Sprint 14 分支执行：`feature/sprint14-core-resilience-semantics` 已完成 R-P0-0 gateway shared store 前置批次、R-P0-1 gateway rate limit、R-P0-2 gateway idempotency replay、R-P0-3 adapter per-call timeout、R-P0-4 data-plane readyz health、R-P1-5 retry/circuit-breaker foundation 与 R-P1-6 resilience degradation；这些批次仅为 local/logic verified，不声明 production ready。R-P0-4 的 `validate-readyz-dataplane-live-gate` 当前只执行 local gate，未执行真实后端 kill；R-P1-5 的 `validate-resilience-faultinjection-live-gate` 当前只执行 local gate，未执行真实故障注入，且 MinIO/Milvus retry policy 尚未装配；R-P1-6 的 `validate-resilience-degradation` 当前只执行 local gate，未执行真实后端 down。
+> Sprint 14 分支执行：`feature/sprint14-core-resilience-semantics` 已完成 R-P0-0 gateway shared store 前置批次、R-P0-1 gateway rate limit、R-P0-2 gateway idempotency replay、R-P0-3 adapter per-call timeout、R-P0-4 data-plane readyz health、R-P1-5 retry/circuit-breaker foundation、R-P1-6 resilience degradation 与 R-P2-7 multi-endpoint failover config；这些批次仅为 local/logic verified，不声明 production ready。R-P0-4 的 `validate-readyz-dataplane-live-gate` 当前只执行 local gate，未执行真实后端 kill；R-P1-5 的 `validate-resilience-faultinjection-live-gate` 当前只执行 local gate，未执行真实故障注入，且 MinIO/Milvus retry policy 尚未装配；R-P1-6 的 `validate-resilience-degradation` 当前只执行 local gate，未执行真实后端 down；R-P2-7 的 `validate-ha-failover-live-gate` 当前只执行 Redis Sentinel/Cluster、MinIO/Milvus endpoint list 等配置 local gate，未执行真实 primary kill / topology failover，PG 仍只支持单 `DatabaseURL`（可外接 VIP/proxy）。
 
 ---
 

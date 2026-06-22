@@ -25,6 +25,7 @@ var milvusCollectionSafePattern = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
 type MilvusVectorStoreConfig struct {
 	Endpoint         string
+	Endpoints        []string
 	Token            string
 	Database         string
 	CollectionPrefix string
@@ -34,6 +35,7 @@ type MilvusVectorStoreConfig struct {
 
 type MilvusVectorStore struct {
 	endpoint         *url.URL
+	endpoints        []*url.URL
 	token            string
 	database         string
 	collectionPrefix string
@@ -44,16 +46,18 @@ type MilvusVectorStore struct {
 var _ ports.VectorStore = (*MilvusVectorStore)(nil)
 
 func NewMilvusVectorStore(config MilvusVectorStoreConfig) (*MilvusVectorStore, error) {
-	endpoint, err := parseMilvusEndpoint(config.Endpoint)
+	endpoints, err := parseMilvusEndpoints(config.Endpoint, config.Endpoints)
 	if err != nil {
 		return nil, err
 	}
+	endpoint := endpoints[0]
 	client := config.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
 	return &MilvusVectorStore{
 		endpoint:         endpoint,
+		endpoints:        endpoints,
 		token:            strings.TrimSpace(config.Token),
 		database:         strings.TrimSpace(config.Database),
 		collectionPrefix: strings.TrimSpace(config.CollectionPrefix),
@@ -256,6 +260,38 @@ func parseMilvusEndpoint(raw string) (*url.URL, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed, nil
+}
+
+func parseMilvusEndpoints(primary string, values []string) ([]*url.URL, error) {
+	rawValues := append([]string{}, values...)
+	if strings.TrimSpace(primary) != "" {
+		rawValues = append([]string{primary}, rawValues...)
+	}
+	if len(rawValues) == 0 {
+		return nil, fmt.Errorf("%w: Milvus endpoint is required", ports.ErrInvalid)
+	}
+	endpoints := make([]*url.URL, 0, len(rawValues))
+	seen := map[string]struct{}{}
+	for _, raw := range rawValues {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		parsed, err := parseMilvusEndpoint(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		key := parsed.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		endpoints = append(endpoints, parsed)
+	}
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("%w: Milvus endpoint is required", ports.ErrInvalid)
+	}
+	return endpoints, nil
 }
 
 type milvusResponse struct {

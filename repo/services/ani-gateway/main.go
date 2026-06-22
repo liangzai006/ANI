@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -81,7 +82,7 @@ func main() {
 			"prometheus_configured", strings.TrimSpace(instanceObservabilityRuntimeConfig.PrometheusURL) != "",
 		)
 	}
-	gatewayStore, closeGatewayStore, err := bootstrap.ConnectRedisCacheStore(gatewayRedisURLFromEnv())
+	gatewayStore, closeGatewayStore, err := bootstrap.ConnectRedisCacheStoreWithConfig(gatewayRedisConfigFromEnv())
 	if err != nil {
 		logger.Error("failed to configure gateway shared store", "err", err)
 		os.Exit(1)
@@ -120,4 +121,35 @@ func gatewayRedisURLFromEnv() string {
 		return value
 	}
 	return "redis://:ani_dev_password@127.0.0.1:6379/0"
+}
+
+func gatewayRedisConfigFromEnv() bootstrap.RedisConfig {
+	cfg := bootstrap.RedisConfig{URL: gatewayRedisURLFromEnv()}
+	mode := firstGatewayEnv("GATEWAY_REDIS_MODE", "REDIS_MODE")
+	addrs := firstGatewayEnv("GATEWAY_REDIS_ADDRS", "REDIS_ADDRS")
+	if strings.TrimSpace(mode) != "" || strings.TrimSpace(addrs) != "" {
+		cfg.URL = ""
+		cfg.Mode = strings.TrimSpace(mode)
+		cfg.Addrs = splitGatewayCSVEnv(addrs)
+	}
+	cfg.MasterName = firstGatewayEnv("GATEWAY_REDIS_MASTER_NAME", "REDIS_MASTER_NAME")
+	cfg.Username = firstGatewayEnv("GATEWAY_REDIS_USERNAME", "REDIS_USERNAME")
+	cfg.Password = firstGatewayEnv("GATEWAY_REDIS_PASSWORD", "REDIS_PASSWORD")
+	cfg.SentinelUsername = firstGatewayEnv("GATEWAY_REDIS_SENTINEL_USERNAME", "REDIS_SENTINEL_USERNAME")
+	cfg.SentinelPassword = firstGatewayEnv("GATEWAY_REDIS_SENTINEL_PASSWORD", "REDIS_SENTINEL_PASSWORD")
+	if value := firstGatewayEnv("GATEWAY_REDIS_DB", "REDIS_DB"); strings.TrimSpace(value) != "" {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			cfg.DB = parsed
+		}
+	}
+	return cfg
+}
+
+func firstGatewayEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

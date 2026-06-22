@@ -110,6 +110,28 @@ func TestMilvusVectorStoreHealthListsCollections(t *testing.T) {
 	}
 }
 
+func TestMilvusAcceptsEndpointList(t *testing.T) {
+	var gotHost string
+	client := &http.Client{Transport: vectorRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotHost = r.URL.Host
+		return milvusTestJSONResponse(http.StatusOK, `{"code":0,"data":[]}`), nil
+	})}
+	store, err := NewMilvusVectorStore(MilvusVectorStoreConfig{
+		Endpoints:  []string{"http://milvus-a.test:19530", "http://milvus-b.test:19530"},
+		HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatalf("NewMilvusVectorStore() error = %v", err)
+	}
+
+	if err := store.Health(context.Background()); err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if gotHost != "milvus-a.test:19530" {
+		t.Fatalf("host = %q, want first endpoint milvus-a.test:19530", gotHost)
+	}
+}
+
 func TestMilvusVectorStoreUpsertPostsRecordsToEntitiesEndpoint(t *testing.T) {
 	t.Parallel()
 

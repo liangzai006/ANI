@@ -28,6 +28,7 @@ type gatewayStorageRuntimeConfig struct {
 	KubernetesRequestTimeout          time.Duration
 	ObjectStoreProvider               string
 	ObjectStoreEndpoint               string
+	ObjectStoreEndpoints              []string
 	ObjectStorePublicEndpoint         string
 	ObjectStoreAccessKeyID            string
 	ObjectStoreSecretAccessKey        string
@@ -55,6 +56,7 @@ func gatewayStorageRuntimeConfigFromEnv() gatewayStorageRuntimeConfig {
 		KubernetesRequestTimeout:          gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 		ObjectStoreProvider:               os.Getenv("OBJECT_STORE_PROVIDER"),
 		ObjectStoreEndpoint:               os.Getenv("OBJECT_STORE_ENDPOINT"),
+		ObjectStoreEndpoints:              splitGatewayCSVEnv(os.Getenv("OBJECT_STORE_ENDPOINTS")),
 		ObjectStorePublicEndpoint:         os.Getenv("OBJECT_STORE_PUBLIC_ENDPOINT"),
 		ObjectStoreAccessKeyID:            os.Getenv("OBJECT_STORE_ACCESS_KEY_ID"),
 		ObjectStoreSecretAccessKey:        os.Getenv("OBJECT_STORE_SECRET_ACCESS_KEY"),
@@ -71,6 +73,7 @@ func newGatewayStorageService(cfg gatewayStorageRuntimeConfig) (ports.StorageSer
 	if strings.TrimSpace(cfg.ObjectStoreProvider) == "minio" {
 		store, err := objectstore.NewMinIOObjectStore(objectstore.MinIOObjectStoreConfig{
 			Endpoint:        cfg.ObjectStoreEndpoint,
+			Endpoints:       cfg.ObjectStoreEndpoints,
 			PublicEndpoint:  cfg.ObjectStorePublicEndpoint,
 			AccessKeyID:     cfg.ObjectStoreAccessKeyID,
 			SecretAccessKey: cfg.ObjectStoreSecretAccessKey,

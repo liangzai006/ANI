@@ -11,12 +11,12 @@ import (
 )
 
 type CacheStore struct {
-	client *goredis.Client
+	client goredis.UniversalClient
 }
 
 var _ ports.CacheStore = (*CacheStore)(nil)
 
-func NewCacheStore(client *goredis.Client) *CacheStore {
+func NewCacheStore(client goredis.UniversalClient) *CacheStore {
 	return &CacheStore{client: client}
 }
 

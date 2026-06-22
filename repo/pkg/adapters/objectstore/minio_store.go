@@ -30,6 +30,7 @@ var s3BucketNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$
 
 type MinIOObjectStoreConfig struct {
 	Endpoint        string
+	Endpoints       []string
 	PublicEndpoint  string
 	AccessKeyID     string
 	SecretAccessKey string
@@ -44,6 +45,7 @@ type MinIOObjectStoreConfig struct {
 
 type MinIOObjectStore struct {
 	endpoint        *url.URL
+	endpoints       []*url.URL
 	publicEndpoint  *url.URL
 	accessKeyID     string
 	secretAccessKey string
@@ -58,10 +60,11 @@ type MinIOObjectStore struct {
 var _ ports.ObjectStore = (*MinIOObjectStore)(nil)
 
 func NewMinIOObjectStore(config MinIOObjectStoreConfig) (*MinIOObjectStore, error) {
-	endpoint, err := parseMinIOEndpoint(config.Endpoint, config.Secure)
+	endpoints, err := parseMinIOEndpoints(config.Endpoint, config.Endpoints, config.Secure)
 	if err != nil {
 		return nil, err
 	}
+	endpoint := endpoints[0]
 	publicEndpoint := endpoint
 	if strings.TrimSpace(config.PublicEndpoint) != "" {
 		publicEndpoint, err = parseMinIOEndpoint(config.PublicEndpoint, config.Secure)
@@ -88,6 +91,7 @@ func NewMinIOObjectStore(config MinIOObjectStoreConfig) (*MinIOObjectStore, erro
 	}
 	return &MinIOObjectStore{
 		endpoint:        endpoint,
+		endpoints:       endpoints,
 		publicEndpoint:  publicEndpoint,
 		accessKeyID:     accessKeyID,
 		secretAccessKey: secretAccessKey,
@@ -474,6 +478,38 @@ func parseMinIOEndpoint(raw string, secure bool) (*url.URL, error) {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed, nil
+}
+
+func parseMinIOEndpoints(primary string, values []string, secure bool) ([]*url.URL, error) {
+	rawValues := append([]string{}, values...)
+	if strings.TrimSpace(primary) != "" {
+		rawValues = append([]string{primary}, rawValues...)
+	}
+	if len(rawValues) == 0 {
+		return nil, fmt.Errorf("%w: MinIO endpoint is required", ports.ErrInvalid)
+	}
+	endpoints := make([]*url.URL, 0, len(rawValues))
+	seen := map[string]struct{}{}
+	for _, raw := range rawValues {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		parsed, err := parseMinIOEndpoint(trimmed, secure)
+		if err != nil {
+			return nil, err
+		}
+		key := parsed.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		endpoints = append(endpoints, parsed)
+	}
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("%w: MinIO endpoint is required", ports.ErrInvalid)
+	}
+	return endpoints, nil
 }
 
 func minIOHTTPError(statusCode int, operation string) error {

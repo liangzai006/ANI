@@ -72,7 +72,7 @@ type Deps struct {
 	DB     *pgxpool.Pool
 	NATS   *nats.Conn
 	JS     nats.JetStreamContext
-	Redis  *redis.Client
+	Redis  redis.UniversalClient
 	Ports  Capabilities
 	Logger *slog.Logger
 
@@ -82,7 +82,7 @@ type Deps struct {
 	WorkloadReconcileControllerEnabled bool
 }
 
-func NewCapabilities(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *redis.Client) Capabilities {
+func NewCapabilities(db *pgxpool.Pool, js nats.JetStreamContext, redisClient redis.UniversalClient) Capabilities {
 	capabilities, err := NewCapabilitiesWithConfig(db, js, redisClient, Config{})
 	if err != nil {
 		panic(err)
@@ -90,7 +90,7 @@ func NewCapabilities(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *re
 	return capabilities
 }
 
-func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redisClient *redis.Client, cfg Config) (Capabilities, error) {
+func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redisClient redis.UniversalClient, cfg Config) (Capabilities, error) {
 	metadata := postgresadapter.NewMetadataStore(db)
 	admission := runtimeadapter.NewLocalAdmissionGuard()
 	audit := runtimeadapter.NewMetadataPlanAuditStore(metadata)
@@ -309,6 +309,7 @@ func objectStoreAdapter(cfg Config) (ports.ObjectStore, error) {
 	case "minio":
 		return objectstore.NewMinIOObjectStore(objectstore.MinIOObjectStoreConfig{
 			Endpoint:        cfg.ObjectStoreEndpoint,
+			Endpoints:       cfg.ObjectStoreEndpoints,
 			PublicEndpoint:  cfg.ObjectStorePublicEndpoint,
 			AccessKeyID:     cfg.ObjectStoreAccessKeyID,
 			SecretAccessKey: cfg.ObjectStoreSecretAccessKey,
@@ -329,6 +330,7 @@ func vectorStoreAdapter(cfg Config) (ports.VectorStore, error) {
 	case "milvus":
 		return vectorstore.NewMilvusVectorStore(vectorstore.MilvusVectorStoreConfig{
 			Endpoint:         cfg.VectorStoreEndpoint,
+			Endpoints:        cfg.VectorStoreEndpoints,
 			Token:            cfg.VectorStoreToken,
 			Database:         cfg.VectorStoreDatabase,
 			CollectionPrefix: cfg.VectorStoreCollectionPrefix,

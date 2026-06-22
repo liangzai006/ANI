@@ -102,6 +102,31 @@ func TestMinIOObjectStoreHealthUsesSignedRootRequest(t *testing.T) {
 	}
 }
 
+func TestMinIOAcceptsEndpointList(t *testing.T) {
+	var gotHost string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotHost = r.URL.Host
+		return minIOTestResponse(http.StatusOK), nil
+	})}
+
+	store, err := NewMinIOObjectStore(MinIOObjectStoreConfig{
+		Endpoints:       []string{"http://minio-a.test:9000", "http://minio-b.test:9000"},
+		AccessKeyID:     "minio",
+		SecretAccessKey: "secret",
+		HTTPClient:      client,
+		Now:             fixedMinIOTestClock,
+	})
+	if err != nil {
+		t.Fatalf("NewMinIOObjectStore() error = %v", err)
+	}
+	if err := store.Health(context.Background()); err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if gotHost != "minio-a.test:9000" {
+		t.Fatalf("host = %q, want first endpoint minio-a.test:9000", gotHost)
+	}
+}
+
 func TestMinIOObjectStoreEnsureBucketTreatsExistingBucketAsReady(t *testing.T) {
 	t.Parallel()
 

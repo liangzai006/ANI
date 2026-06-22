@@ -5,7 +5,7 @@
 > 记录类型：Planning / Sprint 14 resilience readiness plan
 > 适用范围：ANI Core 生产级韧性与服务语义补齐（仅 Core，不含 Services）
 > 前置 Sprint：Sprint 13（S01–S07 real provider / live gate 已 production-shaped passed）
-> 计划状态：**草案 + Sprint14 分支执行中**。当前分支 `feature/sprint14-core-resilience-semantics` 已完成 R-P0-0..R-P0-4、R-P1-5 foundation 与 R-P1-6 degradation 批次；这些记录只表示 local/logic verified，不表示主线已激活或 production ready。
+> 计划状态：**草案 + Sprint14 分支执行中**。当前分支 `feature/sprint14-core-resilience-semantics` 已完成 R-P0-0..R-P0-4、R-P1-5 foundation、R-P1-6 degradation 与 R-P2-7 multi-endpoint failover config 批次；这些记录只表示 local/logic verified，不表示主线已激活或 production ready。R-P2-7 未执行真实 primary kill / topology failover，PG 读副本路由仍未实现。
 >
 > 被引用入口：`repo/development-records/README.md`（Sprint 14 Planning 草案条目）、`repo/CURRENT-SPRINT.md`（下一冲刺草案前向指针）。AI 可经标准加载顺序发现本文件。
 
@@ -48,7 +48,7 @@ goal: 执行 ANI Sprint 14 Core 韧性与服务语义计划
 | F5 | 操作级重试基础已由 R-P1-5 在 `pkg/adapters/resilience` 落地：`Policy.MaxAttempts/BaseBackoff/MaxBackoff` + `Retryable(err)`；Kubernetes REST 幂等读/观察/dry-run 可通过 `RetryPolicy` 使用，真实 Apply 写路径不重试。MinIO/Milvus retry policy 尚未装配；NATS/pgx/Redis 仍只有连接期重连 | `pkg/adapters/resilience/resilience.go`、`pkg/adapters/runtime/kubernetes_rest_client.go`、`Makefile:validate-resilience-faultinjection-live-gate` | 操作级重试 foundation local/logic verified；真实 fault injection 未执行；MinIO/Milvus 待后续装配 |
 | F6 | Adapter 每调用超时已由 R-P0-3 落地：`pkg/adapters/resilience.Do` 支持 `Policy.Timeout`，Kubernetes REST client、MinIO、Milvus 外部 HTTP 调用均可通过 `RequestTimeout` 注入 deadline；gateway env 装配为 `KUBERNETES_REQUEST_TIMEOUT`、`OBJECT_STORE_REQUEST_TIMEOUT`、`VECTOR_STORE_REQUEST_TIMEOUT`。默认空值仍为 0，且未跑真实故障注入/live gate | `pkg/adapters/resilience/resilience.go`；`pkg/adapters/runtime/kubernetes_rest_client.go`；`pkg/adapters/objectstore/minio_store.go`；`pkg/adapters/vectorstore/milvus_store.go`；`Makefile:validate-adapter-resilience-timeout` | 每调用超时 local/logic verified；不声明 production ready；重试/断路仍留给 R-P1-5 |
 | F10 | Kubernetes REST 非 2xx 错误分类已由 R-P1-5 修正：`400` 等调用方错误仍包 `ports.ErrInvalid`；`429/5xx` 生成可重试 status error；网络错误由 `Retryable()` 分类 | `pkg/adapters/runtime/kubernetes_rest_client.go`、`pkg/adapters/resilience/resilience.go`、`kubernetes_rest_client_test.go` | K8s REST 错误分类 local/logic verified；不代表真实 API server fault injection 已通过 |
-| F7 | 全线单 endpoint：MinIO `Endpoint`、Milvus `Endpoint`、Redis 单 `Addr`（普通 Options）、PG 单 URL | `pkg/adapters/objectstore/minio_store.go:31`、`pkg/adapters/vectorstore/milvus_store.go:25`、`pkg/bootstrap/redis.go` | 无 failover / 多端点 |
+| F7 | 单 endpoint 事实已被 R-P2-7 部分修正：Redis bootstrap/gateway 改为 `redis.UniversalClient` 并支持 Sentinel/Cluster 配置；MinIO/Milvus adapter 接受 `Endpoints` 列表或 LB/VIP，但当前请求仍使用首个 endpoint，尚未实现自动端点轮换；PG 仍为单 `DatabaseURL`，只能外接 VIP/proxy | `pkg/bootstrap/redis.go`、`services/ani-gateway/main.go`、`pkg/adapters/objectstore/minio_store.go`、`pkg/adapters/vectorstore/milvus_store.go`、`Makefile:validate-ha-failover-live-gate` | 多端点配置入口 local/logic verified；真实 failover 未验证，不标 production ready |
 | F8 | `pkg/adapters/resilience` 已有命名 circuit breaker：`BreakerName` + `FailureRatio` + `MinRequests` + `CooldownPeriod`，open 时返回 `ErrCircuitOpen`；尚未接入 readyz 降级语义，也未跑真实持续故障注入 | `pkg/adapters/resilience/resilience.go`、`resilience_test.go` | 断路器 foundation local/logic verified；R-P1-6 仍需定义降级语义 |
 | F9 | SDK 与契约漂移风险已由当前门禁约束；2026-06-23 复核 `make validate-sdk-beta` 通过，历史缺口 `createNetworkRoute/createStorageBucket/...` 已不再复现 | `make validate-sdk-beta` 当前通过；相关 operationId 已存在于 `sdks/core/*` 与 `sdks/core/sdk-metadata.json` | 与本 Sprint 无强依赖；本 Sprint 仍不得引入新漂移 |
 
@@ -76,11 +76,11 @@ grep -rn "ErrCircuitOpen\|BreakerName\|circuitBreaker" pkg/adapters/resilience p
 | F4 数据面未接 readyz | **R-P0-4** 已落地数据面 readyz health | **P0** | ports `Health()` + `probes.go` |
 | F5 操作级重试 foundation + F8 断路器 foundation | **R-P1-5** 已完成共享 retry/circuit breaker 与 Kubernetes REST 接线；MinIO/Milvus policy 装配仍待后续 | **P1** | `pkg/adapters/resilience` + `pkg/adapters/runtime/kubernetes_rest_client.go` |
 | 降级语义缺失（关联 F4 数据面健康 + F8 断路状态） | **R-P1-6** 已完成 readyz strong/weak dependency degradation | **P1** | `resilience/degradation.go` + `probes.go` |
-| F7 全线单 endpoint、无 failover | **R-P2-7** 多端点 / failover | **P2** | adapter 多端点 config + installer 拓扑 |
+| F7 全线单 endpoint、无 failover | **R-P2-7** 已完成多端点 config foundation；真实 failover 仍待拓扑/live gate | **P2** | Redis Sentinel/Cluster config + MinIO/Milvus endpoint list；PG 仍仅单 URL/VIP |
 | F1 async-task 幂等**已有** | 不新建，**被 R-P0-2 复用**其 DB 模式 | — | `pkg/repo/task_repo.go` |
 | F9 SDK↔契约漂移风险（当前门禁已通过） | 非本 Sprint 批次，仅作**约束**：本 Sprint 不得引入新漂移 | — | 由 `validate-sdk-beta` 把关 |
 
-**一句话读法：** §0 的事实里，F2/F3/F4/F6 → P0 四批已完成，F5/F8/F10 的共享 foundation 与 Kubernetes REST 接线已由 R-P1-5 完成，readyz strong/weak 降级语义已由 R-P1-6 完成，F7 → P2 一批；F1 是可复用的既有能力，F9 是约束项。R-P1-5 尚未证明真实 fault injection，也未完成 MinIO/Milvus retry policy 装配；R-P1-6 尚未执行真实后端 down live gate。
+**一句话读法：** §0 的事实里，F2/F3/F4/F6 → P0 四批已完成，F5/F8/F10 的共享 foundation 与 Kubernetes REST 接线已由 R-P1-5 完成，readyz strong/weak 降级语义已由 R-P1-6 完成，F7 的多端点配置入口已由 R-P2-7 完成；F1 是可复用的既有能力，F9 是约束项。R-P1-5 尚未证明真实 fault injection，也未完成 MinIO/Milvus retry policy 装配；R-P1-6 尚未执行真实后端 down live gate；R-P2-7 尚未执行真实 primary kill / topology failover，且 PG 读副本路由未实现。
 
 ---
 
@@ -94,14 +94,15 @@ grep -rn "ErrCircuitOpen\|BreakerName\|circuitBreaker" pkg/adapters/resilience p
 | **storage**（kubernetes_rest / Rook-Ceph） | `kubernetes_rest_client.go`（共享） | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ✅ K8s REST 幂等观察路径可配；MinIO retry policy 尚未装配 | ✅ foundation 可配；未接 readyz 降级 | ✅ Kubernetes API `/version` + MinIO `GET /` | 单 host，❌failover | K8s 共享 REST client 继承 R-P1-5；对象存储 MinIO 仍只有 timeout |
 | **k8s**（vCluster/K8s API） | `kubernetes_rest_client.go` + `k8s_cluster_proxy_forwarding_service.go` | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ✅ `Health`/Observe/dry-run 可通过 `RetryPolicy` 重试；真实 Apply 写不重试 | ✅ foundation 可配；未接 readyz 降级 | ✅ Kubernetes API `/version`；`K8sClusterService.Health(ctx)` | 单 host，❌failover | proxy forwarding 仍传播父 client Timeout；未做多 target failover |
 | **gpu**（kubernetes_rest） | `kubernetes_gpu_inventory.go` 包 `*KubernetesRESTClient` | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ✅ 继承共享 K8s REST 幂等读 policy（需显式配置） | ✅ foundation 可配；未接 readyz 降级 | ✅ Kubernetes API `/version` via shared client | 单 host，❌failover | 继承共享 REST client timeout/health/retry foundation |
-| **object**（MinIO） | `minio_store.go` | ✅ 可配 `OBJECT_STORE_REQUEST_TIMEOUT` | ❌ 尚未装配 retry policy | ❌ 尚未装配 breaker policy | ✅ signed `GET /` | 单 `Endpoint`，❌failover | R-P0-3 后 HTTP 调用通过 `resilience.Do`；R-P0-4 后接 readyz；R-P1-5 尚未覆盖 MinIO |
-| **vector**（Milvus） | `milvus_store.go` | ✅ 可配 `VECTOR_STORE_REQUEST_TIMEOUT` | ❌ 尚未装配 retry policy | ❌ 尚未装配 breaker policy | ✅ backend `Health()` lists collections；collection health 保留为 `CollectionHealth()` | 单 `Endpoint`，❌failover | R-P0-3 后 HTTP 调用通过 `resilience.Do`；R-P0-4 后接 readyz；R-P1-5 尚未覆盖 Milvus |
+| **object**（MinIO） | `minio_store.go` | ✅ 可配 `OBJECT_STORE_REQUEST_TIMEOUT` | ❌ 尚未装配 retry policy | ❌ 尚未装配 breaker policy | ✅ signed `GET /` | ✅ 接受 endpoint list / LB-VIP；❌尚未自动轮换 | R-P2-7 后配置可传 `OBJECT_STORE_ENDPOINTS`，当前请求仍使用首个 endpoint；真实 failover 未验证 |
+| **vector**（Milvus） | `milvus_store.go` | ✅ 可配 `VECTOR_STORE_REQUEST_TIMEOUT` | ❌ 尚未装配 retry policy | ❌ 尚未装配 breaker policy | ✅ backend `Health()` lists collections；collection health 保留为 `CollectionHealth()` | ✅ 接受 endpoint list / LB-VIP；❌尚未自动轮换 | R-P2-7 后配置可传 `VECTOR_STORE_ENDPOINTS`，当前请求仍使用首个 endpoint；真实 failover 未验证 |
 | **registry** | `local_image_registry.go`（内存）+ `not_configured.go` | N/A | N/A | N/A | N/A | N/A | **无真实 Harbor adapter**；韧性待该能力建成后再纳入 |
 
 **关键结论（影响 Sprint 14 范围）：**
 1. **network/storage/k8s/gpu 的韧性缺口有同一个根**——共享的 `kubernetes_rest_client`。R-P0-3 已在这一处接入每调用 timeout，R-P1-5 已修正错误分类并允许幂等读/观察/dry-run 显式配置 retry/breaker，四个 provider 同时受益。
 2. **F10 错误分类**已修正：当前 4xx 与 429/5xx 不再混为同一种 invalid request；后续真实 fault injection 可基于 `Retryable()` 判定。
 3. **registry 不在本 Sprint 韧性范围**（真实 provider 尚未建）。
+4. **R-P2-7 是配置 foundation，不是 failover 结果**：Redis 支持 Sentinel/Cluster 配置，MinIO/Milvus 支持 endpoint list / LB-VIP 配置；未实现 MinIO/Milvus 自动端点轮换，未实现 PG read-replica 路由，未跑真实 failover。
 
 ---
 
@@ -114,14 +115,14 @@ grep -rn "ErrCircuitOpen\|BreakerName\|circuitBreaker" pkg/adapters/resilience p
 | **F11** | **gateway shared store 前置已由 R-P0-0 建立**：`main.go` 通过 bootstrap 构造 Redis-backed `ports.CacheStore`，`Register(h, store)` 显式接收；middleware 仍不直接 import Redis SDK；audit 落库仍是 `// TODO: batch-write ... via DB pool` | `services/ani-gateway/main.go`、`services/ani-gateway/internal/middleware/chain.go`、`services/ani-gateway/internal/middleware/store.go`、`pkg/bootstrap/redis.go` | R-P0-1/R-P0-2 的共享存储前置已满足；后续批次必须继续通过 store 注入，不得在 middleware 直接依赖 Redis SDK |
 | **F12** | 中间件依赖注入模式已扩展为 `Register(h, store)`：auth client 仍在 `Register` 内构造，`RateLimit(store)` 与 `Idempotency(store)` 均接收 shared store | `chain.go:9-16`、`ratelimit.go`、`idempotency.go` | 后续 R-P0-3/R-P0-4 不应破坏现有 middleware 注入顺序 |
 | **F13** | gateway **无中央 Config**；每个 runtime 各自 `gatewayXxxRuntimeConfigFromEnv()` 从 env 取值并构造自己的 client | `services/ani-gateway/*_runtime.go`（network/storage/k8s/gpu/...） | R-P0-3 超时注入落点 = 这些 per-runtime config 函数 + 各自 http.Client 构造，**不是某个中央 config** |
-| **F14** | 本计划命名的 `make validate-gateway-ratelimit` 已由 R-P0-1 新建，`make validate-gateway-idempotency` 已由 R-P0-2 新建，`make validate-adapter-resilience-timeout` 已由 R-P0-3 新建，`make validate-readyz-dataplane-live-gate` 已由 R-P0-4 新建，`make validate-resilience-faultinjection-live-gate` 已由 R-P1-5 新建，`make validate-resilience-degradation` 已由 R-P1-6 新建（均为 local gate，未真实 kill 后端/网络分区）；`validate-ha-failover-live-gate` 仍不存在 | `Makefile` | 后续每批的"验收 gate"仍含"新建该 target"这一步；已建 gates 均须明确 local vs live 边界 |
+| **F14** | 本计划命名的 `make validate-gateway-ratelimit` 已由 R-P0-1 新建，`make validate-gateway-idempotency` 已由 R-P0-2 新建，`make validate-adapter-resilience-timeout` 已由 R-P0-3 新建，`make validate-readyz-dataplane-live-gate` 已由 R-P0-4 新建，`make validate-resilience-faultinjection-live-gate` 已由 R-P1-5 新建，`make validate-resilience-degradation` 已由 R-P1-6 新建，`make validate-ha-failover-live-gate` 已由 R-P2-7 新建（均为 local gate，未真实 kill 后端/网络分区/primary） | `Makefile` | 已建 gates 均须明确 local vs live 边界；真实韧性仍需单独 live gate + evidence |
 
 **核对命令：**
 ```bash
 cd repo
 grep -rn "redis\|pgx" services/ani-gateway | grep -v _test
 sed -n '1,20p' services/ani-gateway/internal/middleware/chain.go
-grep -cE "validate-gateway-ratelimit|validate-gateway-idempotency|validate-adapter-resilience-timeout|validate-readyz-dataplane-live-gate|validate-resilience-faultinjection-live-gate|validate-ha-failover-live-gate" Makefile
+grep -cE "validate-gateway-ratelimit|validate-gateway-idempotency|validate-adapter-resilience-timeout|validate-readyz-dataplane-live-gate|validate-resilience-faultinjection-live-gate|validate-resilience-degradation|validate-ha-failover-live-gate" Makefile
 ```
 
 ### R-P0-0 · 为 gateway 引入限流/幂等的共享存储后端（R-P0-1/R-P0-2 的硬前置）
@@ -451,13 +452,14 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 - **依赖真实 HA 拓扑**，否则只能本地多实例模拟，不能标 production failover ready。
 
 **任务步骤：**
-- [ ] 写失败测试：`TestRedisFailoverConfigParsesSentinel`、`TestMinIOAcceptsEndpointList`。
-- [ ] 跑红 → FAIL。
-- [ ] 实现多端点 config + 客户端装配。
-- [ ] 跑绿 → PASS。
-- [ ] 提交：`feat(adapters): support multi-endpoint failover config`
+- [x] 写失败测试：`TestRedisFailoverConfigParsesSentinel`、`TestRedisClusterConfigParsesAddrs`、`TestMinIOAcceptsEndpointList`、`TestMilvusAcceptsEndpointList`，并覆盖 bootstrap/gateway env 装配。
+- [x] 跑红 → FAIL（缺 `RedisConfig`/UniversalOptions、MinIO/Milvus `Endpoints` 与 gateway/bootstrap env 字段）。
+- [x] 实现多端点 config + 客户端装配：Redis `UniversalClient`/Sentinel/Cluster，MinIO/Milvus endpoint list，bootstrap/gateway env 接线。
+- [x] 跑绿 → PASS（local/logic）。
+- [ ] 真实 HA 拓扑验证：primary kill / topology failover / evidence JSON 尚未执行。
+- [x] 提交：`feat(adapters): support multi-endpoint failover config`
 
-**验收 gate：** 真实门禁 `make validate-ha-failover-live-gate`（kill primary → 业务在断路 + failover 后恢复，evidence JSON）。**未跑通前不得标 failover production ready。**
+**验收 gate：** `make validate-ha-failover-live-gate` 当前是 local config gate（Redis Sentinel/Cluster config + MinIO/Milvus endpoint list + bootstrap/gateway 装配）。真实门禁仍需在 HA 拓扑就绪后执行 primary kill → 业务恢复 → evidence JSON。**未跑通前不得标 failover production ready。**
 
 ---
 
@@ -488,7 +490,7 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 
 - R-P0-1..4 全部完成并通过对应 gate（阶段一必达）。
 - R-P1-5/6 完成并通过 fault-injection live gate（阶段二目标）。
-- R-P2-7 视 installer 拓扑就绪情况：拓扑就绪则完成 live gate；未就绪则归档为「待拓扑」并明确不标 failover ready。
+- R-P2-7 已完成多端点配置 foundation；真实 HA 拓扑未验证，归档为「待拓扑/live gate」，明确不标 failover ready。
 - 每个完成批次走 Feature batch 四件套闭环；新增 `make` gate 已登记到 Makefile `.PHONY`。
 
 ## §9 边界

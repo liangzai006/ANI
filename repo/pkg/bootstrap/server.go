@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,15 +21,24 @@ import (
 
 // Config holds connection strings. Load from environment in each service's config.Load().
 type Config struct {
-	DatabaseURL string
-	NATSURL     string
-	RedisURL    string
-	GRPCPort    int
-	HealthPort  int
-	ServiceName string
+	DatabaseURL           string
+	NATSURL               string
+	RedisURL              string
+	RedisMode             string
+	RedisAddrs            []string
+	RedisMasterName       string
+	RedisUsername         string
+	RedisPassword         string
+	RedisSentinelUsername string
+	RedisSentinelPassword string
+	RedisDB               int
+	GRPCPort              int
+	HealthPort            int
+	ServiceName           string
 
 	ObjectStoreProvider        string
 	ObjectStoreEndpoint        string
+	ObjectStoreEndpoints       []string
 	ObjectStorePublicEndpoint  string
 	ObjectStoreAccessKeyID     string
 	ObjectStoreSecretAccessKey string
@@ -39,6 +49,7 @@ type Config struct {
 
 	VectorStoreProvider         string
 	VectorStoreEndpoint         string
+	VectorStoreEndpoints        []string
 	VectorStoreToken            string
 	VectorStoreDatabase         string
 	VectorStoreCollectionPrefix string
@@ -86,6 +97,7 @@ type Config struct {
 func MustConnect(cfg Config) *Deps {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	cfg = cfg.withEnvironmentOverrides()
 
 	db, err := connectDB(cfg.DatabaseURL)
 	if err != nil {
@@ -99,13 +111,12 @@ func MustConnect(cfg Config) *Deps {
 		os.Exit(1)
 	}
 
-	rdb, err := connectRedis(cfg.RedisURL)
+	rdb, err := connectRedisWithConfig(redisConfigFromBootstrapConfig(cfg))
 	if err != nil {
 		logger.Error("failed to connect to Redis", "err", err)
 		os.Exit(1)
 	}
 
-	cfg = cfg.withEnvironmentOverrides()
 	ports, err := NewCapabilitiesWithConfig(db, js, rdb, cfg)
 	if err != nil {
 		logger.Error("failed to initialize capability adapters", "err", err)
@@ -127,6 +138,30 @@ func MustConnect(cfg Config) *Deps {
 }
 
 func (c Config) withEnvironmentOverrides() Config {
+	if value := os.Getenv("REDIS_MODE"); value != "" {
+		c.RedisMode = value
+	}
+	if value := os.Getenv("REDIS_ADDRS"); value != "" {
+		c.RedisAddrs = splitCSV(value)
+	}
+	if value := os.Getenv("REDIS_MASTER_NAME"); value != "" {
+		c.RedisMasterName = value
+	}
+	if value := os.Getenv("REDIS_USERNAME"); value != "" {
+		c.RedisUsername = value
+	}
+	if value := os.Getenv("REDIS_PASSWORD"); value != "" {
+		c.RedisPassword = value
+	}
+	if value := os.Getenv("REDIS_SENTINEL_USERNAME"); value != "" {
+		c.RedisSentinelUsername = value
+	}
+	if value := os.Getenv("REDIS_SENTINEL_PASSWORD"); value != "" {
+		c.RedisSentinelPassword = value
+	}
+	if value := os.Getenv("REDIS_DB"); value != "" {
+		c.RedisDB = parseInt(value, c.RedisDB)
+	}
 	if value := os.Getenv("WORKLOAD_PROVIDER"); value != "" {
 		c.WorkloadProvider = value
 	}
@@ -211,6 +246,9 @@ func (c Config) withEnvironmentOverrides() Config {
 	if value := os.Getenv("OBJECT_STORE_ENDPOINT"); value != "" {
 		c.ObjectStoreEndpoint = value
 	}
+	if value := os.Getenv("OBJECT_STORE_ENDPOINTS"); value != "" {
+		c.ObjectStoreEndpoints = splitCSV(value)
+	}
 	if value := os.Getenv("OBJECT_STORE_PUBLIC_ENDPOINT"); value != "" {
 		c.ObjectStorePublicEndpoint = value
 	}
@@ -237,6 +275,9 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("VECTOR_STORE_ENDPOINT"); value != "" {
 		c.VectorStoreEndpoint = value
+	}
+	if value := os.Getenv("VECTOR_STORE_ENDPOINTS"); value != "" {
+		c.VectorStoreEndpoints = splitCSV(value)
 	}
 	if value := os.Getenv("VECTOR_STORE_TOKEN"); value != "" {
 		c.VectorStoreToken = value
@@ -298,6 +339,17 @@ func parseBool(value string) bool {
 	default:
 		return false
 	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
 }
 
 // RunGRPC starts a gRPC server on port and blocks until SIGINT/SIGTERM.

@@ -108,6 +108,7 @@ func TestGatewayVectorStoreServiceCanInjectMilvusBackend(t *testing.T) {
 func TestGatewayVectorStoreConfigFromEnvIncludesMilvusProvider(t *testing.T) {
 	t.Setenv("VECTOR_STORE_PROVIDER", "milvus")
 	t.Setenv("VECTOR_STORE_ENDPOINT", "http://milvus.example:19530")
+	t.Setenv("VECTOR_STORE_ENDPOINTS", "http://milvus-a.example:19530,http://milvus-b.example:19530")
 	t.Setenv("VECTOR_STORE_TOKEN", "milvus-token")
 	t.Setenv("VECTOR_STORE_DATABASE", "ani")
 	t.Setenv("VECTOR_STORE_COLLECTION_PREFIX", "ani_s13_")
@@ -115,6 +116,9 @@ func TestGatewayVectorStoreConfigFromEnvIncludesMilvusProvider(t *testing.T) {
 	cfg := gatewayVectorStoreRuntimeConfigFromEnv()
 	if cfg.VectorStoreProvider != "milvus" || cfg.VectorStoreEndpoint != "http://milvus.example:19530" {
 		t.Fatalf("vector store provider config not loaded from env: %#v", cfg)
+	}
+	if len(cfg.VectorStoreEndpoints) != 2 || cfg.VectorStoreEndpoints[0] != "http://milvus-a.example:19530" || cfg.VectorStoreEndpoints[1] != "http://milvus-b.example:19530" {
+		t.Fatalf("vector store endpoints = %#v, want parsed endpoint list", cfg.VectorStoreEndpoints)
 	}
 	if cfg.VectorStoreToken == "" || cfg.VectorStoreDatabase != "ani" || cfg.VectorStoreCollectionPrefix != "ani_s13_" {
 		t.Fatalf("vector store credentials/database/prefix not loaded from env")
