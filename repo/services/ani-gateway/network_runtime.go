@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
 	"github.com/kubercloud/ani/pkg/ports"
@@ -23,6 +24,7 @@ type gatewayNetworkRuntimeConfig struct {
 	KubernetesServiceAccountCAFile    string
 	KubernetesProviderManager         string
 	KubernetesHTTPClient              *http.Client
+	KubernetesRequestTimeout          time.Duration
 }
 
 func gatewayNetworkRuntimeConfigFromEnv() gatewayNetworkRuntimeConfig {
@@ -38,6 +40,7 @@ func gatewayNetworkRuntimeConfigFromEnv() gatewayNetworkRuntimeConfig {
 		KubernetesServiceAccountTokenFile: os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
 		KubernetesServiceAccountCAFile:    os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
 		KubernetesProviderManager:         os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
+		KubernetesRequestTimeout:          gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 	}
 }
 
@@ -58,6 +61,7 @@ func newGatewayNetworkService(cfg gatewayNetworkRuntimeConfig) (ports.NetworkSer
 			CAFile:          cfg.KubernetesServiceAccountCAFile,
 			FieldManager:    cfg.KubernetesProviderManager,
 			HTTPClient:      cfg.KubernetesHTTPClient,
+			RequestTimeout:  cfg.KubernetesRequestTimeout,
 		})
 		if err != nil {
 			return nil, err

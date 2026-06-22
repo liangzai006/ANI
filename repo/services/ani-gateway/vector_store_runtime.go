@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
 	"github.com/kubercloud/ani/pkg/adapters/vectorstore"
@@ -18,6 +19,7 @@ type gatewayVectorStoreRuntimeConfig struct {
 	VectorStoreDatabase         string
 	VectorStoreCollectionPrefix string
 	VectorStoreHTTPClient       *http.Client
+	VectorStoreRequestTimeout   time.Duration
 }
 
 func gatewayVectorStoreRuntimeConfigFromEnv() gatewayVectorStoreRuntimeConfig {
@@ -27,6 +29,7 @@ func gatewayVectorStoreRuntimeConfigFromEnv() gatewayVectorStoreRuntimeConfig {
 		VectorStoreToken:            os.Getenv("VECTOR_STORE_TOKEN"),
 		VectorStoreDatabase:         os.Getenv("VECTOR_STORE_DATABASE"),
 		VectorStoreCollectionPrefix: os.Getenv("VECTOR_STORE_COLLECTION_PREFIX"),
+		VectorStoreRequestTimeout:   gatewayDurationFromEnv("VECTOR_STORE_REQUEST_TIMEOUT"),
 	}
 }
 
@@ -41,6 +44,7 @@ func newGatewayVectorStoreService(cfg gatewayVectorStoreRuntimeConfig) (ports.Ve
 			Database:         cfg.VectorStoreDatabase,
 			CollectionPrefix: cfg.VectorStoreCollectionPrefix,
 			HTTPClient:       cfg.VectorStoreHTTPClient,
+			RequestTimeout:   cfg.VectorStoreRequestTimeout,
 		})
 		if err != nil {
 			return nil, err

@@ -49,6 +49,30 @@ func TestKubernetesRESTClientServerSideDryRunUsesDryRunAll(t *testing.T) {
 	}
 }
 
+func TestKubernetesRESTClientEnforcesRequestTimeout(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	client, err := NewKubernetesRESTClient(KubernetesRESTClientConfig{
+		Host:           "https://kubernetes.test",
+		HTTPClient:     &http.Client{Transport: transport},
+		RequestTimeout: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewKubernetesRESTClient() error = %v", err)
+	}
+
+	_, err = client.ServerSideDryRun(context.Background(), renderedDeployment(t))
+	if err == nil {
+		t.Fatal("ServerSideDryRun() error = nil, want request timeout")
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("ServerSideDryRun() error = %v, want deadline exceeded", err)
+	}
+}
+
 func TestKubernetesRESTClientUsesInClusterServiceAccountWhenHostOmitted(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte("service-account-token\n"), 0o600); err != nil {

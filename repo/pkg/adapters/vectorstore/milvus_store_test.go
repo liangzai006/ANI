@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kubercloud/ani/pkg/ports"
 )
@@ -53,6 +54,30 @@ func TestMilvusVectorStoreEnsuresCollectionWithQuickSetupSchema(t *testing.T) {
 	params, ok := requestBody["params"].(map[string]any)
 	if !ok || params["max_length"] != "256" {
 		t.Fatalf("params = %#v, want VarChar max_length", requestBody["params"])
+	}
+}
+
+func TestMilvusVectorStoreEnforcesRequestTimeout(t *testing.T) {
+	client := &http.Client{Transport: vectorRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	store, err := NewMilvusVectorStore(MilvusVectorStoreConfig{
+		Endpoint:       "http://milvus.test",
+		HTTPClient:     client,
+		RequestTimeout: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewMilvusVectorStore() error = %v", err)
+	}
+
+	err = store.EnsureCollection(context.Background(), ports.VectorCollectionRef{TenantID: "tenant-a", KBID: "vst-main"}, 768)
+	if err == nil {
+		t.Fatal("EnsureCollection() error = nil, want request timeout")
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("EnsureCollection() error = %v, want deadline exceeded", err)
 	}
 }
 

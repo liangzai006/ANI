@@ -24,7 +24,7 @@ goal: 执行 ANI Sprint 14 Core 韧性与服务语义计划
   - 先读 §0 现状事实 + §0.3 开工前置，逐条按「核对命令」grep 验证；现状不符则停下来先更新，不要带着旧假设继续。
   - **R-P0-1/R-P0-2 有硬前置 R-P0-0（gateway shared store，见 §0.3 F11）；当前分支 R-P0-0 已完成，后续批次必须复用该 store 注入模式。**
   - 严格按 §4 阶段顺序执行：阶段零 R-P0-0 → 阶段一 P0（R-P0-1..4）→ 阶段二 P1（R-P1-5..6）→ 阶段三 P2（R-P2-7）。批次依赖见 §4 依赖图与 §0.1 追溯矩阵。
-  - 本计划命名的 make 门禁均为**待新建**（§0.3 F14），每批验收含"新建该 target"。
+  - 本计划命名的 make 门禁按批次新建/复跑（§0.3 F14），每批验收含"新建该 target"或确认该 target 已可复跑。
   - 每批次按 §5 的 TDD 步骤：先写失败测试 → 跑红 → 最小实现 → 跑绿 → 提交。
   - 不新增 Services 逻辑、不改 api/openapi/services/v1.yaml、不依赖外部产品定义（见 §2）。
   - 凡声称真实韧性必须跑通 §6 对应 live gate；未跑通只能标 local/logic verified，禁止标 production ready。
@@ -46,7 +46,7 @@ goal: 执行 ANI Sprint 14 Core 韧性与服务语义计划
 | F3 | 限流桩已由 R-P0-1 替换：`RateLimit(store)` 使用 gateway shared store 做 per-tenant + route-class 窗口计数，超限返回 429；本批仍仅为 local/logic verified | `services/ani-gateway/internal/middleware/ratelimit.go`、`services/ani-gateway/internal/middleware/ratelimit_test.go`、`Makefile:validate-gateway-ratelimit` | 背压/限流本地逻辑已落地；未跑真实压测/live gate，不标 production ready |
 | F4 | readyz 仅探 postgres/nats/redis；**Milvus 已有 `Health()`**（`milvus_store.go:137`，未接 readyz），MinIO/network/storage/k8s/gpu 无 Health | `pkg/bootstrap/probes.go` 内 `dependencyProbeChecks`；`milvus_store.go:137` | vector 是"接线"，object/k8s 是"新增 Health" |
 | F5 | 重连仅连接期：NATS `MaxReconnects(5)`、pgxpool `HealthCheckPeriod=30s`、go-redis pool 自动重连 | `pkg/bootstrap/nats.go:23-25`、`pkg/bootstrap/db.go:23-27` | 无操作级重试 |
-| F6 | 超时仅启动期：db 30s / redis 10s / nats 30s。数据面真实调用（network/storage/k8s/gpu 共享 `kubernetes_rest_client` + minio/milvus）**无请求级超时**；`main.go` 不注入带 Timeout 的 http.Client → 回落到无超时默认 client。**唯二有超时模式**：`auth_client.go`（9 处）、`demo_instances.go:841`（exec 5s） | `pkg/bootstrap/{db,redis,nats}.go`；`kubernetes_rest_client.go:139/331`；`main.go`；`auth_client.go` | 无 adapter 每调用强制超时；auth_client 可作 R-P0-3 参考 |
+| F6 | Adapter 每调用超时已由 R-P0-3 落地：`pkg/adapters/resilience.Do` 支持 `Policy.Timeout`，Kubernetes REST client、MinIO、Milvus 外部 HTTP 调用均可通过 `RequestTimeout` 注入 deadline；gateway env 装配为 `KUBERNETES_REQUEST_TIMEOUT`、`OBJECT_STORE_REQUEST_TIMEOUT`、`VECTOR_STORE_REQUEST_TIMEOUT`。默认空值仍为 0，且未跑真实故障注入/live gate | `pkg/adapters/resilience/resilience.go`；`pkg/adapters/runtime/kubernetes_rest_client.go`；`pkg/adapters/objectstore/minio_store.go`；`pkg/adapters/vectorstore/milvus_store.go`；`Makefile:validate-adapter-resilience-timeout` | 每调用超时 local/logic verified；不声明 production ready；重试/断路仍留给 R-P1-5 |
 | F10 | `kubernetes_rest_client.do()` 把**所有**非 2xx（含 5xx/429/网络错误）统一包成 `ports.ErrInvalid` | `kubernetes_rest_client.go:340-342` | **R-P1-5 前置**：先修错误分类，否则 `Retryable()` 无法区分可重试/不可重试 |
 | F7 | 全线单 endpoint：MinIO `Endpoint`、Milvus `Endpoint`、Redis 单 `Addr`（普通 Options）、PG 单 URL | `pkg/adapters/objectstore/minio_store.go:31`、`pkg/adapters/vectorstore/milvus_store.go:25`、`pkg/bootstrap/redis.go` | 无 failover / 多端点 |
 | F8 | 全仓库无断路器；reconcile 有失败退避计数 `ani_workload_reconcile_backoff_skips_total` | grep `circuitbreak`=0；`pkg/bootstrap/probes.go` | 断路器是空白 |
@@ -72,7 +72,7 @@ grep -rn "circuitbreak\|CircuitBreaker" pkg/ || echo "NO circuit breaker (expect
 | F11 gateway 无共享存储后端（R-P0-1/2 的前置） | **R-P0-0** 已引入 gateway 共享 store | **P0 前置** | main.go + chain.go + store.go |
 | F3 限流是桩（`checkLimit` 恒 true） | **R-P0-1** 已落地限流背压（依赖 R-P0-0） | **P0** | gateway middleware |
 | F2 幂等重放碎片化（内存版不持久） | **R-P0-2** 已落地统一 gateway 幂等重放中间件（收敛 HTTP 重复请求） | **P0** | gateway middleware |
-| F6 无每调用超时 | **R-P0-3** 每调用超时 + resilience 包骨架 | **P0** | `pkg/adapters/resilience` + 各 adapter |
+| F6 无每调用超时 | **R-P0-3** 已落地每调用超时 + resilience 包骨架 | **P0** | `pkg/adapters/resilience` + Kubernetes REST / MinIO / Milvus |
 | F4 数据面未接 readyz | **R-P0-4** 数据面 readyz | **P0** | ports `Health()` + `probes.go` |
 | F5 无操作级重试（仅连接期）+ F8 无断路器 | **R-P1-5** 重试 + 断路器 | **P1** | `pkg/adapters/resilience`（叠加在 R-P0-3 之上） |
 | 降级语义缺失（关联 F4 数据面健康 + F8 断路状态） | **R-P1-6** 优雅降级策略 | **P1** | `resilience/degradation.go` + `probes.go` |
@@ -90,16 +90,16 @@ grep -rn "circuitbreak\|CircuitBreaker" pkg/ || echo "NO circuit breaker (expect
 
 | Adapter（真实 provider） | 数据通路 | 每调用超时 | 操作重试 | 断路器 | 健康探测 | 单端点/failover | 备注 |
 |---|---|---|---|---|---|---|---|
-| **network**（kubeovn_rest） | `kubernetes_rest_client.go`（共享） | ❌ | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 走共享 REST client，继承其全部缺口；本体 `network_service.go` 0 韧性原语 |
-| **storage**（kubernetes_rest / Rook-Ceph） | `kubernetes_rest_client.go`（共享） | ❌ | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 同上 |
-| **k8s**（vCluster/K8s API） | `kubernetes_rest_client.go` + `k8s_cluster_proxy_forwarding_service.go` | ❌（proxy 会**传播**父 client Timeout，但默认父 Timeout=0） | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | proxy:313 传播 Timeout 是唯一"超时感知"，但默认仍 0 |
-| **gpu**（kubernetes_rest） | `kubernetes_gpu_inventory.go` 包 `*KubernetesRESTClient` | ❌ | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 完全继承共享 client 缺口 |
-| **object**（MinIO） | `minio_store.go` | ❌ | ❌ | ❌ | ❌ 无 Health | 单 `Endpoint`，❌failover | — |
-| **vector**（Milvus） | `milvus_store.go` | ❌ | ❌ | ❌ | ✅ **已有 `Health()`**（:137，未接 readyz） | 单 `Endpoint`，❌failover | R-P0-4 对它是"接线" |
+| **network**（kubeovn_rest） | `kubernetes_rest_client.go`（共享） | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 走共享 REST client；R-P0-3 后继承每调用 timeout，重试/断路仍缺失 |
+| **storage**（kubernetes_rest / Rook-Ceph） | `kubernetes_rest_client.go`（共享） | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 同上；对象存储另走 MinIO timeout |
+| **k8s**（vCluster/K8s API） | `kubernetes_rest_client.go` + `k8s_cluster_proxy_forwarding_service.go` | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 共享 REST client 已有每调用 timeout；proxy forwarding 仍传播父 client Timeout |
+| **gpu**（kubernetes_rest） | `kubernetes_gpu_inventory.go` 包 `*KubernetesRESTClient` | ✅ 可配 `KUBERNETES_REQUEST_TIMEOUT` | ❌ | ❌ | ❌ 无 Health | 单 host，❌failover | 继承共享 REST client timeout |
+| **object**（MinIO） | `minio_store.go` | ✅ 可配 `OBJECT_STORE_REQUEST_TIMEOUT` | ❌ | ❌ | ❌ 无 Health | 单 `Endpoint`，❌failover | R-P0-3 后 HTTP 调用通过 `resilience.Do` |
+| **vector**（Milvus） | `milvus_store.go` | ✅ 可配 `VECTOR_STORE_REQUEST_TIMEOUT` | ❌ | ❌ | ✅ **已有 `Health()`**（:137，未接 readyz） | 单 `Endpoint`，❌failover | R-P0-3 后 HTTP 调用通过 `resilience.Do`；R-P0-4 对 Health 是"接线" |
 | **registry** | `local_image_registry.go`（内存）+ `not_configured.go` | N/A | N/A | N/A | N/A | N/A | **无真实 Harbor adapter**；韧性待该能力建成后再纳入 |
 
 **关键结论（影响 Sprint 14 范围）：**
-1. **network/storage/k8s/gpu 的韧性缺口是同一个根**——共享的 `kubernetes_rest_client`。**在它上面（或外面包一层 `resilience.Do`）一次性补超时/重试/断路，四个 provider 同时受益**，不要四处各写。这是 R-P0-3/R-P1-5 的最高杠杆点。
+1. **network/storage/k8s/gpu 的韧性缺口有同一个根**——共享的 `kubernetes_rest_client`。R-P0-3 已在这一处接入每调用 timeout，四个 provider 同时受益；剩余操作级重试/断路仍在 R-P1-5 叠加，不要四处各写。
 2. **F10 错误分类**必须先修：当前所有非 2xx → `ErrInvalid`，重试层无法判断可重试性。
 3. **registry 不在本 Sprint 韧性范围**（真实 provider 尚未建）。
 
@@ -114,14 +114,14 @@ grep -rn "circuitbreak\|CircuitBreaker" pkg/ || echo "NO circuit breaker (expect
 | **F11** | **gateway shared store 前置已由 R-P0-0 建立**：`main.go` 通过 bootstrap 构造 Redis-backed `ports.CacheStore`，`Register(h, store)` 显式接收；middleware 仍不直接 import Redis SDK；audit 落库仍是 `// TODO: batch-write ... via DB pool` | `services/ani-gateway/main.go`、`services/ani-gateway/internal/middleware/chain.go`、`services/ani-gateway/internal/middleware/store.go`、`pkg/bootstrap/redis.go` | R-P0-1/R-P0-2 的共享存储前置已满足；后续批次必须继续通过 store 注入，不得在 middleware 直接依赖 Redis SDK |
 | **F12** | 中间件依赖注入模式已扩展为 `Register(h, store)`：auth client 仍在 `Register` 内构造，`RateLimit(store)` 与 `Idempotency(store)` 均接收 shared store | `chain.go:9-16`、`ratelimit.go`、`idempotency.go` | 后续 R-P0-3/R-P0-4 不应破坏现有 middleware 注入顺序 |
 | **F13** | gateway **无中央 Config**；每个 runtime 各自 `gatewayXxxRuntimeConfigFromEnv()` 从 env 取值并构造自己的 client | `services/ani-gateway/*_runtime.go`（network/storage/k8s/gpu/...） | R-P0-3 超时注入落点 = 这些 per-runtime config 函数 + 各自 http.Client 构造，**不是某个中央 config** |
-| **F14** | 本计划命名的 `make validate-gateway-ratelimit` 已由 R-P0-1 新建，`make validate-gateway-idempotency` 已由 R-P0-2 新建；其余 `validate-readyz-dataplane-live-gate`、`validate-resilience-faultinjection-live-gate`、`validate-ha-failover-live-gate` 仍不存在 | `Makefile` | 后续每批的"验收 gate"仍含"新建该 target"这一步；R-P0-1/R-P0-2 gates 已可复跑 |
+| **F14** | 本计划命名的 `make validate-gateway-ratelimit` 已由 R-P0-1 新建，`make validate-gateway-idempotency` 已由 R-P0-2 新建，`make validate-adapter-resilience-timeout` 已由 R-P0-3 新建；其余 `validate-readyz-dataplane-live-gate`、`validate-resilience-faultinjection-live-gate`、`validate-ha-failover-live-gate` 仍不存在 | `Makefile` | 后续每批的"验收 gate"仍含"新建该 target"这一步；R-P0-1/R-P0-3 gates 已可复跑 |
 
 **核对命令：**
 ```bash
 cd repo
 grep -rn "redis\|pgx" services/ani-gateway | grep -v _test
 sed -n '1,20p' services/ani-gateway/internal/middleware/chain.go
-grep -cE "validate-gateway-ratelimit|validate-gateway-idempotency|validate-readyz-dataplane-live-gate|validate-resilience-faultinjection-live-gate|validate-ha-failover-live-gate" Makefile
+grep -cE "validate-gateway-ratelimit|validate-gateway-idempotency|validate-adapter-resilience-timeout|validate-readyz-dataplane-live-gate|validate-resilience-faultinjection-live-gate|validate-ha-failover-live-gate" Makefile
 ```
 
 ### R-P0-0 · 为 gateway 引入限流/幂等的共享存储后端（R-P0-1/R-P0-2 的硬前置）
@@ -323,6 +323,7 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 **Files：**
 - Create: `pkg/adapters/resilience/resilience.go`、`pkg/adapters/resilience/resilience_test.go`
 - Modify: `pkg/adapters/objectstore/minio_store.go`、`pkg/adapters/vectorstore/milvus_store.go`、`pkg/adapters/runtime/kubernetes_rest_client.go`
+- Modify: `services/ani-gateway/*_runtime.go`（env timeout 装配）、`Makefile`
 
 **契约影响：** 无。
 
@@ -334,14 +335,15 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 - minio/milvus 的超时同理加在各自 runtime config + 调用点。
 
 **任务步骤：**
-- [ ] 写失败测试：`TestDoEnforcesTimeout`（fn 阻塞超过 Timeout → 返回 deadline 错误）。
-- [ ] 跑红 → FAIL。
-- [ ] 实现 `resilience.Do` Timeout 分支 + `Retryable` 桩（先恒 false）。
-- [ ] 跑绿 → PASS。
-- [ ] 给三个 adapter 外部调用点接入 `Do`（保持各自单测绿）。
-- [ ] 提交：`feat(adapters): add resilience timeout wrapper for external calls`
+- [x] 写失败测试：`TestDoEnforcesTimeout`（fn 阻塞超过 Timeout → 返回 deadline 错误）。
+- [x] 写失败测试：`TestKubernetesRESTClientEnforcesRequestTimeout`、`TestMinIOObjectStoreEnforcesRequestTimeout`、`TestMilvusVectorStoreEnforcesRequestTimeout`。
+- [x] 跑红 → FAIL（`Do`/`Policy` 未定义，`RequestTimeout` 字段不存在）。
+- [x] 实现 `resilience.Do` Timeout 分支 + `Retryable` 桩（先恒 false）。
+- [x] 给三个 adapter 外部调用点接入 `Do`（保持各自单测绿）。
+- [x] 跑绿 → PASS。
+- [x] 提交：`feat(adapters): add resilience timeout wrapper for external calls`
 
-**验收 gate：** `go test ./pkg/adapters/resilience/...` + 三 adapter 既有单测。
+**验收 gate：** `make validate-adapter-resilience-timeout`（包装 `pkg/adapters/resilience` + Kubernetes REST / MinIO / Milvus timeout 测试）。
 
 ---
 

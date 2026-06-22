@@ -48,6 +48,33 @@ func TestMinIOObjectStoreEnsureBucketCreatesMissingBucketWithSignedRequest(t *te
 	}
 }
 
+func TestMinIOObjectStoreEnforcesRequestTimeout(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	store, err := NewMinIOObjectStore(MinIOObjectStoreConfig{
+		Endpoint:        "http://minio.test",
+		AccessKeyID:     "minio",
+		SecretAccessKey: "secret",
+		HTTPClient:      client,
+		RequestTimeout:  time.Millisecond,
+		Now:             fixedMinIOTestClock,
+	})
+	if err != nil {
+		t.Fatalf("NewMinIOObjectStore() error = %v", err)
+	}
+
+	err = store.EnsureBucket(context.Background(), ports.BucketClass("models-a"))
+	if err == nil {
+		t.Fatal("EnsureBucket() error = nil, want request timeout")
+	}
+	if !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("EnsureBucket() error = %v, want deadline exceeded", err)
+	}
+}
+
 func TestMinIOObjectStoreEnsureBucketTreatsExistingBucketAsReady(t *testing.T) {
 	t.Parallel()
 

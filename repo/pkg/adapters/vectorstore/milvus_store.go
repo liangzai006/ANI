@@ -11,7 +11,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/kubercloud/ani/pkg/adapters/resilience"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -27,6 +29,7 @@ type MilvusVectorStoreConfig struct {
 	Database         string
 	CollectionPrefix string
 	HTTPClient       *http.Client
+	RequestTimeout   time.Duration
 }
 
 type MilvusVectorStore struct {
@@ -35,6 +38,7 @@ type MilvusVectorStore struct {
 	database         string
 	collectionPrefix string
 	client           *http.Client
+	policy           resilience.Policy
 }
 
 var _ ports.VectorStore = (*MilvusVectorStore)(nil)
@@ -54,6 +58,7 @@ func NewMilvusVectorStore(config MilvusVectorStoreConfig) (*MilvusVectorStore, e
 		database:         strings.TrimSpace(config.Database),
 		collectionPrefix: strings.TrimSpace(config.CollectionPrefix),
 		client:           client,
+		policy:           resilience.Policy{Timeout: config.RequestTimeout},
 	}, nil
 }
 
@@ -160,7 +165,7 @@ func (s *MilvusVectorStore) doMilvus(ctx context.Context, path string, body map[
 	if s.token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.doRequest(req)
 	if err != nil {
 		return err
 	}
@@ -188,6 +193,16 @@ func (s *MilvusVectorStore) doMilvus(ctx context.Context, path string, body map[
 		*output = decoded
 	}
 	return nil
+}
+
+func (s *MilvusVectorStore) doRequest(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	err := resilience.Do(req.Context(), s.policy, func(callCtx context.Context) error {
+		var err error
+		resp, err = s.client.Do(req.Clone(callCtx))
+		return err
+	})
+	return resp, err
 }
 
 func (s *MilvusVectorStore) collectionPayload(ref ports.VectorCollectionRef) map[string]any {

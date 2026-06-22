@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubercloud/ani/pkg/adapters/resilience"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -37,6 +38,7 @@ type MinIOObjectStoreConfig struct {
 	Secure          bool
 	BucketPrefix    string
 	HTTPClient      *http.Client
+	RequestTimeout  time.Duration
 	Now             func() time.Time
 }
 
@@ -49,6 +51,7 @@ type MinIOObjectStore struct {
 	region          string
 	bucketPrefix    string
 	client          *http.Client
+	policy          resilience.Policy
 	now             func() time.Time
 }
 
@@ -92,6 +95,7 @@ func NewMinIOObjectStore(config MinIOObjectStoreConfig) (*MinIOObjectStore, erro
 		region:          region,
 		bucketPrefix:    strings.TrimSpace(config.BucketPrefix),
 		client:          client,
+		policy:          resilience.Policy{Timeout: config.RequestTimeout},
 		now:             now,
 	}, nil
 }
@@ -105,7 +109,7 @@ func (s *MinIOObjectStore) EnsureBucket(ctx context.Context, class ports.BucketC
 	if err != nil {
 		return err
 	}
-	headResp, err := s.client.Do(headReq)
+	headResp, err := s.doRequest(headReq)
 	if err != nil {
 		return err
 	}
@@ -121,7 +125,7 @@ func (s *MinIOObjectStore) EnsureBucket(ctx context.Context, class ports.BucketC
 	if err != nil {
 		return err
 	}
-	putResp, err := s.client.Do(putReq)
+	putResp, err := s.doRequest(putReq)
 	if err != nil {
 		return err
 	}
@@ -152,7 +156,7 @@ func (s *MinIOObjectStore) PutObject(ctx context.Context, input ports.PutObjectI
 	if contentType := strings.TrimSpace(input.ContentType); contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.doRequest(req)
 	if err != nil {
 		return ports.ObjectMetadata{}, err
 	}
@@ -178,7 +182,7 @@ func (s *MinIOObjectStore) GetObject(ctx context.Context, ref ports.ObjectRef) (
 	if err != nil {
 		return nil, ports.ObjectMetadata{}, err
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.doRequest(req)
 	if err != nil {
 		return nil, ports.ObjectMetadata{}, err
 	}
@@ -198,7 +202,7 @@ func (s *MinIOObjectStore) DeleteObject(ctx context.Context, ref ports.ObjectRef
 	if err != nil {
 		return err
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.doRequest(req)
 	if err != nil {
 		return err
 	}
@@ -221,7 +225,7 @@ func (s *MinIOObjectStore) StatObject(ctx context.Context, ref ports.ObjectRef) 
 	if err != nil {
 		return ports.ObjectMetadata{}, err
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.doRequest(req)
 	if err != nil {
 		return ports.ObjectMetadata{}, err
 	}
@@ -300,6 +304,16 @@ func (s *MinIOObjectStore) newSignedRequest(ctx context.Context, method string, 
 	}
 	s.signRequest(req, now, payloadHash)
 	return req, nil
+}
+
+func (s *MinIOObjectStore) doRequest(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	err := resilience.Do(req.Context(), s.policy, func(callCtx context.Context) error {
+		var err error
+		resp, err = s.client.Do(req.Clone(callCtx))
+		return err
+	})
+	return resp, err
 }
 
 func (s *MinIOObjectStore) signRequest(req *http.Request, now time.Time, payloadHash string) {

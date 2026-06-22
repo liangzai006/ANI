@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
 	"github.com/kubercloud/ani/pkg/bootstrap"
@@ -25,6 +26,7 @@ type gatewayK8sClusterRuntimeConfig struct {
 	KubernetesServiceAccountTokenFile       string
 	KubernetesServiceAccountCAFile          string
 	KubernetesProviderManager               string
+	KubernetesRequestTimeout                time.Duration
 	TargetServer                            string
 	TargetBearerToken                       string
 	DatabaseURL                             string
@@ -64,6 +66,7 @@ func gatewayK8sClusterRuntimeConfigFromEnv() gatewayK8sClusterRuntimeConfig {
 		KubernetesServiceAccountTokenFile:       os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
 		KubernetesServiceAccountCAFile:          os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
 		KubernetesProviderManager:               os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
+		KubernetesRequestTimeout:                gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 		TargetServer:                            os.Getenv("K8S_CLUSTER_PROXY_TARGET_SERVER"),
 		TargetBearerToken:                       os.Getenv("K8S_CLUSTER_PROXY_BEARER_TOKEN"),
 		DatabaseURL:                             os.Getenv("DATABASE_URL"),
@@ -217,6 +220,7 @@ func newGatewayK8sClusterNodePoolProvider(cfg gatewayK8sClusterRuntimeConfig) (p
 			CAFile:          cfg.KubernetesServiceAccountCAFile,
 			FieldManager:    cfg.KubernetesProviderManager,
 			HTTPClient:      cfg.HTTPClient,
+			RequestTimeout:  cfg.KubernetesRequestTimeout,
 		})
 		if err != nil {
 			return nil, err

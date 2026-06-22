@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubercloud/ani/pkg/adapters/resilience"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -34,6 +35,7 @@ type KubernetesRESTClientConfig struct {
 	CAFile          string
 	FieldManager    string
 	HTTPClient      *http.Client
+	RequestTimeout  time.Duration
 	Now             func() time.Time
 }
 
@@ -42,6 +44,7 @@ type KubernetesRESTClient struct {
 	bearerToken  string
 	fieldManager string
 	httpClient   *http.Client
+	policy       resilience.Policy
 	now          func() time.Time
 }
 
@@ -82,6 +85,7 @@ func NewKubernetesRESTClient(config KubernetesRESTClientConfig) (*KubernetesREST
 		bearerToken:  bearerToken,
 		fieldManager: fieldManager,
 		httpClient:   client,
+		policy:       resilience.Policy{Timeout: config.RequestTimeout},
 		now:          now,
 	}, nil
 }
@@ -313,6 +317,16 @@ func (c *KubernetesRESTClient) Observe(ctx context.Context, request ports.Worklo
 }
 
 func (c *KubernetesRESTClient) do(ctx context.Context, method string, endpoint string, contentType string, body []byte) ([]byte, error) {
+	var data []byte
+	err := resilience.Do(ctx, c.policy, func(callCtx context.Context) error {
+		var err error
+		data, err = c.doOnce(callCtx, method, endpoint, contentType, body)
+		return err
+	})
+	return data, err
+}
+
+func (c *KubernetesRESTClient) doOnce(ctx context.Context, method string, endpoint string, contentType string, body []byte) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	runtimeadapter "github.com/kubercloud/ani/pkg/adapters/runtime"
 	"github.com/kubercloud/ani/pkg/ports"
@@ -20,6 +21,7 @@ type gatewaySecretRuntimeConfig struct {
 	KubernetesServiceAccountCAFile    string
 	KubernetesProviderManager         string
 	HTTPClient                        *http.Client
+	KubernetesRequestTimeout          time.Duration
 }
 
 func gatewaySecretRuntimeConfigFromEnv() gatewaySecretRuntimeConfig {
@@ -32,6 +34,7 @@ func gatewaySecretRuntimeConfigFromEnv() gatewaySecretRuntimeConfig {
 		KubernetesServiceAccountTokenFile: os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
 		KubernetesServiceAccountCAFile:    os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
 		KubernetesProviderManager:         os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
+		KubernetesRequestTimeout:          gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 	}
 }
 
@@ -49,6 +52,7 @@ func newGatewaySecretService(cfg gatewaySecretRuntimeConfig) (ports.SecretServic
 			CAFile:          cfg.KubernetesServiceAccountCAFile,
 			FieldManager:    cfg.KubernetesProviderManager,
 			HTTPClient:      cfg.HTTPClient,
+			RequestTimeout:  cfg.KubernetesRequestTimeout,
 		})
 		if err != nil {
 			return nil, err
