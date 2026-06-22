@@ -601,7 +601,7 @@ validate-resilience-degradation:
 
 validate-ha-failover-live-gate:
 	@echo "→ 校验 Sprint 14 R-P2-7 HA failover config local gate（未执行真实 primary kill / topology failover）..."
-	$(GO_CACHE_ENV) go test ./pkg/bootstrap ./pkg/adapters/objectstore ./pkg/adapters/vectorstore ./services/ani-gateway -run 'TestRedisFailoverConfigParsesSentinel|TestRedisClusterConfigParsesAddrs|TestConfigEnvironmentOverridesRedisFailover|TestNewCapabilitiesCanWireMinIOEndpointList|TestNewCapabilitiesCanWireMilvusEndpointList|TestMinIOAcceptsEndpointList|TestMilvusAcceptsEndpointList|TestGatewayRedisConfigFromEnvParsesSentinel|TestGatewayStorageConfigFromEnvIncludesObjectStoreProvider|TestGatewayVectorStoreConfigFromEnvIncludesMilvusProvider' -v
+	$(GO_CACHE_ENV) go test ./pkg/bootstrap ./pkg/adapters/objectstore ./pkg/adapters/vectorstore ./services/ani-gateway -run 'TestRedisFailoverConfigParsesSentinel|TestRedisClusterConfigParsesAddrs|TestConfigEnvironmentOverridesRedisFailover|TestNewCapabilitiesCanWireMinIOEndpointList|TestNewCapabilitiesCanWireMilvusEndpointList|TestMinIOAcceptsEndpointList|TestMinIOHealthFailsOverEndpointList|TestMilvusAcceptsEndpointList|TestMilvusHealthFailsOverEndpointList|TestGatewayRedisConfigFromEnvParsesSentinel|TestGatewayStorageConfigFromEnvIncludesObjectStoreProvider|TestGatewayVectorStoreConfigFromEnvIncludesMilvusProvider' -v
 	@echo "✅ HA failover config local gate valid（not production failover ready）"
 
 validate-readyz-dataplane-live-gate:

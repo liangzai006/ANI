@@ -17,7 +17,7 @@
 
 ## 非范围 / 未完成
 
-- MinIO、Milvus 的 retry policy 装配尚未完成；它们仍继承 R-P0-3 的 per-call timeout。
+- MinIO、Milvus 尚未接入命名 circuit breaker policy；R-P2-7 已补充 endpoint list fallback，本地覆盖网络错误、`429`、`5xx` 后尝试下一个 endpoint。
 - 未执行真实 MinIO/Milvus/Kubernetes API 后端 kill、network partition、持续 5xx 注入或 half-open live probe。
 - 未声明 full platform production ready；本批只证明共享逻辑和 Kubernetes REST 幂等路径本地可复跑。
 

@@ -208,6 +208,31 @@ func (s *MilvusVectorStore) doMilvus(ctx context.Context, path string, body map[
 }
 
 func (s *MilvusVectorStore) doRequest(req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for index, endpoint := range s.endpoints {
+		candidate, err := requestForMilvusEndpoint(req, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := s.doRequestOnce(candidate)
+		if err != nil {
+			lastErr = err
+			if index < len(s.endpoints)-1 && resilience.Retryable(err) {
+				continue
+			}
+			return nil, err
+		}
+		if index < len(s.endpoints)-1 && milvusRetryableStatus(resp.StatusCode) {
+			lastErr = milvusHTTPError(resp.StatusCode, "")
+			closeBody(resp.Body)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+func (s *MilvusVectorStore) doRequestOnce(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	err := resilience.Do(req.Context(), s.policy, func(callCtx context.Context) error {
 		var err error
@@ -215,6 +240,24 @@ func (s *MilvusVectorStore) doRequest(req *http.Request) (*http.Response, error)
 		return err
 	})
 	return resp, err
+}
+
+func requestForMilvusEndpoint(req *http.Request, endpoint *url.URL) (*http.Request, error) {
+	candidate := req.Clone(req.Context())
+	target := *endpoint
+	target.Path = req.URL.Path
+	target.RawPath = ""
+	target.RawQuery = req.URL.RawQuery
+	candidate.URL = &target
+	candidate.Host = target.Host
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		candidate.Body = body
+	}
+	return candidate, nil
 }
 
 func (s *MilvusVectorStore) collectionPayload(ref ports.VectorCollectionRef) map[string]any {
@@ -332,6 +375,10 @@ func milvusHTTPError(statusCode int, body string) error {
 	default:
 		return fmt.Errorf("Milvus HTTP %d: %s", statusCode, strings.TrimSpace(body))
 	}
+}
+
+func milvusRetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= 500
 }
 
 func milvusSearchResults(data json.RawMessage) []ports.VectorSearchResult {

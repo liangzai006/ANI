@@ -331,6 +331,31 @@ func (s *MinIOObjectStore) newSignedRequest(ctx context.Context, method string, 
 }
 
 func (s *MinIOObjectStore) doRequest(req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for index, endpoint := range s.endpoints {
+		candidate, err := s.requestForEndpoint(req, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := s.doRequestOnce(candidate)
+		if err != nil {
+			lastErr = err
+			if index < len(s.endpoints)-1 && resilience.Retryable(err) {
+				continue
+			}
+			return nil, err
+		}
+		if index < len(s.endpoints)-1 && minIORetryableStatus(resp.StatusCode) {
+			lastErr = minIOHTTPError(resp.StatusCode, strings.TrimSpace(req.Method+" "+req.URL.Path))
+			closeBody(resp.Body)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+func (s *MinIOObjectStore) doRequestOnce(req *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	err := resilience.Do(req.Context(), s.policy, func(callCtx context.Context) error {
 		var err error
@@ -338,6 +363,29 @@ func (s *MinIOObjectStore) doRequest(req *http.Request) (*http.Response, error) 
 		return err
 	})
 	return resp, err
+}
+
+func (s *MinIOObjectStore) requestForEndpoint(req *http.Request, endpoint *url.URL) (*http.Request, error) {
+	candidate := req.Clone(req.Context())
+	target := *endpoint
+	target.Path = req.URL.Path
+	target.RawPath = req.URL.RawPath
+	target.RawQuery = req.URL.RawQuery
+	candidate.URL = &target
+	candidate.Host = target.Host
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		candidate.Body = body
+	}
+	payloadHash := candidate.Header.Get("X-Amz-Content-Sha256")
+	now := s.now().UTC()
+	candidate.Header.Set("X-Amz-Date", now.Format("20060102T150405Z"))
+	candidate.Header.Del("Authorization")
+	s.signRequest(candidate, now, payloadHash)
+	return candidate, nil
 }
 
 func (s *MinIOObjectStore) signRequest(req *http.Request, now time.Time, payloadHash string) {
@@ -350,6 +398,9 @@ func (s *MinIOObjectStore) signRequest(req *http.Request, now time.Time, payload
 	var canonicalHeaders strings.Builder
 	for _, header := range signedHeaders {
 		value := req.Host
+		if value == "" && req.URL != nil {
+			value = req.URL.Host
+		}
 		if header != "host" {
 			value = req.Header.Get(http.CanonicalHeaderKey(header))
 		}
@@ -523,6 +574,10 @@ func minIOHTTPError(statusCode int, operation string) error {
 	default:
 		return fmt.Errorf("MinIO %s returned HTTP %d", operation, statusCode)
 	}
+}
+
+func minIORetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= 500
 }
 
 func canonicalQuery(values url.Values) string {

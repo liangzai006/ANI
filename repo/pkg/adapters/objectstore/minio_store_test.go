@@ -127,6 +127,35 @@ func TestMinIOAcceptsEndpointList(t *testing.T) {
 	}
 }
 
+func TestMinIOHealthFailsOverEndpointList(t *testing.T) {
+	var hosts []string
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host == "minio-a.test:9000" {
+			return minIOTestResponse(http.StatusServiceUnavailable), nil
+		}
+		return minIOTestResponse(http.StatusOK), nil
+	})}
+
+	store, err := NewMinIOObjectStore(MinIOObjectStoreConfig{
+		Endpoints:       []string{"http://minio-a.test:9000", "http://minio-b.test:9000"},
+		AccessKeyID:     "minio",
+		SecretAccessKey: "secret",
+		HTTPClient:      client,
+		Now:             fixedMinIOTestClock,
+	})
+	if err != nil {
+		t.Fatalf("NewMinIOObjectStore() error = %v", err)
+	}
+	if err := store.Health(context.Background()); err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	want := []string{"minio-a.test:9000", "minio-b.test:9000"}
+	if strings.Join(hosts, ",") != strings.Join(want, ",") {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+}
+
 func TestMinIOObjectStoreEnsureBucketTreatsExistingBucketAsReady(t *testing.T) {
 	t.Parallel()
 
