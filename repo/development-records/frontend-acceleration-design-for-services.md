@@ -4,6 +4,7 @@
 > **文档目标：** 让产品功能点从「逐页从零设计」变为「契约 + 20 行页面规约 → AI 生成 80%、人工打磨 20%」，在保持统一前端风格的同时加速产品功能丰富，并打通「UI 点击 → API 调用」的端到端闭环。
 > **记录类型：** Design / cross-team handoff（非完成记录）。
 > **权威边界：** 本文是设计与协作约定；跨层契约真实来源仍是 `repo/api/openapi/v1.yaml`（Core）与 `repo/api/openapi/services/v1.yaml`（Services）。两者冲突时以 OpenAPI 契约为准。
+> **Sprint14 关联：** 本文被 [`README.md`](README.md) 和 [`../CURRENT-SPRINT.md`](../CURRENT-SPRINT.md) 作为 Sprint14 分支交接材料引用；Core 团队只需了解 Services/前端加速路径，不基于本文新增或修改 Services 业务代码。
 
 ---
 

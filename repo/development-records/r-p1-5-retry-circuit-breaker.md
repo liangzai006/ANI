@@ -3,7 +3,7 @@
 > 记录类型：Execution / Sprint 14 Core resilience
 > 完成日期：2026-06-23
 > 分支：`feature/sprint14-core-resilience-semantics`
-> 状态：local/logic verified；未执行真实后端 kill、network partition 或 soak；不声明 production ready
+> 状态：local/logic verified；后续 aggregate live gate 已覆盖 backend kill/degradation/controller failover；命名 circuit breaker 的 network partition / soak 仍未执行
 > 后续补齐：`SPRINT14-CORE-RESILIENCE-LIVE-GATE` 已覆盖真实 backend kill/degradation/controller failover；命名 circuit breaker 的持续故障注入与 soak 仍未完成。
 
 ## 范围
@@ -14,7 +14,7 @@
 - `resilience.Do(ctx, Policy, fn)` 支持 `MaxAttempts`、指数退避、`BreakerName`、`FailureRatio`、`MinRequests` 与 `CooldownPeriod`。
 - Kubernetes REST client 修正非 2xx 错误分类：`400` 等调用方错误仍包 `ports.ErrInvalid`；`429/5xx` 返回可重试状态错误，不再伪装成 invalid request。
 - Kubernetes REST client 新增 `RetryPolicy`，仅 `Health`、观察类 GET 与 server-side dry-run 这类幂等/无副作用路径使用；真实 `Apply` 写路径即使配置 retry policy 也不重试。
-- 新增 `make validate-resilience-faultinjection-live-gate`，当前只包装本地逻辑测试；名称沿 Sprint14 计划，输出明确说明未执行真实故障注入。
+- 新增 `make validate-resilience-faultinjection-live-gate`，当前只包装本地逻辑测试；名称沿 Sprint14 计划，输出明确说明这是 local gate，不是持续故障注入/soak 证据。
 
 ## 非范围 / 未完成
 

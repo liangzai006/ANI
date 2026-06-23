@@ -11,6 +11,17 @@
 
 ---
 
+## 关联文档与对照关系
+
+| 文档 | 关系 | 状态对照 |
+|---|---|---|
+| [`../CURRENT-SPRINT.md`](../CURRENT-SPRINT.md) | 当前 Sprint 入口 | 记录 Sprint14 分支态、验证命令和 evidence 位置 |
+| [`../../ANI-06-开发计划.md`](../../ANI-06-开发计划.md) | 全局开发计划 | Section 零、Sprint 表、Sprint 计划总览和 Sprint14 章节均记录本分支完成状态 |
+| [`README.md`](README.md) | development records 索引 | 列出 Sprint14 plan、Services 前端加速设计、R-P0..R-P2 批次和 aggregate live gate |
+| [`frontend-acceleration-design-for-services.md`](frontend-acceleration-design-for-services.md) | Services/前端团队交接设计 | 收录在 Sprint14 分支中供 Core 了解，不作为 Core 开发范围 |
+| [`r-sprint14-resilience-live-gate.md`](r-sprint14-resilience-live-gate.md) | Sprint14 aggregate live gate 完成记录 | 真实 backend kill / weak degradation / controller failover 证据来源 |
+| [`live-evidence/sprint14-resilience-live-evidence.json`](live-evidence/sprint14-resilience-live-evidence.json) | 脱敏 evidence | production-ready 结论只限隔离 Sprint14 fixture |
+
 ## 加载方式（goal 提示词，可直接粘贴给任意 AI agent）
 
 ```text
@@ -373,7 +384,7 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 - [x] 跑绿 → PASS。
 - [x] 提交：`feat(bootstrap): wire data-plane health into readyz`
 
-**验收 gate：** `make validate-readyz-dataplane-live-gate`（当前包装 local/logic readyz 数据面测试；未执行真实后端 kill，不能标 production ready）。
+**验收 gate：** `make validate-readyz-dataplane-live-gate` 仍是 local/logic readyz 数据面测试；真实 strong backend kill / recovery 由 `SPRINT14-CORE-RESILIENCE-LIVE-GATE` 在隔离 fixture 中补齐。production-ready 结论只限该 aggregate live gate 的隔离 fixture。
 
 ---
 
@@ -402,10 +413,10 @@ func Do(ctx context.Context, p Policy, fn func(context.Context) error) error
 - [x] 实现重试退避 + 断路器 + `Retryable`。
 - [x] 跑绿 → PASS。
 - [x] adapter 幂等调用点升级 Policy：Kubernetes REST `Health`/Observe/dry-run 已接 `RetryPolicy`；真实 Apply 写路径测试确认不重试。MinIO/Milvus 在 R-P2-7 补充 endpoint list fallback，但尚未接入命名 circuit breaker policy。
-- [ ] 真实 fault injection：后端 kill / network partition / 持续 5xx / half-open 探测尚未执行。
+- [ ] 命名 circuit breaker 的持续 5xx / network partition / half-open live probe 尚未执行；aggregate live gate 已覆盖 backend kill/degradation/controller failover，但不等同于 circuit breaker soak。
 - [x] 提交：`feat(adapters): classify k8s rest errors and add retry/circuit-breaker`
 
-**验收 gate：** `go test ./pkg/adapters/resilience ./pkg/adapters/runtime`；`make validate-resilience-faultinjection-live-gate` 当前包装 local/logic 测试（注入瞬时错→重试成功；持续错→断路 open），未执行真实故障注入，不能标 production ready。
+**验收 gate：** `go test ./pkg/adapters/resilience ./pkg/adapters/runtime`；`make validate-resilience-faultinjection-live-gate` 当前包装 local/logic 测试（注入瞬时错→重试成功；持续错→断路 open）。真实 backend kill/degradation/controller failover 由 `SPRINT14-CORE-RESILIENCE-LIVE-GATE` 覆盖；命名 circuit breaker 的持续故障注入/soak 仍不标 production ready。
 
 ---
 

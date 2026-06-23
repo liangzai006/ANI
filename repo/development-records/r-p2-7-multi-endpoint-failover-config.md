@@ -3,7 +3,7 @@
 > 记录类型：Execution / Sprint 14 Core resilience
 > 完成日期：2026-06-23
 > 分支：`feature/sprint14-core-resilience-semantics`
-> 状态：local/logic verified；未执行真实 primary kill / HA topology failover；不声明 failover production ready
+> 状态：local/logic verified；后续 aggregate live gate 已覆盖 controller primary kill / follower failover；后端自身 HA topology 仍未完成
 > 后续补齐：`SPRINT14-CORE-RESILIENCE-LIVE-GATE` 已覆盖 controller primary pod delete / follower lease failover；PG 读副本、Redis/Postgres/MinIO/Milvus 后端自身 HA 拓扑仍未完成。
 
 ## 范围

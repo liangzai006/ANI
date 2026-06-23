@@ -5,6 +5,16 @@
 > 隔离 namespace：`ani-sprint14-resilience`
 > Evidence：`development-records/live-evidence/sprint14-resilience-live-evidence.json`
 
+## 关联文档与对照关系
+
+| 文档 | 关系 |
+|---|---|
+| [`sprint14-core-resilience-plan.md`](sprint14-core-resilience-plan.md) | Sprint14 主计划；定义 P0/P1/P2 范围、未完成边界和退出标准 |
+| [`README.md`](README.md) | development records 索引；本记录在 Sprint 14 Planning / Execution 表中登记 |
+| [`../CURRENT-SPRINT.md`](../CURRENT-SPRINT.md) | 当前 Sprint 入口；列出本 gate 的复跑命令和 evidence 路径 |
+| [`../../ANI-06-开发计划.md`](../../ANI-06-开发计划.md) | 全局开发计划；Section 零、Sprint 表与 Sprint14 章节记录本 gate 结果 |
+| [`live-evidence/sprint14-resilience-live-evidence.json`](live-evidence/sprint14-resilience-live-evidence.json) | 脱敏 evidence；不得外推为 full platform production ready |
+
 ## 目标
 
 为 Sprint14 三阶段韧性补一条真实环境 live gate：
