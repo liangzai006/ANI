@@ -53,6 +53,7 @@ Sprint 13 production-shaped live gate 摘要：
 - S06 Milvus vector-store：SPRINT13-VECTOR-MILVUS-A-TRACK；validate-vector-store-live-gate；LIVE PENDING 仅作历史门禁兼容语境；production_shape.status=passed。
 - S07 Prometheus + kubelet / K8s API observability：SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A-TRACK；validate-instance-observability-live-gate；LIVE PENDING 仅作历史门禁兼容语境；production_shape.status=passed。
 - S05-S07 B 轨可以继续：保留为历史兼容 token；截至 2026-06-21，S05/S06/S07 均已 passed。
+- 镜像仓库 Harbor：SPRINT13-REGISTRY-HARBOR-A；`validate-registry-harbor-live-gate`；新增 `HarborImageRegistry` 真实 adapter（Harbor v2.0 REST）+ `REGISTRY_PROVIDER=harbor` 注入路径，默认仍走本地 profile；httptest mock 单测覆盖；**代码级对接与 live gate 契约完成，未跑真实 Harbor live gate，LIVE PENDING，不标 real-provider runtime/production ready**。
 
 Sprint 14 Core resilience 分支完成状态：
 - 分支：`feature/sprint14-core-resilience-semantics`。

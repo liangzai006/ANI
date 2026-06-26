@@ -192,6 +192,10 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 	if err != nil {
 		return Capabilities{}, err
 	}
+	imageRegistry, err := imageRegistryAdapter(cfg)
+	if err != nil {
+		return Capabilities{}, err
+	}
 	vectorStoreServiceOptions := []runtimeadapter.VectorStoreServiceOption{}
 	if strings.TrimSpace(cfg.VectorStoreProvider) == "milvus" {
 		vectorStoreServiceOptions = append(vectorStoreServiceOptions, runtimeadapter.WithVectorStoreBackend(vectorStore))
@@ -216,7 +220,7 @@ func NewCapabilitiesWithConfig(db *pgxpool.Pool, js nats.JetStreamContext, redis
 		ObjectStore:          objectStore,
 		VectorStore:          vectorStore,
 		VectorStoreResources: runtimeadapter.NewLocalVectorStoreService(vectorStoreServiceOptions...),
-		ImageRegistry:        registry.NotConfigured{},
+		ImageRegistry:        imageRegistry,
 		GPUInventory:         gpuInventory,
 		WorkloadRuntime:      planner,
 		WorkloadRenderer:     runtimeadapter.NewKubernetesDryRunRenderer(planner),
@@ -320,6 +324,24 @@ func objectStoreAdapter(cfg Config) (ports.ObjectStore, error) {
 		})
 	default:
 		return nil, fmt.Errorf("%w: unsupported object store provider %q", ports.ErrUnsupported, cfg.ObjectStoreProvider)
+	}
+}
+
+func imageRegistryAdapter(cfg Config) (ports.ImageRegistry, error) {
+	switch strings.TrimSpace(cfg.RegistryProvider) {
+	case "", "local":
+		return registry.NewLocalImageRegistry(), nil
+	case "not_configured":
+		return registry.NotConfigured{}, nil
+	case "harbor":
+		return registry.NewHarborImageRegistry(registry.HarborImageRegistryConfig{
+			Endpoint: cfg.RegistryEndpoint,
+			Username: cfg.RegistryUsername,
+			Password: cfg.RegistryPassword,
+			Secure:   cfg.RegistrySecure,
+		})
+	default:
+		return nil, fmt.Errorf("%w: unsupported image registry provider %q", ports.ErrUnsupported, cfg.RegistryProvider)
 	}
 }
 

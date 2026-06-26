@@ -57,6 +57,11 @@ func main() {
 		logger.Error("failed to configure storage provider runtime", "err", err)
 		os.Exit(1)
 	}
+	imageRegistry, err := newGatewayImageRegistry(gatewayRegistryRuntimeConfigFromEnv())
+	if err != nil {
+		logger.Error("failed to configure image registry provider runtime", "err", err)
+		os.Exit(1)
+	}
 	vectorStoreRuntimeConfig := gatewayVectorStoreRuntimeConfigFromEnv()
 	vectorStoreService, err := newGatewayVectorStoreService(vectorStoreRuntimeConfig)
 	if err != nil {
@@ -95,6 +100,7 @@ func main() {
 		EncryptionService:                     encryptionService,
 		SecretService:                         secretService,
 		GPUInventory:                          gpuInventory,
+		ImageRegistry:                         imageRegistry,
 		NetworkService:                        networkService,
 		StorageService:                        storageService,
 		VectorStoreService:                    vectorStoreService,

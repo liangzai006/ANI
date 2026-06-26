@@ -1,3 +1,7 @@
+-- ANI local dev + Auth/Dex production gate database bootstrap.
+-- Mounted by deploy/docker/docker-compose.yml on first `make deps` (empty PG volume only).
+-- Canonical source: deploy/real-k8s-lab/auth-dex-production-db-init.sql
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS tenants (
@@ -86,6 +90,348 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_tenant_id ON refresh_tokens(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 
+-- ---------------------------------------------------------------------------
+-- Core runtime metadata (Gateway / reconcile-worker local profile)
+-- No RLS or ani_app grants: local docker postgres uses owner role "ani".
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS instance_plan_audits (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id             UUID,
+    instance_id         TEXT,
+    instance_name       TEXT NOT NULL,
+    workload_kind       TEXT NOT NULL
+        CHECK (workload_kind IN ('vm','container','gpu_container','inference','notebook','agent_sandbox','batch_job')),
+    provider            TEXT,
+    manifest_count      INT NOT NULL DEFAULT 0,
+    rendered_manifests  JSONB NOT NULL DEFAULT '[]',
+    admission_allowed   BOOLEAN NOT NULL DEFAULT FALSE,
+    admission_reason    TEXT,
+    admission_warnings  JSONB NOT NULL DEFAULT '[]',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_instance_plan_audits_tenant
+    ON instance_plan_audits(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_instance_plan_audits_instance
+    ON instance_plan_audits(tenant_id, instance_name, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workload_instances (
+    tenant_id           UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id         TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    workload_kind       TEXT NOT NULL
+        CHECK (workload_kind IN ('vm','container','gpu_container','inference','notebook','agent_sandbox','batch_job')),
+    provider            TEXT,
+    audit_id            UUID REFERENCES instance_plan_audits(id),
+    provider_id         TEXT,
+    resource_refs       JSONB NOT NULL DEFAULT '[]',
+    state               TEXT NOT NULL
+        CHECK (state IN ('pending','provisioning','running','starting','stopping','stopped','failed','deleting','deleted')),
+    endpoint            TEXT,
+    node_name           TEXT,
+    reason              TEXT,
+    networks            JSONB NOT NULL DEFAULT '[]',
+    storage             JSONB NOT NULL DEFAULT '[]',
+    lifecycle_policy    JSONB NOT NULL DEFAULT '{}',
+    ssh_connection      JSONB NOT NULL DEFAULT '{}',
+    snapshots           JSONB NOT NULL DEFAULT '[]',
+    container_status    JSONB NOT NULL DEFAULT '{}',
+    gpu_status          JSONB NOT NULL DEFAULT '{}',
+    idempotency_key     TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, instance_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workload_instances_tenant
+    ON workload_instances(tenant_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workload_instances_kind
+    ON workload_instances(tenant_id, workload_kind, state);
+CREATE INDEX IF NOT EXISTS idx_workload_instances_audit
+    ON workload_instances(tenant_id, audit_id);
+CREATE INDEX IF NOT EXISTS idx_workload_instances_reconcile
+    ON workload_instances (state, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workload_instances_idem
+    ON workload_instances (tenant_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS workload_instance_operations (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id               UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    instance_id             TEXT        NOT NULL,
+    operation               TEXT        NOT NULL
+        CHECK (operation IN (
+            'create','start','stop','restart','resize','rebuild','delete',
+            'snapshot','attach_volume','detach_volume','rollback','console_session'
+        )),
+    status                  TEXT        NOT NULL DEFAULT 'accepted'
+        CHECK (status IN ('accepted','in_progress','succeeded','failed','cancelled')),
+    idempotency_key         TEXT,
+    requested_by            TEXT        NOT NULL,
+    precheck_json           JSONB       NOT NULL DEFAULT '{}',
+    destructive_impact_json JSONB       NOT NULL DEFAULT '{}',
+    before_spec_json        JSONB       NOT NULL DEFAULT '{}',
+    after_spec_json         JSONB       NOT NULL DEFAULT '{}',
+    provider_refs_json      JSONB       NOT NULL DEFAULT '[]',
+    failure_reason          TEXT,
+    failure_message         TEXT,
+    retry_eligible          BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wio_tenant_instance
+    ON workload_instance_operations (tenant_id, instance_id);
+CREATE INDEX IF NOT EXISTS idx_wio_active_status
+    ON workload_instance_operations (tenant_id, status)
+    WHERE status NOT IN ('succeeded','failed','cancelled');
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wio_idempotency
+    ON workload_instance_operations (tenant_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS workload_instance_operation_steps (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    UUID        NOT NULL,
+    operation_id UUID        NOT NULL REFERENCES workload_instance_operations(id) ON DELETE CASCADE,
+    step_name    TEXT        NOT NULL,
+    status       TEXT        NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','running','succeeded','failed','skipped')),
+    message      TEXT,
+    started_at   TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wios_operation
+    ON workload_instance_operation_steps (operation_id);
+
+CREATE TABLE IF NOT EXISTS network_vpcs (
+    tenant_id       UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    vpc_id          TEXT        NOT NULL,
+    name            TEXT        NOT NULL,
+    cidr            TEXT        NOT NULL,
+    state           TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, vpc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_network_vpcs_tenant_state
+    ON network_vpcs (tenant_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS network_subnets (
+    tenant_id       UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    subnet_id       TEXT        NOT NULL,
+    vpc_id          TEXT        NOT NULL,
+    name            TEXT        NOT NULL,
+    cidr            TEXT        NOT NULL,
+    gateway         TEXT,
+    state           TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, subnet_id),
+    FOREIGN KEY (tenant_id, vpc_id) REFERENCES network_vpcs(tenant_id, vpc_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_network_subnets_tenant_vpc
+    ON network_subnets (tenant_id, vpc_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS network_security_groups (
+    tenant_id           UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    security_group_id   TEXT        NOT NULL,
+    name                TEXT        NOT NULL,
+    description         TEXT,
+    rules               JSONB       NOT NULL DEFAULT '[]',
+    state               TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, security_group_id)
+);
+CREATE INDEX IF NOT EXISTS idx_network_security_groups_tenant_state
+    ON network_security_groups (tenant_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS network_load_balancers (
+    tenant_id           UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    load_balancer_id    TEXT        NOT NULL,
+    name                TEXT        NOT NULL,
+    vpc_id              TEXT        NOT NULL,
+    subnet_id           TEXT,
+    scheme              TEXT        NOT NULL DEFAULT 'internal'
+        CHECK (scheme IN ('internal','public')),
+    vip                 TEXT,
+    listeners           JSONB       NOT NULL DEFAULT '[]',
+    state               TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, load_balancer_id),
+    FOREIGN KEY (tenant_id, vpc_id) REFERENCES network_vpcs(tenant_id, vpc_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_network_load_balancers_tenant_vpc
+    ON network_load_balancers (tenant_id, vpc_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS network_routes (
+    tenant_id        UUID        NOT NULL,
+    route_id         TEXT        NOT NULL,
+    vpc_id           TEXT        NOT NULL,
+    destination_cidr TEXT        NOT NULL,
+    next_hop_type    TEXT        NOT NULL,
+    next_hop_id      TEXT        NOT NULL,
+    description      TEXT,
+    state            TEXT        NOT NULL,
+    provider         TEXT,
+    real_provider    BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, route_id),
+    FOREIGN KEY (tenant_id, vpc_id) REFERENCES network_vpcs(tenant_id, vpc_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_network_routes_tenant_vpc
+    ON network_routes (tenant_id, vpc_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS storage_volumes (
+    tenant_id       UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    volume_id       TEXT        NOT NULL,
+    name            TEXT        NOT NULL,
+    size_gib        BIGINT      NOT NULL CHECK (size_gib > 0),
+    storage_class   TEXT        NOT NULL,
+    state           TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, volume_id)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_volumes_tenant_state
+    ON storage_volumes (tenant_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS storage_filesystems (
+    tenant_id       UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    filesystem_id   TEXT        NOT NULL,
+    name            TEXT        NOT NULL,
+    protocol        TEXT        NOT NULL CHECK (protocol IN ('nfs','cephfs')),
+    size_gib        BIGINT      NOT NULL CHECK (size_gib > 0),
+    endpoint        TEXT,
+    state           TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, filesystem_id)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_filesystems_tenant_state
+    ON storage_filesystems (tenant_id, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS storage_objects (
+    tenant_id       UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    object_id       TEXT        NOT NULL,
+    bucket          TEXT        NOT NULL,
+    object_key      TEXT        NOT NULL,
+    size_bytes      BIGINT      NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+    content_type    TEXT        NOT NULL DEFAULT 'application/octet-stream',
+    state           TEXT        NOT NULL
+        CHECK (state IN ('pending','available','failed','deleting','deleted')),
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, object_id),
+    UNIQUE (tenant_id, bucket, object_key)
+);
+CREATE INDEX IF NOT EXISTS idx_storage_objects_tenant_bucket
+    ON storage_objects (tenant_id, bucket, state, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS k8s_cluster_proxy_targets (
+    tenant_id               UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    cluster_id              TEXT        NOT NULL,
+    server                  TEXT        NOT NULL,
+    bearer_token            TEXT,
+    ca_data                 TEXT,
+    client_certificate_data TEXT,
+    client_key_data         TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, cluster_id)
+);
+CREATE INDEX IF NOT EXISTS idx_k8s_cluster_proxy_targets_tenant_updated
+    ON k8s_cluster_proxy_targets (tenant_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS control_plane_leases (
+    lease_name  TEXT PRIMARY KEY,
+    holder_id   TEXT NOT NULL,
+    lease_until TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_control_plane_leases_until
+    ON control_plane_leases (lease_until);
+
+CREATE TABLE IF NOT EXISTS async_tasks (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id           UUID NOT NULL,
+    idempotency_key     TEXT NOT NULL,
+    task_type           TEXT NOT NULL,
+    resource_type       TEXT,
+    resource_id         UUID,
+    status              TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','running','completed','failed','cancelled','dead_letter')),
+    attempt_count       INT NOT NULL DEFAULT 0,
+    max_attempts        INT NOT NULL DEFAULT 3,
+    lease_owner         TEXT,
+    lease_until         TIMESTAMPTZ,
+    last_heartbeat_at   TIMESTAMPTZ,
+    progress_pct        INT NOT NULL DEFAULT 0 CHECK (progress_pct BETWEEN 0 AND 100),
+    payload             JSONB NOT NULL DEFAULT '{}',
+    result              JSONB,
+    error_message       TEXT,
+    compensating_action TEXT,
+    dead_letter_at      TIMESTAMPTZ,
+    webhook_url         TEXT,
+    started_at          TIMESTAMPTZ,
+    completed_at        TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_async_tasks_tenant
+    ON async_tasks(tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id              BIGSERIAL PRIMARY KEY,
+    aggregate_type  TEXT NOT NULL,
+    aggregate_id    UUID NOT NULL,
+    event_type      TEXT NOT NULL,
+    tenant_id       UUID NOT NULL,
+    payload         JSONB NOT NULL DEFAULT '{}',
+    published       BOOLEAN NOT NULL DEFAULT FALSE,
+    published_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_unpublished
+    ON outbox_events(created_at) WHERE NOT published;
+
+CREATE TABLE IF NOT EXISTS platform_branding (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform_name   TEXT NOT NULL DEFAULT 'KuberCloud ANI',
+    logo_light_url  TEXT,
+    logo_dark_url   TEXT,
+    favicon_url     TEXT,
+    primary_color   TEXT NOT NULL DEFAULT '#1677FF',
+    secondary_color TEXT NOT NULL DEFAULT '#13C2C2',
+    login_bg_url    TEXT,
+    icp_number      TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_branding_single ON platform_branding ((TRUE));
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+    key         TEXT PRIMARY KEY,
+    value       JSONB NOT NULL,
+    description TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 INSERT INTO roles (tenant_id, name, permissions) VALUES
     (NULL, 'platform-admin', '["*"]'),
     (NULL, 'tenant-admin', '["tenant:read","networks:*","storage:*","gpu-inventory:*","k8s-clusters:*"]'),
@@ -100,3 +446,14 @@ VALUES
 ON CONFLICT (name) DO UPDATE
 SET status='active',
     updated_at=NOW();
+
+INSERT INTO platform_settings (key, value, description) VALUES
+    ('metering.collection_interval_seconds', '60', '计量数据采集间隔'),
+    ('inference.default_max_tokens', '4096', '推理默认最大 Token 数'),
+    ('kb.default_top_k', '5', '知识库默认召回数量'),
+    ('kb.default_score_threshold', '0.3', '知识库最低相关性分数')
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO platform_branding (platform_name, primary_color, secondary_color)
+VALUES ('KuberCloud ANI', '#1677FF', '#13C2C2')
+ON CONFLICT DO NOTHING;

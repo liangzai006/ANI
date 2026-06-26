@@ -1,0 +1,44 @@
+profile: SPRINT13-REGISTRY-HARBOR-A
+status: contract
+description: >
+  Sprint 13 registry Harbor live validation gate for proving Core /registry/*
+  contract readiness against Harbor v2.0 REST when REGISTRY_PROVIDER=harbor.
+
+required_tools:
+  - curl
+
+live_checks:
+  - id: harbor-health-ready
+    command: GET {harbor_url}/api/v2.0/health
+    pass_condition: harbor_http_health_endpoint_returns_200
+  - id: core-registry-project-create
+    command: POST {gateway_url}/registry/projects idempotency_key={idempotency_key} name={tenant_id}
+    pass_condition: http_201_response_has_registry_project_record
+  - id: core-registry-projects-list
+    command: GET {gateway_url}/registry/projects
+    pass_condition: http_200_response_has_items_total
+  - id: core-registry-repositories-list
+    command: GET {gateway_url}/registry/projects/{tenant_id}/repositories
+    pass_condition: http_200_response_has_items_total
+  - id: core-registry-project-scan-report
+    command: GET {gateway_url}/registry/projects/{tenant_id}/scan-report
+    pass_condition: http_200_response_has_registry_project_scan_report
+  - id: core-registry-pull-secret-create
+    command: POST {gateway_url}/registry/projects/{tenant_id}/pull-secret idempotency_key={idempotency_key}
+    pass_condition: http_201_response_has_registry_pull_secret_reference
+
+optional_live_checks:
+  - id: core-registry-artifacts-list
+    command: GET {gateway_url}/registry/projects/{tenant_id}/repositories/{repository}/artifacts
+    pass_condition: http_200_response_has_items_total
+    note: Run when --repository is set and a repository already exists in Harbor.
+  - id: core-registry-scan-result
+    command: GET {gateway_url}/registry/images/scan-result?image={scan_image}
+    pass_condition: http_200_response_has_registry_scan_result
+    note: Run when --scan-image is set and the artifact exists in Harbor.
+
+readiness_levels:
+  contract:
+    meaning: Gate definition and local validator exist; no live Harbor proof.
+  live:
+    meaning: Core registry project/repository/scan-report checks passed against the approved Harbor backend with REGISTRY_PROVIDER=harbor.

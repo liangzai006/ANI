@@ -1,0 +1,1 @@
+../../../real-k8s-lab/auth-dex-production-db-init.sql

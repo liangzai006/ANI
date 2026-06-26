@@ -14,6 +14,7 @@ type RegisterOptions struct {
 	EncryptionService                     ports.EncryptionService
 	SecretService                         ports.SecretService
 	GPUInventory                          ports.GPUInventory
+	ImageRegistry                         ports.ImageRegistry
 	NetworkService                        ports.NetworkService
 	StorageService                        ports.StorageService
 	VectorStoreService                    ports.VectorStoreService
@@ -36,7 +37,7 @@ func RegisterWithOptions(h *server.Hertz, options RegisterOptions) {
 	registerAuth(v1)
 	registerObservability(v1)
 	registerMetering(v1)
-	registerHarbor(v1)
+	registerHarborWithService(v1, options.ImageRegistry)
 	registerDemoInstancesWithObservability(v1, options.InstanceObservability, options.InstanceObservabilityUsesInstanceName)
 	registerGPUInventoryResourcesWithInventory(v1, options.GPUInventory)
 	registerNetworkResourcesWithService(v1, options.NetworkService)

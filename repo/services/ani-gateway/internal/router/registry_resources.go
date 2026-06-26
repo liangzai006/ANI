@@ -131,11 +131,22 @@ type registryProjectScanReportResponse struct {
 }
 
 func newRegistryAPI() *registryAPI {
-	return &registryAPI{service: registryadapter.NewLocalImageRegistry()}
+	return newRegistryAPIWithService(nil)
+}
+
+func newRegistryAPIWithService(service ports.ImageRegistry) *registryAPI {
+	if service == nil {
+		service = registryadapter.NewLocalImageRegistry()
+	}
+	return &registryAPI{service: service}
 }
 
 func registerHarbor(v1 *route.RouterGroup) {
-	api := newRegistryAPI()
+	registerHarborWithService(v1, nil)
+}
+
+func registerHarborWithService(v1 *route.RouterGroup, service ports.ImageRegistry) {
+	api := newRegistryAPIWithService(service)
 	v1.GET("/registry/projects", api.listProjects)
 	v1.POST("/registry/projects", api.createProject)
 	v1.GET("/registry/projects/:project/repositories", api.listRepositories)

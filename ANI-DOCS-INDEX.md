@@ -19,6 +19,7 @@ S04 token：SPRINT13-GPU-INVENTORY-DCGM-A-TRACK / validate-gpu-inventory-live-ga
 S05 token：SPRINT13-OBJECTSTORE-MINIO-A-TRACK / validate-object-store-live-gate / MinIO / pre-signed URL / LIVE PENDING（历史兼容语境）。
 S06 token：SPRINT13-VECTOR-MILVUS-A-TRACK / validate-vector-store-live-gate / Milvus / LIVE PENDING（历史兼容语境）。
 S07 token：SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A-TRACK / validate-instance-observability-live-gate / Prometheus / kubelet / LIVE PENDING（历史兼容语境）。
+Registry token：SPRINT13-REGISTRY-HARBOR-A / validate-registry-harbor-live-gate / Harbor / LIVE PENDING。
 Auth 边界：SPRINT13-AUTH-DEX-PRODUCTION-GATE / Auth/Dex production gate 已通过；production-shaped Gateway 使用 ANI_AUTH_MODE=auth_service。
 兼容硬门禁 token：S05-S07 B 轨可以继续；截至 2026-06-21，S05/S06/S07 均已 passed。
 真实底座门禁：REAL-K8S-LAB-A / make validate-real-k8s-profile；Sprint 11 Rook-Ceph 正式部署结果保留为历史回归边界。

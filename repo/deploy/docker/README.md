@@ -16,6 +16,10 @@ make deps          # 启动所有依赖服务
 make deps-status
 ```
 
+首次 `make deps` 会在空 PostgreSQL 数据卷上自动执行 `deploy/real-k8s-lab/auth-dex-production-db-init.sql`（经 `init-scripts/postgres/` 符号链接挂载）。该脚本创建 auth 表、Core runtime metadata 表（instances/network/storage/k8s proxy 等）并写入内置 roles/tenants seed。
+
+若本机已有旧的 Postgres 数据卷，init 不会重跑；需要完整 schema 时请执行 `make deps-clean` 后重新 `make deps`。
+
 ## 服务访问
 
 | 服务 | 地址 | 账号/密码 |

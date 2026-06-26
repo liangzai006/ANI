@@ -54,6 +54,12 @@ type Config struct {
 	VectorStoreDatabase         string
 	VectorStoreCollectionPrefix string
 
+	RegistryProvider string
+	RegistryEndpoint string
+	RegistryUsername string
+	RegistryPassword string
+	RegistrySecure   bool
+
 	WorkloadProvider                   string
 	WorkloadProviderApplyEnabled       bool
 	GPUInventoryProvider               string
@@ -287,6 +293,21 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("VECTOR_STORE_COLLECTION_PREFIX"); value != "" {
 		c.VectorStoreCollectionPrefix = value
+	}
+	if value := os.Getenv("REGISTRY_PROVIDER"); value != "" {
+		c.RegistryProvider = value
+	}
+	if value := os.Getenv("REGISTRY_ENDPOINT"); value != "" {
+		c.RegistryEndpoint = value
+	}
+	if value := os.Getenv("REGISTRY_USERNAME"); value != "" {
+		c.RegistryUsername = value
+	}
+	if value := os.Getenv("REGISTRY_PASSWORD"); value != "" {
+		c.RegistryPassword = value
+	}
+	if value := os.Getenv("REGISTRY_SECURE"); value != "" {
+		c.RegistrySecure = parseBool(value)
 	}
 	if value := os.Getenv("WORKLOAD_RECONCILE_CONTROLLER_ENABLED"); value != "" {
 		c.WorkloadReconcileControllerEnabled = parseBool(value)
