@@ -399,6 +399,37 @@ components:
         real_provider: { type: boolean }
         reason:        { type: string, nullable: true }
 
+    PlatformBranding:
+      type: object
+      properties:
+        platform_name:   { type: string }
+        logo_light_url:  { type: string, format: uri }
+        logo_dark_url:   { type: string, format: uri }
+        favicon_url:     { type: string, format: uri }
+        primary_color:   { type: string, example: "#1677FF" }
+        secondary_color: { type: string }
+        icp_number:      { type: string }
+        updated_at:      { type: string, format: date-time }
+    BrandingUpdateRequest:
+      type: object
+      properties:
+        platform_name:   { type: string }
+        logo_light_url:  { type: string, format: uri }
+        logo_dark_url:   { type: string, format: uri }
+        favicon_url:     { type: string, format: uri }
+        primary_color:   { type: string }
+        secondary_color: { type: string }
+        icp_number:      { type: string }
+    BrandingLogoUploadResponse:
+      type: object
+      properties:
+        platform_name:  { type: string }
+        logo_light_url: { type: string, format: uri }
+        logo_dark_url:  { type: string, format: uri }
+        favicon_url:    { type: string, format: uri }
+        variant:        { type: string, enum: [light, dark, favicon] }
+        object_url:     { type: string, format: uri }
+
     InstanceRecord:
       type: object
       description: ANI Core 计算实例（VM/Container/GPU/Sandbox/BM/K8s集群/Batch）
@@ -1159,7 +1190,7 @@ components:
       required: [idempotency_key, name]
       properties:
         idempotency_key: { type: string, minLength: 1, maxLength: 128 }
-        name:            { type: string, minLength: 1, maxLength: 128 }
+        name:            { type: string, minLength: 1, maxLength: 128, description: 租户内唯一的 ANI 镜像仓库项目名；可自定义，不要求等于 tenant_id。 }
         public:          { type: boolean, default: false }
 
     RegistryProjectListResponse:
@@ -1281,6 +1312,20 @@ components:
         dev_profile:
           $ref: '#/components/schemas/CoreDevProfileInfo'
         created_at: { type: string, format: date-time }
+
+    RegistryPullSecretKubernetesApply:
+      allOf:
+        - $ref: '#/components/schemas/RegistryPullSecret'
+        - type: object
+          required: [kubernetes_secret_name, kubernetes_namespace, kubernetes_applied, applied_at]
+          properties:
+            kubernetes_secret_name: { type: string }
+            kubernetes_namespace:   { type: string }
+            kubernetes_applied:     { type: boolean }
+            provider_refs:
+              type: array
+              items: { type: string }
+            applied_at: { type: string, format: date-time }
 
     RegistryProjectScanReport:
       type: object
@@ -1790,6 +1835,11 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Conflict:
       description: 资源已存在或冲突（code=CONFLICT）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotImplemented:
+      description: 能力未配置或不可用（code=NOT_IMPLEMENTED）
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3085,7 +3135,7 @@ paths:
     post:
       operationId: createRegistryProject
       summary: 创建或确保镜像仓库项目
-      description: 创建租户镜像仓库项目；客户端重试必须复用同一个 idempotency_key。
+      description: 创建租户镜像仓库项目；同一租户可创建多个项目，name 为租户内唯一标识；客户端重试必须复用同一个 idempotency_key。
       tags: [Registry]
       x-ani-rbac-scope: "scope:registry:write"
       requestBody:
@@ -3193,6 +3243,34 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
 
+  /registry/projects/{project}/pull-secret/kubernetes-apply:
+    post:
+      operationId: applyRegistryProjectPullSecretToKubernetes
+      summary: 创建 Harbor pull secret 并注入 Kubernetes imagePullSecret
+      description: >
+        创建项目级 Harbor robot pull secret，并通过 SecretProviderApply 将 dockerconfigjson Secret
+        注入目标 namespace；不在 API 响应中返回 robot 密码明文。
+      tags: [Registry]
+      x-ani-rbac-scope: "scope:registry:write"
+      parameters:
+        - { name: project, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRegistryPullSecretRequest' }
+      responses:
+        "201":
+          description: Pull secret 已创建并注入 Kubernetes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistryPullSecretKubernetesApply' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { $ref: '#/components/responses/Conflict' }
+        "501": { $ref: '#/components/responses/NotImplemented' }
+
   /registry/projects/{project}/scan-report:
     get:
       operationId: getRegistryProjectScanReport
@@ -3232,6 +3310,7 @@ paths:
   # ── 平台品牌化 ──────────────────────────────────────────────────────────────
   /branding:
     get:
+      operationId: getBranding
       summary: 获取平台品牌配置
       tags: [Branding]
       security: []     # 无需认证，首屏加载需要
@@ -3241,14 +3320,61 @@ paths:
           content:
             application/json:
               schema:
-                properties:
-                  platform_name:  { type: string }
-                  logo_light_url: { type: string, format: uri }
-                  logo_dark_url:  { type: string, format: uri }
-                  favicon_url:    { type: string, format: uri }
-                  primary_color:  { type: string, example: "#1677FF" }
-                  secondary_color:{ type: string }
-                  icp_number:     { type: string }
+                $ref: "#/components/schemas/PlatformBranding"
+    put:
+      operationId: updateBranding
+      summary: 更新平台品牌配置
+      tags: [Branding]
+      x-ani-rbac-scope: "scope:platform:manage"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrandingUpdateRequest"
+      responses:
+        "200":
+          description: 更新后的品牌配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformBranding"
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /branding/logo:
+    post:
+      operationId: uploadBrandingLogo
+      summary: 上传平台 Logo
+      description: multipart/form-data；字段 `variant`（light/dark/favicon）与 `file`（图片）。对象写入 branding bucket 后更新 `platform_branding` 对应 URL。
+      tags: [Branding]
+      x-ani-rbac-scope: "scope:platform:manage"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                variant:
+                  type: string
+                  enum: [light, dark, favicon]
+                  default: light
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: 上传成功并返回更新后的 URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrandingLogoUploadResponse"
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/ServiceUnavailable' }
 
   # ── 实例操作历史（Control Plane 操作追踪）──────────────────────────────────
   /instances/{instance_id}/operations:

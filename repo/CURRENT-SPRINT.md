@@ -22,7 +22,40 @@
 | **Auth 边界** | SPRINT13-AUTH-DEX-PRODUCTION-GATE / Auth/Dex production gate 已通过；production-shaped Gateway 固定 ANI_AUTH_MODE=auth_service |
 | **执行入口** | `development-records/sprint13-real-provider-readiness-plan.md`、`development-records/README.md`、本文件验收命令 |
 | **执行环境** | 真实 provider 写操作前必须重新只读盘点并取得人工确认；evidence 不得包含凭据、服务器 IP 或完整内网端点 |
-| **最后校准日期** | 2026-06-23 |
+| **最后校准日期** | 2026-06-29 |
+
+## 已完成：Gateway 元数据持久化（P0–P5）
+
+| 切片 | 状态 | 证据 / gate |
+|---|---|---|
+| GATEWAY-METADATA-PERSISTENCE-P0 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p0.md`；`make validate-gateway-metadata-p0` |
+| GATEWAY-METADATA-PERSISTENCE-P1 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p1.md`；`make validate-gateway-metadata-p1` |
+| GATEWAY-METADATA-PERSISTENCE-P2 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p2.md`；`make validate-gateway-metadata-p2` |
+| GATEWAY-METADATA-PERSISTENCE-P3 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p3.md`；`make validate-gateway-metadata-p3` |
+| GATEWAY-METADATA-PERSISTENCE-P4 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p4.md`；Docker init + `PUT /branding` 写 PG |
+| GATEWAY-METADATA-PERSISTENCE-P5 | 已完成（local/logic verified + PG 冒烟 PASS） | `gateway-metadata-persistence-p5.md`；Registry/Harbor 元数据写 PG；`make validate-gateway-metadata-p5` |
+| GATEWAY-METADATA-PERSISTENCE-P6-A1 | 已完成（local/logic verified） | `gateway-metadata-persistence-p6-a1.md`；K8s 集群/节点池元数据写 PG；`make validate-gateway-metadata-p6-a1` |
+| GATEWAY-METADATA-PERSISTENCE-P6-A2 | 已完成（local/logic verified） | `gateway-metadata-persistence-p6-a2.md`；Secret 元数据/绑定写 PG（无明文）；`make validate-gateway-metadata-p6-a2` |
+| GATEWAY-METADATA-PERSISTENCE-P6-A3 | 已完成（local/logic verified） | `gateway-metadata-persistence-p6-a3.md`；branding OpenAPI + logo MinIO 上传；`make validate-gateway-metadata-p6-a3` |
+| GATEWAY-METADATA-PERSISTENCE-P6-A4 | 已完成（local/logic verified） | `gateway-metadata-persistence-p6-a4.md`；Encryption key 元数据写 PG（无 key material）；`make validate-gateway-metadata-p6-a4` |
+| GATEWAY-METADATA-PERSISTENCE-P6-B1 | 契约已闭合（live evidence 待 lab） | `gateway-metadata-persistence-p6-b1.md`；in-cluster Harbor gate；`make validate-gateway-metadata-p6-b1` |
+| GATEWAY-METADATA-PERSISTENCE-P6-B2 | 契约已闭合（live evidence 待 lab） | `gateway-metadata-persistence-p6-b2.md`；Harbor artifact-track；`make validate-gateway-metadata-p6-b2` |
+| GATEWAY-METADATA-PERSISTENCE-P6-B3 | 契约已闭合（live evidence 待 lab） | `gateway-metadata-persistence-p6-b3.md`；pull secret → K8s 注入；`make validate-gateway-metadata-p6-b3` |
+| **聚合 gate** | P0–P5 + P6-A1–A4 已闭合 | `make validate-gateway-metadata`（顺序执行 P0–P3 + P5 + P6-A1–A4 sub-gate） |
+
+边界：`DATABASE_URL` 未设置时保持内存模式；Redis 仍只做幂等/限流；不标 real-provider / production ready。数据库：`deploy/postgres/ani-dev-database-init.sql`（新 `make deps` 空卷）；已有卷 `make db-upgrade-gateway-metadata`。
+
+### Gateway 元数据剩余项（P5 之后 backlog）
+
+| 域 | 现状 | 建议后续 |
+|---|---|---|
+| K8s 集群 / 节点池业务元数据 | **P6-A1 已落 PG**（`k8s_clusters` / `k8s_cluster_node_pools`）；proxy 凭据仍 `k8s_cluster_proxy_targets` | 阶段 B：production-shaped Gateway |
+| Encryption keys | **P6-A4 已落 PG**（`encryption_keys`；仅存元数据，无 key material / seal token） | 阶段 B |
+| Secrets 业务元数据 | **P6-A2 已落 PG**（`secrets` / `secret_bindings`；仅存 key 名称与绑定，无明文） | 阶段 B |
+| Branding / logo | **P6-A3 已闭合**（OpenAPI + MinIO 上传 + PG URL） | **P6-B1**：集群内 Gateway Harbor live gate（契约已闭合，evidence 待执行） |
+| Harbor 真实 live gate | **本机 dev passed**（2026-06-30） | `validate-registry-harbor-live-gate`；`run_registry_harbor_live_gate.py`（B2 artifact / B3 pull-secret-k8s --dev） |
+| Harbor in-cluster | **P6-B1 契约已闭合**（live 待 lab） | `run_registry_harbor_live_gate.py --track in-cluster`；NodePort `30080` |
+| Registry repositories/artifacts 索引 | 不持久化（设计如此） | 如需离线列表再评估 PG 缓存层 |
 
 ## Sprint 13 当前任务
 
@@ -50,7 +83,8 @@
 | K8s workloads | vCluster / Kubernetes API | `ports.K8sClusterService` / `local_k8s_cluster_service.go` / `k8s_cluster_resources.go` | **production-shaped gate passed**（`validate-vcluster-live-gate --production-shaped` 已固定 metadata target TLS passed 标准；`sprint13-k8s-workloads-vcluster-live-result.md`；production guard：`validate-sprint13-b-track-production-shape`；evidence：`development-records/live-evidence/sprint13-k8s-workloads-vcluster-live-evidence.json`；不代表 full platform production ready） |
 | 对象存储 bucket/upload/download | MinIO（已选 2026-06-19，S3 兼容 pre-signed URL） | `ports.ObjectStore` + `ports.StorageService` / `storage_resources.go` | **production-shaped gate passed**（`SPRINT13-OBJECTSTORE-MINIO-A-TRACK`；result：`sprint13-objectstore-minio-live-result.md`；evidence：`live-evidence/sprint13-objectstore-minio-live-evidence.json`；gate：`validate-object-store-live-gate`） |
 | 向量文档写入 | Milvus（已选 2026-06-19） | `ports.VectorStore` + `ports.VectorStoreService` / `vector_store_resources.go` | **production-shaped gate passed**（`SPRINT13-VECTOR-MILVUS-A-TRACK`；B 轨 live result `sprint13-vector-milvus-live-result.md`；evidence：`live-evidence/sprint13-vector-milvus-live-evidence.json`；readiness：`sprint13-vector-milvus-readiness.md`；gate：`validate-vector-store-live-gate`；历史 LIVE PENDING token 仅作门禁兼容语境；不代表 full platform production ready） |
-| 镜像仓库 Harbor | Harbor v2.0 REST（2026-06-26） | `ports.ImageRegistry` / `harbor_image_registry.go` / `pkg/bootstrap/deps.go` / `registry_runtime.go` / `registry_resources.go` | **代码级对接完成，LIVE PENDING**（`SPRINT13-REGISTRY-HARBOR-A`；`validate-registry-harbor-live-gate`；新增 `HarborImageRegistry` 真实 adapter + `REGISTRY_PROVIDER=harbor` 注入，默认仍走本地 profile；httptest mock 单测覆盖；**未跑真实 Harbor live gate**，不标 real-provider runtime/production ready） |
+| 镜像仓库 Harbor | Harbor v2.0 REST（2026-06-26） | `ports.ImageRegistry` / `harbor_image_registry.go` / `registry_runtime.go` | **SPRINT13-REGISTRY-HARBOR-A** + **SPRINT13-REGISTRY-HARBOR-LIVE-A** production-shaped live gate passed；**REGISTRY-MULTI-PROJECT-A** 租户多项目/自定义 name（Harbor `ani-{tenant}-{name}` 映射）；evidence 见 `sprint13-registry-harbor-live-result.md`；多项目 live 需复跑；不代表 full platform production ready |
+| K8s REST 凭证解析 | kubeconfig + in-cluster 自动探测（2026-06-26） | `kubernetes_rest_config_resolve.go` / `kubernetes_env.go` / `kubernetes_runtime.go` / `NewKubernetesRESTClient` | **local dev 便利，非 production gate**（`SPRINT13-KUBERNETES-REST-CREDENTIAL-RESOLVER-A`；显式 `KUBERNETES_*` 仍优先；`KUBECONFIG` 自动加载仅供本地；不标 real-provider runtime/production ready） |
 
 ## Sprint 12 已完成切片
 
@@ -154,6 +188,7 @@ Sprint 14 resilience feature branch 回归入口：
 
 ```bash
 make validate-sprint14-resilience-live-gate
+make validate-gateway-metadata
 python scripts/validate_yaml.py deploy/real-k8s-lab/sprint14-resilience-live-gate.yaml deploy/real-k8s-lab/sprint14-resilience-live-fixture.yaml
 make test
 make validate-architecture

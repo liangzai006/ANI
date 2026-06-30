@@ -12,30 +12,34 @@ live_checks:
     command: GET {harbor_url}/api/v2.0/health
     pass_condition: harbor_http_health_endpoint_returns_200
   - id: core-registry-project-create
-    command: POST {gateway_url}/registry/projects idempotency_key={idempotency_key} name={tenant_id}
+    command: POST {gateway_url}/registry/projects idempotency_key={idempotency_key} name={registry_project_name}
     pass_condition: http_201_response_has_registry_project_record
   - id: core-registry-projects-list
     command: GET {gateway_url}/registry/projects
     pass_condition: http_200_response_has_items_total
   - id: core-registry-repositories-list
-    command: GET {gateway_url}/registry/projects/{tenant_id}/repositories
+    command: GET {gateway_url}/registry/projects/{registry_project_name}/repositories
     pass_condition: http_200_response_has_items_total
   - id: core-registry-project-scan-report
-    command: GET {gateway_url}/registry/projects/{tenant_id}/scan-report
+    command: GET {gateway_url}/registry/projects/{registry_project_name}/scan-report
     pass_condition: http_200_response_has_registry_project_scan_report
   - id: core-registry-pull-secret-create
-    command: POST {gateway_url}/registry/projects/{tenant_id}/pull-secret idempotency_key={idempotency_key}
+    command: POST {gateway_url}/registry/projects/{registry_project_name}/pull-secret idempotency_key={idempotency_key}
     pass_condition: http_201_response_has_registry_pull_secret_reference
 
 optional_live_checks:
   - id: core-registry-artifacts-list
-    command: GET {gateway_url}/registry/projects/{tenant_id}/repositories/{repository}/artifacts
+    command: GET {gateway_url}/registry/projects/{registry_project_name}/repositories/{repository}/artifacts
     pass_condition: http_200_response_has_items_total
-    note: Run when --repository is set and a repository already exists in Harbor.
+    note: Required when --artifact-track (P6-B2); repository must contain at least one artifact.
   - id: core-registry-scan-result
     command: GET {gateway_url}/registry/images/scan-result?image={scan_image}
     pass_condition: http_200_response_has_registry_scan_result
-    note: Run when --scan-image is set and the artifact exists in Harbor.
+    note: Required when --artifact-track (P6-B2); image must exist in Harbor.
+  - id: core-registry-pull-secret-kubernetes-apply
+    command: POST {gateway_url}/registry/projects/{registry_project_name}/pull-secret/kubernetes-apply idempotency_key={idempotency_key}
+    pass_condition: http_201_response_has_registry_pull_secret_kubernetes_apply
+    note: Required when --pull-secret-kubernetes-track (P6-B3); Gateway must use REGISTRY_PROVIDER=harbor and SECRET_PROVIDER_MODE=kubernetes_rest.
 
 readiness_levels:
   contract:

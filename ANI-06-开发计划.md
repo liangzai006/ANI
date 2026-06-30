@@ -53,7 +53,8 @@ Sprint 13 production-shaped live gate 摘要：
 - S06 Milvus vector-store：SPRINT13-VECTOR-MILVUS-A-TRACK；validate-vector-store-live-gate；LIVE PENDING 仅作历史门禁兼容语境；production_shape.status=passed。
 - S07 Prometheus + kubelet / K8s API observability：SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A-TRACK；validate-instance-observability-live-gate；LIVE PENDING 仅作历史门禁兼容语境；production_shape.status=passed。
 - S05-S07 B 轨可以继续：保留为历史兼容 token；截至 2026-06-21，S05/S06/S07 均已 passed。
-- 镜像仓库 Harbor：SPRINT13-REGISTRY-HARBOR-A；`validate-registry-harbor-live-gate`；新增 `HarborImageRegistry` 真实 adapter（Harbor v2.0 REST）+ `REGISTRY_PROVIDER=harbor` 注入路径，默认仍走本地 profile；httptest mock 单测覆盖；**代码级对接与 live gate 契约完成，未跑真实 Harbor live gate，LIVE PENDING，不标 real-provider runtime/production ready**。
+- 镜像仓库 Harbor：SPRINT13-REGISTRY-HARBOR-A 代码对接 + **SPRINT13-REGISTRY-HARBOR-LIVE-A production-shaped live gate passed**（2026-06-30）；**REGISTRY-MULTI-PROJECT-A** 对齐租户多项目/自定义 name（Harbor 内部映射）；Harbor `docker.kubercon.local` @ 192.168.102.81；本机 Gateway `:8080` + `REGISTRY_PROVIDER=harbor`；`validate-registry-harbor-live-gate --production-shaped`；evidence 见 `sprint13-registry-harbor-live-result.md`；不代表 full platform production ready。
+- Kubernetes REST 凭证解析：SPRINT13-KUBERNETES-REST-CREDENTIAL-RESOLVER-A；`ResolveKubernetesRESTClientConfig` + `LoadKubernetesRESTEnvFromOS` + Gateway `kubernetes_runtime.go`；本地可 `KUBECONFIG` 自动连集群；显式 `KUBERNETES_*` 仍覆盖 kubeconfig；**dev 便利批次，不标 production ready**。
 
 Sprint 14 Core resilience 分支完成状态：
 - 分支：`feature/sprint14-core-resilience-semantics`。
@@ -61,6 +62,22 @@ Sprint 14 Core resilience 分支完成状态：
 - 完成：R-P0-0..R-P2-7 已实现并归档；`SPRINT14-CORE-RESILIENCE-LIVE-GATE` 已在 `ani-sprint14-resilience` 隔离 namespace 真实通过 P0 strong backend kill、P1 weak dependency degraded、P2 controller primary kill / follower failover。
 - Evidence：`repo/development-records/live-evidence/sprint14-resilience-live-evidence.json`，已按规则脱敏；验证后隔离 namespace 已清理。
 - 边界：production-ready 只限隔离 Sprint14 Core resilience fixture；不声明现有 Sprint13 单副本后端自身 HA，不声明 full platform production ready；PG 读副本路由、MinIO/Milvus 命名 circuit breaker policy 与后端生产 Operator 拓扑仍属后续 release/operator gate。
+
+Gateway 元数据持久化（P0–P3，2026-06-30）：
+- `GATEWAY-METADATA-PERSISTENCE-P0`：`DATABASE_URL` 接入 ani-gateway 共享 `MetadataStore`；实例/网络/存储 local profile 元数据写入 PostgreSQL（`workload_*` / `network_*` / `storage_*`）；未配置时保持内存模式；Redis 仍只做幂等/限流；migration `20260629_014`；sub-gate：`make validate-gateway-metadata-p0`；local/logic verified + PG 冒烟 PASS，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p0.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P1`：branding / async_tasks / metering / vector_stores 元数据接 PG（`platform_branding`、`async_tasks`、`metering_token_reports`、`metering_records`、`vector_stores`）；migration `20260629_015`；gate：`make validate-gateway-metadata-p1`；真实 PG 冒烟 PASS，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p1.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P2`：网络/存储 List/Get/Delete 读 PG（`network_*` / `storage_*` 既有表）；gate：`make validate-gateway-metadata-p2`；重启后 VPC/Volume GET 冒烟 PASS，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p2.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P3`：bucket / volume snapshot / mount-target 元数据接 PG（`storage_buckets`、`volume_snapshots`、`filesystem_mount_targets`）；migration `20260629_016`；gate：`make validate-gateway-metadata-p3`；真实 PG 冒烟 PASS，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p3.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P4`：DB 整合（`deploy/postgres/ani-dev-database-init.sql`、`gateway-metadata-schema.sql`、`make db-upgrade-gateway-metadata`）；`PUT /branding` 写 PG。详见 `repo/development-records/gateway-metadata-persistence-p4.md` 与 `deploy/postgres/README.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P5`：Registry 元数据接 PG（`registry_projects` / `registry_repository_permissions` / `registry_pull_secrets`）；local + Harbor `PersistingImageRegistry`；migration `20260629_017`；gate：`make validate-gateway-metadata-p5`；聚合 gate 扩展 P0–P5；PG 冒烟 PASS，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p5.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-A1`：K8s 集群/节点池控制面元数据接 PG（`k8s_clusters` / `k8s_cluster_node_pools`）；migration `20260629_018`；gate：`make validate-gateway-metadata-p6-a1`；聚合 gate 含 P6-A1；local/logic verified，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-a1.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-A2`：Secret 元数据/绑定接 PG（`secrets` / `secret_bindings`；无明文）；migration `20260630_019`；gate：`make validate-gateway-metadata-p6-a2`；聚合 gate 含 P6-A2；local/logic verified，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-a2.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-A3`：branding OpenAPI 补齐 + logo 上传 MinIO + URL 写 PG；gate：`make validate-gateway-metadata-p6-a3`；聚合 gate 含 P6-A3；local/logic verified，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-a3.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-A4`：Encryption key 元数据接 PG（`encryption_keys`；无 key material）；migration `20260630_020`；gate：`make validate-gateway-metadata-p6-a4`；聚合 gate 含 P6-A4；local/logic verified，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-a4.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-B1`：in-cluster production-shaped Gateway Harbor live gate 契约 + runner；gate：`make validate-gateway-metadata-p6-b1`；in-cluster evidence 待 lab 执行，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-b1.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-B2`：Harbor artifact-track live gate（docker push + artifacts + scan-result）；gate：`make validate-gateway-metadata-p6-b2`；live evidence 待 lab 执行，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-b2.md`。
+- `GATEWAY-METADATA-PERSISTENCE-P6-B3`：Harbor pull secret → Kubernetes imagePullSecret 注入（`pull-secret/kubernetes-apply` + SecretProviderApply）；gate：`make validate-gateway-metadata-p6-b3`；live evidence 待 lab 执行，不标 production ready。详见 `repo/development-records/gateway-metadata-persistence-p6-b3.md`。
+- 聚合 gate：`make validate-gateway-metadata` 顺序执行 P0–P3 + P5 sub-gate，作为 Sprint 14 resilience 回归与本地验收入口。
 ```
 
 | 阶段 | 状态 | 完成时间 | 说明 |

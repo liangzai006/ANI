@@ -53,6 +53,24 @@
 | r-p2-7-multi-endpoint-failover-config.md | R-P2-7 multi-endpoint failover config：Redis bootstrap/gateway 支持 `redis.UniversalClient`、Sentinel/Cluster 配置；MinIO/Milvus adapter 接受 endpoint list 或 LB/VIP，并在网络错误、`429`、`5xx` 时尝试下一个 endpoint；新增 `make validate-ha-failover-live-gate` local config/fallback gate；controller primary kill / follower lease failover 已由 Sprint14 aggregate live gate 补齐；PG 仍为单 `DatabaseURL`，后端自身 HA 拓扑不标 production ready | Execution（Core） |
 | r-sprint14-resilience-live-gate.md | SPRINT14-CORE-RESILIENCE-LIVE-GATE：新增并真实执行 `validate-sprint14-resilience-live-gate` + `ani-sprint14-resilience` 隔离 fixture，覆盖 P0 strong backend kill readyz fail、P1 weak object-store down degraded、P2 controller primary pod delete 后 follower lease failover；evidence 已脱敏归档；production-ready 范围仅限隔离 Sprint14 Core resilience fixture | Execution（Core） |
 
+### Gateway Metadata Persistence（2026-06）
+
+| 批次 | 内容摘要 | 文件 |
+|---|---|---|
+| GATEWAY-METADATA-PERSISTENCE-P0 | Gateway PostgreSQL 元数据持久化 P0：`DATABASE_URL` 接入共享 `MetadataStore`，实例/网络/存储 local profile 写入既有表；migration 014；sub-gate `make validate-gateway-metadata-p0`；聚合 gate `make validate-gateway-metadata`（P0–P3）；local/logic verified + PG 冒烟 PASS，不标 production ready | gateway-metadata-persistence-p0.md |
+| GATEWAY-METADATA-PERSISTENCE-P1 | Gateway PostgreSQL 元数据持久化 P1：branding / async_tasks / metering / vector_stores 元数据接 PG；migration 015；`make validate-gateway-metadata-p1`；local/logic verified + 真实 PG 冒烟 PASS，不标 production ready | gateway-metadata-persistence-p1.md |
+| GATEWAY-METADATA-PERSISTENCE-P2 | Gateway PostgreSQL 元数据持久化 P2：网络/存储 List/Get/Delete 读 PG（重启可恢复）；`make validate-gateway-metadata-p2`；local/logic verified + 真实 PG 冒烟 PASS，不标 production ready | gateway-metadata-persistence-p2.md |
+| GATEWAY-METADATA-PERSISTENCE-P3 | Gateway PostgreSQL 元数据持久化 P3：bucket / volume snapshot / mount-target 元数据接 PG；migration 016；`make validate-gateway-metadata-p3`；local/logic verified + 真实 PG 冒烟 PASS，不标 production ready | gateway-metadata-persistence-p3.md |
+| GATEWAY-METADATA-PERSISTENCE-P4 | Gateway 元数据持久化收尾：DB 整合为 `deploy/postgres/ani-dev-database-init.sql` + `gateway-metadata-schema.sql`；`PUT /branding` 写 PG；`make db-upgrade-gateway-metadata` | gateway-metadata-persistence-p4.md |
+| GATEWAY-METADATA-PERSISTENCE-P5 | Gateway Registry 元数据接 PG（projects / permissions / pull-secret 元数据）；local + Harbor `PersistingImageRegistry`；migration 017；`make validate-gateway-metadata-p5`；聚合 gate 扩展 P0–P5；local/logic verified + PG 冒烟 PASS，不标 production ready | gateway-metadata-persistence-p5.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-A1 | Gateway K8s 集群/节点池元数据接 PG（`k8s_clusters` / `k8s_cluster_node_pools`）；`MetadataK8sClusterStore` + local service 写穿；migration 018；`make validate-gateway-metadata-p6-a1`；聚合 gate 含 P6-A1；local/logic verified，不标 production ready | gateway-metadata-persistence-p6-a1.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-A2 | Gateway Secret 元数据/绑定接 PG（`secrets` / `secret_bindings`；无明文）；`MetadataSecretStore` + local service 写穿；migration 019；`make validate-gateway-metadata-p6-a2`；聚合 gate 含 P6-A2；local/logic verified，不标 production ready | gateway-metadata-persistence-p6-a2.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-A3 | Gateway branding OpenAPI + logo 上传 MinIO + URL 写 PG；`ObjectStoreBrandingService`；`make validate-gateway-metadata-p6-a3`；聚合 gate 含 P6-A3；local/logic verified，不标 production ready | gateway-metadata-persistence-p6-a3.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-A4 | Gateway Encryption key 元数据接 PG（`encryption_keys`；无 key material）；`MetadataEncryptionKeyStore` + local service 写穿；migration 020；`make validate-gateway-metadata-p6-a4`；聚合 gate 含 P6-A4；local/logic verified，不标 production ready | gateway-metadata-persistence-p6-a4.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-B1 | in-cluster production-shaped Gateway + Harbor live gate 契约；`run_registry_harbor_live_gate.py --track in-cluster`；`make validate-gateway-metadata-p6-b1`；live evidence 待 lab 执行 | gateway-metadata-persistence-p6-b1.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-B2 | Harbor artifact-track live gate；`run_registry_harbor_live_gate.py --track artifact`；`make validate-gateway-metadata-p6-b2` | gateway-metadata-persistence-p6-b2.md |
+| GATEWAY-METADATA-PERSISTENCE-P6-B3 | Harbor pull secret → Kubernetes imagePullSecret 注入；`run_registry_harbor_live_gate.py --track pull-secret-kubernetes`；`make validate-gateway-metadata-p6-b3` | gateway-metadata-persistence-p6-b3.md |
+
 ### Sprint 13 Planning（2026-06）
 
 | 批次 | 内容摘要 | 文件 |
@@ -78,7 +96,10 @@
 | SPRINT13-VECTOR-MILVUS-LIVE-A | S06 vector Milvus B 轨：production-shaped Gateway 经 Milvus REST backend 完成 vector store create、documents insert、search readiness 与 `--cleanup`；evidence 为 `production_shape.status=passed`，不代表 full platform production ready | sprint13-vector-milvus-live-result.md |
 | SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-A-TRACK | S07 instance observability Prometheus + kubelet / K8s API A 轨：新增 `PrometheusInstanceObservability` adapter 与 bootstrap `INSTANCE_OBSERVABILITY_PROVIDER=prometheus_kubernetes` 显式注入路径，`validate-instance-observability-live-gate` 覆盖 Prometheus readiness、Core logs/events/metrics/security-events/exec session；后续 B 轨已通过 production-shaped live gate，历史 LIVE PENDING token 仅作门禁兼容语境 | sprint13-instance-observability-prometheus-a-track.md |
 | SPRINT13-INSTANCE-OBSERVABILITY-PROMETHEUS-LIVE-A | S07 instance observability Prometheus B 轨：production-shaped Gateway 经 Prometheus + Kubernetes API/kubelet backend 完成 Prometheus readiness、Core logs/events/metrics/security-events/exec session 与 `--cleanup`；evidence 为 `production_shape.status=passed`，不代表 full platform production ready | sprint13-instance-observability-prometheus-live-result.md |
-| SPRINT13-REGISTRY-HARBOR-A | 镜像仓库 Harbor 真实 provider 代码级对接：在既有 `ports.ImageRegistry` / `M1-REGISTRY-A` 契约下新增 `HarborImageRegistry`（Harbor v2.0 REST，手写 HTTP，无 provider SDK），bootstrap `imageRegistryAdapter` 与 Gateway `REGISTRY_PROVIDER=harbor` 注入路径，默认仍走本地 profile；`validate-registry-harbor-live-gate` 覆盖契约与 mock live 路径；httptest mock 单测覆盖，**未跑真实 Harbor live gate**，不标 real-provider runtime/production ready | sprint13-registry-harbor-a.md |
+| SPRINT13-REGISTRY-HARBOR-A | 镜像仓库 Harbor 真实 provider 代码级对接 + live gate 契约 | sprint13-registry-harbor-a.md |
+| SPRINT13-REGISTRY-HARBOR-LIVE-A | Harbor production-shaped live gate passed：`docker.kubercon.local` + 本机 Gateway `:8080`；`validate-registry-harbor-live-gate`；evidence `live-evidence/sprint13-registry-harbor-live-evidence.json`；LIVE PENDING 仅作历史兼容语境；不代表 full platform production ready | sprint13-registry-harbor-live-result.md |
+| REGISTRY-MULTI-PROJECT-A | Registry 租户多项目语义对齐：ANI 自定义 `name` + Harbor `ani-{tenant}-{name}` 映射；local/Harbor adapter + live gate 契约；OpenAPI 描述补充；不标 production ready | registry-multi-project-a.md |
+| SPRINT13-KUBERNETES-REST-CREDENTIAL-RESOLVER-A | Kubernetes REST 凭证自动解析：新增 `ResolveKubernetesRESTClientConfig`（显式 env > kubeconfig > in-cluster SA）、`LoadKubernetesRESTEnvFromOS`、Gateway `kubernetes_runtime.go` 收敛；`client-go/clientcmd` 仅用于 kubeconfig 读取；本地开发可只设 provider mode + `KUBECONFIG`；不新增 live gate，不标 production ready | sprint13-kubernetes-rest-credential-resolver-a.md |
 
 ### Sprint 11 Kickoff（2026-06）
 
