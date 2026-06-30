@@ -22,8 +22,8 @@ DEFAULT_HARBOR_URL = "https://docker.kubercon.local"
 DEFAULT_HARBOR_USERNAME = "admin"
 DEFAULT_GATEWAY_PORT = 8080
 DEFAULT_KUBECTL_PROXY_PORT = 18003
-DEFAULT_DATABASE_URL = "postgres://ani:ani_dev_password@localhost:5432/ani?sslmode=disable"
-DEFAULT_REDIS_URL = "redis://:ani_dev_password@127.0.0.1:6379/0"
+DEFAULT_DATABASE_URL = ""
+DEFAULT_REDIS_URL = ""
 
 
 class ManagedProcess:
@@ -97,6 +97,16 @@ def resolve_harbor_password(cli_password: str) -> str:
         if path.is_file():
             return path.read_text(encoding="utf-8").strip()
     fail("HARBOR_PASSWORD or HARBOR_PASSWORD_FILE is required (lab Harbor admin password)")
+    return ""
+
+
+def require_env_value(name: str, fallback: str = "") -> str:
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    if fallback.strip():
+        return fallback.strip()
+    fail(f"{name} is required")
     return ""
 
 
@@ -200,8 +210,8 @@ def start_dev_gateway(
             "REGISTRY_PASSWORD": harbor_password,
             "REGISTRY_SECURE": "true",
             "REGISTRY_TLS_INSECURE": "true",
-            "DATABASE_URL": env.get("DATABASE_URL", DEFAULT_DATABASE_URL),
-            "GATEWAY_REDIS_URL": env.get("GATEWAY_REDIS_URL", DEFAULT_REDIS_URL),
+            "DATABASE_URL": require_env_value("DATABASE_URL", DEFAULT_DATABASE_URL),
+            "GATEWAY_REDIS_URL": require_env_value("GATEWAY_REDIS_URL", DEFAULT_REDIS_URL),
         }
     )
     proc = subprocess.Popen([str(gateway_bin)], stdout=log_handle, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
