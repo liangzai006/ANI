@@ -18,14 +18,14 @@ func TestRegistryAPIProjectRepositoryAndArtifactResponses(t *testing.T) {
 		t.Fatalf("ListProjects error = %v", err)
 	}
 	projectResponse := registryProjectsFromResult(projects)
-	if projectResponse.Total != 1 || projectResponse.Items[0].Name != "tenant-a" {
-		t.Fatalf("project response = %+v, want tenant-a project", projectResponse)
+	if projectResponse.Total != 1 || projectResponse.Items[0].Name != "default" {
+		t.Fatalf("project response = %+v, want default project", projectResponse)
 	}
 	requireLocalCoreDevProfile(t, projectResponse.Items[0].DevProfile, "local-image-registry")
 
 	repositories, err := api.service.ListRepositories(context.Background(), ports.RegistryRepositoryListRequest{
 		TenantID: "tenant-a",
-		Project:  "tenant-a",
+		Project:  "default",
 	})
 	if err != nil {
 		t.Fatalf("ListRepositories error = %v", err)
@@ -37,7 +37,7 @@ func TestRegistryAPIProjectRepositoryAndArtifactResponses(t *testing.T) {
 
 	artifacts, err := api.service.ListArtifacts(context.Background(), ports.RegistryArtifactListRequest{
 		TenantID:   "tenant-a",
-		Project:    "tenant-a",
+		Project:    "default",
 		Repository: "runtime",
 	})
 	if err != nil {
@@ -51,10 +51,13 @@ func TestRegistryAPIProjectRepositoryAndArtifactResponses(t *testing.T) {
 
 func TestRegistryAPIPermissionAndScanResponses(t *testing.T) {
 	api := newRegistryAPI()
+	if err := api.service.EnsureProject(context.Background(), "tenant-a"); err != nil {
+		t.Fatalf("EnsureProject error = %v", err)
+	}
 
 	permission, err := api.service.SetRepositoryPermission(context.Background(), ports.RegistryPermissionRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "default",
 		Repository:     "runtime",
 		IdempotencyKey: "registry-router-permission",
 		Subject:        "svc-model",
@@ -71,7 +74,7 @@ func TestRegistryAPIPermissionAndScanResponses(t *testing.T) {
 
 	scan, err := api.service.GetScanResult(context.Background(), ports.RegistryScanResultRequest{
 		TenantID: "tenant-a",
-		Image:    "tenant-a/runtime:latest",
+		Image:    "default/runtime:latest",
 	})
 	if err != nil {
 		t.Fatalf("GetScanResult error = %v", err)
@@ -89,20 +92,20 @@ func TestRegistryAPIProjectPullSecretAndScanReportResponses(t *testing.T) {
 	project, err := api.service.CreateProject(context.Background(), ports.RegistryProjectRequest{
 		TenantID:       "tenant-a",
 		IdempotencyKey: "registry-router-project",
-		Name:           "tenant-a",
+		Name:           "runtime-team",
 	})
 	if err != nil {
 		t.Fatalf("CreateProject error = %v", err)
 	}
 	projectResponse := registryProjectFromRecord(project)
-	if projectResponse.Name != "tenant-a" {
-		t.Fatalf("project response = %+v, want tenant-a", projectResponse)
+	if projectResponse.Name != "runtime-team" {
+		t.Fatalf("project response = %+v, want runtime-team", projectResponse)
 	}
 	requireLocalCoreDevProfile(t, projectResponse.DevProfile, "local-image-registry")
 
 	secret, err := api.service.CreatePullSecret(context.Background(), ports.RegistryPullSecretRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "runtime-team",
 		IdempotencyKey: "registry-router-pull-secret",
 		Name:           "ani-registry-pull",
 	})
@@ -117,7 +120,7 @@ func TestRegistryAPIProjectPullSecretAndScanReportResponses(t *testing.T) {
 
 	report, err := api.service.GetProjectScanReport(context.Background(), ports.RegistryProjectScanReportRequest{
 		TenantID: "tenant-a",
-		Project:  "tenant-a",
+		Project:  "runtime-team",
 	})
 	if err != nil {
 		t.Fatalf("GetProjectScanReport error = %v", err)

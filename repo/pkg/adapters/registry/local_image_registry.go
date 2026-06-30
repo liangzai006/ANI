@@ -50,7 +50,7 @@ func (r *LocalImageRegistry) EnsureProject(_ context.Context, tenantID string) e
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureProjectLocked(tenantID)
+	r.ensureProjectLocked(tenantID, registryDefaultProjectName)
 	return nil
 }
 
@@ -60,11 +60,8 @@ func (r *LocalImageRegistry) CreateProject(_ context.Context, request ports.Regi
 	if tenantID == "" {
 		return ports.RegistryProject{}, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
 	}
-	if name == "" {
-		return ports.RegistryProject{}, fmt.Errorf("%w: name is required", ports.ErrInvalid)
-	}
-	if name != tenantID {
-		return ports.RegistryProject{}, fmt.Errorf("%w: project must match tenant local profile", ports.ErrInvalid)
+	if err := validateRegistryProjectName(name); err != nil {
+		return ports.RegistryProject{}, err
 	}
 	idemKey, err := registryIdempotencyKey(tenantID, request.IdempotencyKey)
 	if err != nil {
@@ -72,16 +69,17 @@ func (r *LocalImageRegistry) CreateProject(_ context.Context, request ports.Regi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if projectID, ok := r.idempotency[idemKey]; ok {
-		project := r.projects[projectID]
+	if storageKey, ok := r.idempotency[idemKey]; ok {
+		project := r.projects[storageKey]
 		project.DevProfile = registryDevProfile()
 		return project, nil
 	}
-	project := r.ensureProjectLocked(tenantID)
+	project := r.ensureProjectLocked(tenantID, name)
 	project.Public = request.Public
 	project.DevProfile = registryDevProfile()
-	r.projects[tenantID] = project
-	r.idempotency[idemKey] = tenantID
+	storageKey := tenantProjectStorageKey(tenantID, name)
+	r.projects[storageKey] = project
+	r.idempotency[idemKey] = storageKey
 	return project, nil
 }
 
@@ -92,21 +90,27 @@ func (r *LocalImageRegistry) ListProjects(_ context.Context, request ports.Regis
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	project := r.ensureProjectLocked(tenantID)
-	project.DevProfile = registryDevProfile()
+	items := make([]ports.RegistryProject, 0)
+	for key, project := range r.projects {
+		if !strings.HasPrefix(key, tenantID+"\x00") {
+			continue
+		}
+		project.DevProfile = registryDevProfile()
+		items = append(items, project)
+	}
 	return ports.RegistryProjectListResult{
-		Items:      []ports.RegistryProject{project},
+		Items:      items,
 		DevProfile: registryDevProfile(),
 	}, nil
 }
 
 func (r *LocalImageRegistry) ListRepositories(_ context.Context, request ports.RegistryRepositoryListRequest) (ports.RegistryRepositoryListResult, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryRepositoryListResult{}, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
+	r.ensureProjectLocked(strings.TrimSpace(request.TenantID), strings.TrimSpace(request.Project))
 	repository := ports.RegistryRepository{
 		Project:       strings.TrimSpace(request.Project),
 		Name:          "runtime",
@@ -125,7 +129,7 @@ func (r *LocalImageRegistry) ListRepositories(_ context.Context, request ports.R
 }
 
 func (r *LocalImageRegistry) ListArtifacts(_ context.Context, request ports.RegistryArtifactListRequest) (ports.RegistryArtifactListResult, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryArtifactListResult{}, err
 	}
 	if strings.TrimSpace(request.Repository) == "" {
@@ -133,7 +137,7 @@ func (r *LocalImageRegistry) ListArtifacts(_ context.Context, request ports.Regi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
+	r.ensureProjectLocked(strings.TrimSpace(request.TenantID), strings.TrimSpace(request.Project))
 	scan := r.scanResultLocked(strings.TrimSpace(request.Project) + "/" + strings.TrimSpace(request.Repository) + ":latest")
 	artifact := ports.RegistryArtifact{
 		Project:    strings.TrimSpace(request.Project),
@@ -153,7 +157,7 @@ func (r *LocalImageRegistry) ListArtifacts(_ context.Context, request ports.Regi
 }
 
 func (r *LocalImageRegistry) SetRepositoryPermission(_ context.Context, request ports.RegistryPermissionRequest) (ports.RegistryPermission, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryPermission{}, err
 	}
 	if strings.TrimSpace(request.Repository) == "" {
@@ -177,7 +181,7 @@ func (r *LocalImageRegistry) SetRepositoryPermission(_ context.Context, request 
 		permission.DevProfile = registryDevProfile()
 		return permission, nil
 	}
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
+	r.ensureProjectLocked(strings.TrimSpace(request.TenantID), strings.TrimSpace(request.Project))
 	permission := ports.RegistryPermission{
 		Project:    strings.TrimSpace(request.Project),
 		Repository: strings.TrimSpace(request.Repository),
@@ -202,13 +206,17 @@ func (r *LocalImageRegistry) GetScanResult(_ context.Context, request ports.Regi
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
 	return r.scanResultLocked(strings.TrimSpace(request.Image)), nil
 }
 
-func (r *LocalImageRegistry) CreatePullSecret(_ context.Context, request ports.RegistryPullSecretRequest) (ports.RegistryPullSecret, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
-		return ports.RegistryPullSecret{}, err
+func (r *LocalImageRegistry) CreatePullSecret(ctx context.Context, request ports.RegistryPullSecretRequest) (ports.RegistryPullSecret, error) {
+	secret, _, err := r.CreatePullSecretCredential(ctx, request)
+	return secret, err
+}
+
+func (r *LocalImageRegistry) CreatePullSecretCredential(_ context.Context, request ports.RegistryPullSecretRequest) (ports.RegistryPullSecret, string, error) {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
+		return ports.RegistryPullSecret{}, "", err
 	}
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
@@ -216,7 +224,7 @@ func (r *LocalImageRegistry) CreatePullSecret(_ context.Context, request ports.R
 	}
 	idemKey, err := registryIdempotencyKey(request.TenantID, request.IdempotencyKey)
 	if err != nil {
-		return ports.RegistryPullSecret{}, err
+		return ports.RegistryPullSecret{}, "", err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -224,9 +232,9 @@ func (r *LocalImageRegistry) CreatePullSecret(_ context.Context, request ports.R
 		secret := r.pullSecrets[key]
 		secret.State = ports.RegistryPermissionDuplicate
 		secret.DevProfile = registryDevProfile()
-		return secret, nil
+		return secret, "", nil
 	}
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
+	r.ensureProjectLocked(strings.TrimSpace(request.TenantID), strings.TrimSpace(request.Project))
 	secret := ports.RegistryPullSecret{
 		Project:    strings.TrimSpace(request.Project),
 		Name:       name,
@@ -241,16 +249,16 @@ func (r *LocalImageRegistry) CreatePullSecret(_ context.Context, request ports.R
 	key := strings.TrimSpace(request.Project) + ":" + name
 	r.pullSecrets[key] = secret
 	r.idempotency[idemKey] = key
-	return secret, nil
+	return secret, "local-dev-pull-secret", nil
 }
 
 func (r *LocalImageRegistry) GetProjectScanReport(_ context.Context, request ports.RegistryProjectScanReportRequest) (ports.RegistryProjectScanReport, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryProjectScanReport{}, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureProjectLocked(strings.TrimSpace(request.TenantID))
+	r.ensureProjectLocked(strings.TrimSpace(request.TenantID), strings.TrimSpace(request.Project))
 	return ports.RegistryProjectScanReport{
 		Project:          strings.TrimSpace(request.Project),
 		Status:           ports.RegistryScanComplete,
@@ -301,19 +309,20 @@ func (r *LocalImageRegistry) GetScanStatus(ctx context.Context, ref ports.ImageR
 	}, nil
 }
 
-func (r *LocalImageRegistry) ensureProjectLocked(tenantID string) ports.RegistryProject {
-	if project, ok := r.projects[tenantID]; ok {
+func (r *LocalImageRegistry) ensureProjectLocked(tenantID, name string) ports.RegistryProject {
+	storageKey := tenantProjectStorageKey(tenantID, name)
+	if project, ok := r.projects[storageKey]; ok {
 		return project
 	}
 	project := ports.RegistryProject{
-		ID:         "regproj-" + tenantID,
+		ID:         localRegistryProjectID(tenantID, name),
 		TenantID:   tenantID,
-		Name:       tenantID,
+		Name:       name,
 		Public:     false,
 		DevProfile: registryDevProfile(),
 		CreatedAt:  r.now().UTC(),
 	}
-	r.projects[tenantID] = project
+	r.projects[storageKey] = project
 	return project
 }
 
@@ -330,21 +339,6 @@ func (r *LocalImageRegistry) scanResultLocked(image string) ports.RegistryScanRe
 		DevProfile: registryDevProfile(),
 		ScannedAt:  r.now().UTC(),
 	}
-}
-
-func validateTenantProject(tenantID, project string) error {
-	tenantID = strings.TrimSpace(tenantID)
-	project = strings.TrimSpace(project)
-	if tenantID == "" {
-		return fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
-	}
-	if project == "" {
-		return fmt.Errorf("%w: project is required", ports.ErrInvalid)
-	}
-	if tenantID != project {
-		return fmt.Errorf("%w: project must match tenant local profile", ports.ErrInvalid)
-	}
-	return nil
 }
 
 func registryIdempotencyKey(tenantID, key string) (string, error) {
@@ -378,3 +372,4 @@ func registryDevProfile() ports.DevProfileInfo {
 }
 
 var _ ports.ImageRegistry = (*LocalImageRegistry)(nil)
+var _ ports.RegistryPullSecretCredentialSource = (*LocalImageRegistry)(nil)

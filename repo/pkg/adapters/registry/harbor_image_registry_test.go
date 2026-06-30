@@ -34,6 +34,7 @@ func TestHarborImageRegistryRequiresCredentials(t *testing.T) {
 }
 
 func TestHarborImageRegistryCreateProjectUsesRealAPI(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
 	var sawBasicAuth bool
 	var createCalls int
 	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
@@ -44,9 +45,9 @@ func TestHarborImageRegistryCreateProjectUsesRealAPI(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/projects":
 			createCalls++
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/tenant-a":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/"+harborName:
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"project_id":7,"name":"tenant-a","metadata":{"public":"false"},"creation_time":"2026-06-20T10:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"project_id":7,"name":"` + harborName + `","metadata":{"public":"false"},"creation_time":"2026-06-20T10:00:00Z"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -55,7 +56,7 @@ func TestHarborImageRegistryCreateProjectUsesRealAPI(t *testing.T) {
 	project, err := registry.CreateProject(context.Background(), ports.RegistryProjectRequest{
 		TenantID:       "tenant-a",
 		IdempotencyKey: "registry-project-a",
-		Name:           "tenant-a",
+		Name:           "my-app",
 	})
 	if err != nil {
 		t.Fatalf("CreateProject() error = %v", err)
@@ -66,8 +67,8 @@ func TestHarborImageRegistryCreateProjectUsesRealAPI(t *testing.T) {
 	if createCalls != 1 {
 		t.Fatalf("create calls = %d, want 1", createCalls)
 	}
-	if project.ID != "harbor-7" || project.Name != "tenant-a" {
-		t.Fatalf("project = %+v, want harbor-backed tenant-a project", project)
+	if project.ID != "harbor-7" || project.Name != "my-app" {
+		t.Fatalf("project = %+v, want harbor-backed my-app project", project)
 	}
 	if !project.DevProfile.RealProvider || project.DevProfile.Provider != "harbor" {
 		t.Fatalf("dev profile = %+v, want real harbor provider marker", project.DevProfile)
@@ -75,13 +76,14 @@ func TestHarborImageRegistryCreateProjectUsesRealAPI(t *testing.T) {
 }
 
 func TestHarborImageRegistryCreateProjectTreatsConflictAsSuccess(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
 	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v2.0/projects":
 			w.WriteHeader(http.StatusConflict)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/tenant-a":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects/"+harborName:
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"project_id":7,"name":"tenant-a","metadata":{"public":"false"}}`))
+			_, _ = w.Write([]byte(`{"project_id":7,"name":"` + harborName + `","metadata":{"public":"false"}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -90,18 +92,19 @@ func TestHarborImageRegistryCreateProjectTreatsConflictAsSuccess(t *testing.T) {
 	if _, err := registry.CreateProject(context.Background(), ports.RegistryProjectRequest{
 		TenantID:       "tenant-a",
 		IdempotencyKey: "registry-project-a",
-		Name:           "tenant-a",
+		Name:           "my-app",
 	}); err != nil {
 		t.Fatalf("CreateProject() error = %v, want conflict treated as success", err)
 	}
 }
 
 func TestHarborImageRegistryListsRepositoriesAndArtifacts(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
 	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/api/v2.0/projects/tenant-a/repositories":
+		case r.URL.Path == "/api/v2.0/projects/"+harborName+"/repositories":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[{"name":"tenant-a/runtime","artifact_count":2,"pull_count":5}]`))
+			_, _ = w.Write([]byte(`[{"name":"` + harborName + `/runtime","artifact_count":2,"pull_count":5}]`))
 		case strings.Contains(r.URL.Path, "/repositories/runtime/artifacts"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[{"digest":"sha256:abc","size":1234,"manifest_media_type":"application/vnd.oci.image.manifest.v1+json","push_time":"2026-06-20T11:00:00Z","tags":[{"name":"latest"}],"scan_overview":{"application/vnd.security.vulnerability.report; version=1.1":{"report_id":"r-1","scan_status":"Success","summary":{"summary":{"Critical":1,"High":2,"Medium":3,"Low":4}}}}}]`))
@@ -110,15 +113,15 @@ func TestHarborImageRegistryListsRepositoriesAndArtifacts(t *testing.T) {
 		}
 	})
 
-	repositories, err := registry.ListRepositories(context.Background(), ports.RegistryRepositoryListRequest{TenantID: "tenant-a", Project: "tenant-a"})
+	repositories, err := registry.ListRepositories(context.Background(), ports.RegistryRepositoryListRequest{TenantID: "tenant-a", Project: "my-app"})
 	if err != nil {
 		t.Fatalf("ListRepositories() error = %v", err)
 	}
-	if len(repositories.Items) != 1 || repositories.Items[0].Name != "runtime" || repositories.Items[0].ArtifactCount != 2 {
+	if len(repositories.Items) != 1 || repositories.Items[0].Name != "runtime" || repositories.Items[0].Project != "my-app" {
 		t.Fatalf("repositories = %+v, want short-named runtime repository", repositories.Items)
 	}
 
-	artifacts, err := registry.ListArtifacts(context.Background(), ports.RegistryArtifactListRequest{TenantID: "tenant-a", Project: "tenant-a", Repository: "runtime"})
+	artifacts, err := registry.ListArtifacts(context.Background(), ports.RegistryArtifactListRequest{TenantID: "tenant-a", Project: "my-app", Repository: "runtime"})
 	if err != nil {
 		t.Fatalf("ListArtifacts() error = %v", err)
 	}
@@ -138,6 +141,7 @@ func TestHarborImageRegistryListsRepositoriesAndArtifacts(t *testing.T) {
 }
 
 func TestHarborImageRegistryGetScanResultParsesImageReference(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
 	var requestedPath string
 	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
 		requestedPath = r.URL.EscapedPath()
@@ -145,12 +149,12 @@ func TestHarborImageRegistryGetScanResultParsesImageReference(t *testing.T) {
 		_, _ = w.Write([]byte(`{"digest":"sha256:abc","scan_overview":{"x":{"report_id":"r-9","scan_status":"Success","summary":{"summary":{"Critical":0,"High":1,"Medium":0,"Low":2}}}}}`))
 	})
 
-	result, err := registry.GetScanResult(context.Background(), ports.RegistryScanResultRequest{TenantID: "tenant-a", Image: "tenant-a/runtime:latest"})
+	result, err := registry.GetScanResult(context.Background(), ports.RegistryScanResultRequest{TenantID: "tenant-a", Image: "my-app/runtime:latest"})
 	if err != nil {
 		t.Fatalf("GetScanResult() error = %v", err)
 	}
-	if !strings.Contains(requestedPath, "/repositories/runtime/artifacts/latest") {
-		t.Fatalf("requested path = %q, want artifact reference path", requestedPath)
+	if !strings.Contains(requestedPath, "/projects/"+harborName+"/repositories/runtime/artifacts/latest") {
+		t.Fatalf("requested path = %q, want artifact reference path for mapped harbor project", requestedPath)
 	}
 	if result.Status != ports.RegistryScanComplete || result.High != 1 || result.Low != 2 {
 		t.Fatalf("scan result = %+v, want parsed harbor scan overview", result)
@@ -161,6 +165,7 @@ func TestHarborImageRegistryGetScanResultParsesImageReference(t *testing.T) {
 }
 
 func TestHarborImageRegistryPullSecretMapsRobotState(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
 	statuses := []int{http.StatusCreated, http.StatusConflict}
 	var index int
 	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +175,9 @@ func TestHarborImageRegistryPullSecretMapsRobotState(t *testing.T) {
 				index++
 			}
 			w.WriteHeader(status)
+			if status == http.StatusCreated {
+				_, _ = w.Write([]byte(`{"id":1,"name":"robot$` + harborName + `+ani-registry-pull","secret":"harbor-robot-secret"}`))
+			}
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -177,7 +185,7 @@ func TestHarborImageRegistryPullSecretMapsRobotState(t *testing.T) {
 
 	first, err := registry.CreatePullSecret(context.Background(), ports.RegistryPullSecretRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "my-app",
 		IdempotencyKey: "pull-a",
 		Name:           "ani-registry-pull",
 		Namespace:      "ani-tenant-a",
@@ -185,16 +193,16 @@ func TestHarborImageRegistryPullSecretMapsRobotState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePullSecret(first) error = %v", err)
 	}
-	if first.State != ports.RegistryPermissionActive || first.SecretRef != "tenant-a/ani-registry-pull" {
+	if first.State != ports.RegistryPermissionActive || first.SecretRef != "my-app/ani-registry-pull" {
 		t.Fatalf("first secret = %+v, want active secret reference", first)
 	}
-	if !strings.HasPrefix(first.Username, "robot$tenant-a+") {
+	if !strings.HasPrefix(first.Username, "robot$"+harborName+"+") {
 		t.Fatalf("username = %q, want harbor robot account name", first.Username)
 	}
 
 	second, err := registry.CreatePullSecret(context.Background(), ports.RegistryPullSecretRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "my-app",
 		IdempotencyKey: "pull-a",
 		Name:           "ani-registry-pull",
 	})
@@ -224,7 +232,7 @@ func TestHarborImageRegistrySetPermissionScopesRobotAccess(t *testing.T) {
 
 	permission, err := registry.SetRepositoryPermission(context.Background(), ports.RegistryPermissionRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "my-app",
 		Repository:     "runtime",
 		IdempotencyKey: "perm-a",
 		Subject:        "svc-model",
@@ -241,13 +249,22 @@ func TestHarborImageRegistrySetPermissionScopesRobotAccess(t *testing.T) {
 	}
 }
 
-func TestHarborImageRegistryNotFoundMapsToPortError(t *testing.T) {
-	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, _ *http.Request) {
+func TestHarborImageRegistryListProjectsFiltersTenantScopedHarborProjects(t *testing.T) {
+	harborName := harborProviderProjectName("tenant-a", "my-app")
+	registry, _ := newHarborTestRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v2.0/projects" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[{"project_id":7,"name":"` + harborName + `","metadata":{"public":"false"},"creation_time":"2026-06-20T10:00:00Z"},{"project_id":8,"name":"ani-other-tenant-b-app","metadata":{"public":"false"}}]`))
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	_, err := registry.ListProjects(context.Background(), ports.RegistryProjectListRequest{TenantID: "tenant-a"})
-	if err == nil {
-		t.Fatal("ListProjects() error = nil, want not-found error")
+	result, err := registry.ListProjects(context.Background(), ports.RegistryProjectListRequest{TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("ListProjects() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Name != "my-app" {
+		t.Fatalf("items = %+v, want tenant-a mapped project only", result.Items)
 	}
 }

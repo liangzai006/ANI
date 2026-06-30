@@ -3,6 +3,7 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,13 +28,14 @@ const (
 // HarborImageRegistryConfig configures the real Harbor v2.0 provider adapter.
 // Credentials stay inside the adapter boundary and are never echoed back to callers.
 type HarborImageRegistryConfig struct {
-	Endpoint       string
-	Username       string
-	Password       string
-	Secure         bool
-	HTTPClient     *http.Client
-	RequestTimeout time.Duration
-	Now            func() time.Time
+	Endpoint         string
+	Username         string
+	Password         string
+	Secure           bool
+	TLSInsecure      bool
+	HTTPClient       *http.Client
+	RequestTimeout   time.Duration
+	Now              func() time.Time
 }
 
 // HarborImageRegistry is a real provider adapter that talks to the Harbor v2.0 REST API.
@@ -49,6 +51,7 @@ type HarborImageRegistry struct {
 }
 
 var _ ports.ImageRegistry = (*HarborImageRegistry)(nil)
+var _ ports.RegistryPullSecretCredentialSource = (*HarborImageRegistry)(nil)
 
 func NewHarborImageRegistry(config HarborImageRegistryConfig) (*HarborImageRegistry, error) {
 	endpoint, err := parseHarborEndpoint(config.Endpoint, config.Secure)
@@ -62,7 +65,7 @@ func NewHarborImageRegistry(config HarborImageRegistryConfig) (*HarborImageRegis
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = newHarborHTTPClient(config.TLSInsecure)
 	}
 	now := config.Now
 	if now == nil {
@@ -84,14 +87,15 @@ func (r *HarborImageRegistry) EnsureProject(ctx context.Context, tenantID string
 	if tenantID == "" {
 		return fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
 	}
-	exists, err := r.projectExists(ctx, tenantID)
+	harborName := harborProviderProjectName(tenantID, registryDefaultProjectName)
+	exists, err := r.projectExists(ctx, harborName)
 	if err != nil {
 		return err
 	}
 	if exists {
 		return nil
 	}
-	return r.createProjectOnHarbor(ctx, tenantID, false)
+	return r.createProjectOnHarbor(ctx, harborName, false)
 }
 
 func (r *HarborImageRegistry) CreateProject(ctx context.Context, request ports.RegistryProjectRequest) (ports.RegistryProject, error) {
@@ -100,19 +104,17 @@ func (r *HarborImageRegistry) CreateProject(ctx context.Context, request ports.R
 	if tenantID == "" {
 		return ports.RegistryProject{}, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
 	}
-	if name == "" {
-		return ports.RegistryProject{}, fmt.Errorf("%w: name is required", ports.ErrInvalid)
-	}
-	if name != tenantID {
-		return ports.RegistryProject{}, fmt.Errorf("%w: project must match tenant", ports.ErrInvalid)
+	if err := validateRegistryProjectName(name); err != nil {
+		return ports.RegistryProject{}, err
 	}
 	if strings.TrimSpace(request.IdempotencyKey) == "" {
 		return ports.RegistryProject{}, fmt.Errorf("%w: idempotency_key is required", ports.ErrInvalid)
 	}
-	if err := r.createProjectOnHarbor(ctx, name, request.Public); err != nil {
+	harborName := harborProviderProjectName(tenantID, name)
+	if err := r.createProjectOnHarbor(ctx, harborName, request.Public); err != nil {
 		return ports.RegistryProject{}, err
 	}
-	return r.getProject(ctx, name)
+	return r.getProjectForANI(ctx, tenantID, name)
 }
 
 func (r *HarborImageRegistry) ListProjects(ctx context.Context, request ports.RegistryProjectListRequest) (ports.RegistryProjectListResult, error) {
@@ -120,22 +122,34 @@ func (r *HarborImageRegistry) ListProjects(ctx context.Context, request ports.Re
 	if tenantID == "" {
 		return ports.RegistryProjectListResult{}, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
 	}
-	project, err := r.getProject(ctx, tenantID)
-	if err != nil {
+	path := fmt.Sprintf("%s/projects?page_size=%d", harborAPIBasePath, harborPageSize(request.Limit))
+	var payload []harborProject
+	if err := r.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
 		return ports.RegistryProjectListResult{}, err
 	}
+	items := make([]ports.RegistryProject, 0)
+	for _, project := range payload {
+		harborName := strings.TrimSpace(project.Name)
+		if harborName == tenantID {
+			items = append(items, harborProjectToPort(tenantID, tenantID, project, r.now))
+			continue
+		}
+		if aniName, ok := aniProjectNameFromHarbor(tenantID, harborName); ok {
+			items = append(items, harborProjectToPort(tenantID, aniName, project, r.now))
+		}
+	}
 	return ports.RegistryProjectListResult{
-		Items:      []ports.RegistryProject{project},
+		Items:      items,
 		DevProfile: harborDevProfile(),
 	}, nil
 }
 
 func (r *HarborImageRegistry) ListRepositories(ctx context.Context, request ports.RegistryRepositoryListRequest) (ports.RegistryRepositoryListResult, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	harborProject, aniProject, err := r.resolveHarborProject(ctx, request.TenantID, request.Project)
+	if err != nil {
 		return ports.RegistryRepositoryListResult{}, err
 	}
-	project := strings.TrimSpace(request.Project)
-	path := fmt.Sprintf("%s/projects/%s/repositories?page_size=%d", harborAPIBasePath, url.PathEscape(project), harborPageSize(request.Limit))
+	path := fmt.Sprintf("%s/projects/%s/repositories?page_size=%d", harborAPIBasePath, url.PathEscape(harborProject), harborPageSize(request.Limit))
 	var payload []harborRepository
 	if err := r.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
 		return ports.RegistryRepositoryListResult{}, err
@@ -143,8 +157,8 @@ func (r *HarborImageRegistry) ListRepositories(ctx context.Context, request port
 	items := make([]ports.RegistryRepository, 0, len(payload))
 	for _, repo := range payload {
 		items = append(items, ports.RegistryRepository{
-			Project:       project,
-			Name:          repositoryShortName(project, repo.Name),
+			Project:       aniProject,
+			Name:          repositoryShortName(harborProject, repo.Name),
 			ArtifactCount: repo.ArtifactCount,
 			PullCount:     repo.PullCount,
 			DevProfile:    harborDevProfile(),
@@ -154,23 +168,23 @@ func (r *HarborImageRegistry) ListRepositories(ctx context.Context, request port
 }
 
 func (r *HarborImageRegistry) ListArtifacts(ctx context.Context, request ports.RegistryArtifactListRequest) (ports.RegistryArtifactListResult, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	harborProject, aniProject, err := r.resolveHarborProject(ctx, request.TenantID, request.Project)
+	if err != nil {
 		return ports.RegistryArtifactListResult{}, err
 	}
 	repository := strings.TrimSpace(request.Repository)
 	if repository == "" {
 		return ports.RegistryArtifactListResult{}, fmt.Errorf("%w: repository is required", ports.ErrInvalid)
 	}
-	project := strings.TrimSpace(request.Project)
 	path := fmt.Sprintf("%s/projects/%s/repositories/%s/artifacts?with_scan_overview=true&page_size=%d",
-		harborAPIBasePath, url.PathEscape(project), harborRepositoryPathSegment(repository), harborPageSize(request.Limit))
+		harborAPIBasePath, url.PathEscape(harborProject), harborRepositoryPathSegment(repository), harborPageSize(request.Limit))
 	var payload []harborArtifact
 	if err := r.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
 		return ports.RegistryArtifactListResult{}, err
 	}
 	items := make([]ports.RegistryArtifact, 0, len(payload))
 	for _, artifact := range payload {
-		items = append(items, r.artifactToPort(project, repository, artifact))
+		items = append(items, r.artifactToPort(aniProject, repository, artifact, harborProject))
 	}
 	return ports.RegistryArtifactListResult{Items: items, DevProfile: harborDevProfile()}, nil
 }
@@ -187,8 +201,12 @@ func (r *HarborImageRegistry) GetScanResult(ctx context.Context, request ports.R
 	if err != nil {
 		return ports.RegistryScanResult{}, err
 	}
+	harborProject, _, err := resolveImageProjectNames(request.TenantID, project)
+	if err != nil {
+		return ports.RegistryScanResult{}, err
+	}
 	path := fmt.Sprintf("%s/projects/%s/repositories/%s/artifacts/%s?with_scan_overview=true",
-		harborAPIBasePath, url.PathEscape(project), harborRepositoryPathSegment(repository), url.PathEscape(reference))
+		harborAPIBasePath, url.PathEscape(harborProject), harborRepositoryPathSegment(repository), url.PathEscape(reference))
 	var artifact harborArtifact
 	if err := r.doJSON(ctx, http.MethodGet, path, nil, &artifact); err != nil {
 		return ports.RegistryScanResult{}, err
@@ -209,7 +227,7 @@ func (r *HarborImageRegistry) GetScanResult(ctx context.Context, request ports.R
 }
 
 func (r *HarborImageRegistry) GetProjectScanReport(ctx context.Context, request ports.RegistryProjectScanReportRequest) (ports.RegistryProjectScanReport, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryProjectScanReport{}, err
 	}
 	project := strings.TrimSpace(request.Project)
@@ -252,7 +270,7 @@ func (r *HarborImageRegistry) GetProjectScanReport(ctx context.Context, request 
 }
 
 func (r *HarborImageRegistry) SetRepositoryPermission(ctx context.Context, request ports.RegistryPermissionRequest) (ports.RegistryPermission, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
 		return ports.RegistryPermission{}, err
 	}
 	repository := strings.TrimSpace(request.Repository)
@@ -270,7 +288,11 @@ func (r *HarborImageRegistry) SetRepositoryPermission(ctx context.Context, reque
 		return ports.RegistryPermission{}, fmt.Errorf("%w: idempotency_key is required", ports.ErrInvalid)
 	}
 	project := strings.TrimSpace(request.Project)
-	state, err := r.createRobot(ctx, project, harborRobotName(subject), repository, request.Actions)
+	harborProject, err := resolveHarborProjectName(request.TenantID, project)
+	if err != nil {
+		return ports.RegistryPermission{}, err
+	}
+	state, err := r.createRobot(ctx, harborProject, harborRobotName(subject), repository, request.Actions)
 	if err != nil {
 		return ports.RegistryPermission{}, err
 	}
@@ -286,33 +308,50 @@ func (r *HarborImageRegistry) SetRepositoryPermission(ctx context.Context, reque
 }
 
 func (r *HarborImageRegistry) CreatePullSecret(ctx context.Context, request ports.RegistryPullSecretRequest) (ports.RegistryPullSecret, error) {
-	if err := validateTenantProject(request.TenantID, request.Project); err != nil {
-		return ports.RegistryPullSecret{}, err
+	secret, _, err := r.CreatePullSecretCredential(ctx, request)
+	return secret, err
+}
+
+func (r *HarborImageRegistry) CreatePullSecretCredential(ctx context.Context, request ports.RegistryPullSecretRequest) (ports.RegistryPullSecret, string, error) {
+	if err := validateRegistryProjectRequest(request.TenantID, request.Project); err != nil {
+		return ports.RegistryPullSecret{}, "", err
 	}
 	if strings.TrimSpace(request.IdempotencyKey) == "" {
-		return ports.RegistryPullSecret{}, fmt.Errorf("%w: idempotency_key is required", ports.ErrInvalid)
+		return ports.RegistryPullSecret{}, "", fmt.Errorf("%w: idempotency_key is required", ports.ErrInvalid)
 	}
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
 		name = "ani-registry-pull"
 	}
 	project := strings.TrimSpace(request.Project)
-	robotName := harborRobotName(name)
-	state, err := r.createRobot(ctx, project, robotName, "*", []ports.RegistryPermissionAction{ports.RegistryPermissionPull})
+	harborProject, err := resolveHarborProjectName(request.TenantID, project)
 	if err != nil {
-		return ports.RegistryPullSecret{}, err
+		return ports.RegistryPullSecret{}, "", err
+	}
+	robotName := harborRobotName(name)
+	state, created, err := r.createRobotWithCredentials(ctx, harborProject, robotName, "*", []ports.RegistryPermissionAction{ports.RegistryPermissionPull})
+	if err != nil {
+		return ports.RegistryPullSecret{}, "", err
+	}
+	username := "robot$" + harborProject + "+" + robotName
+	if created != nil && strings.TrimSpace(created.Name) != "" {
+		username = strings.TrimSpace(created.Name)
+	}
+	password := ""
+	if created != nil {
+		password = strings.TrimSpace(created.Secret)
 	}
 	return ports.RegistryPullSecret{
 		Project:    project,
 		Name:       name,
 		SecretRef:  project + "/" + name,
 		Registry:   r.registryHost,
-		Username:   "robot$" + project + "+" + robotName,
+		Username:   username,
 		Namespace:  strings.TrimSpace(request.Namespace),
 		State:      state,
 		DevProfile: harborDevProfile(),
 		CreatedAt:  r.now().UTC(),
-	}, nil
+	}, password, nil
 }
 
 func (r *HarborImageRegistry) ListTags(ctx context.Context, repository string) ([]ports.ImageTag, error) {
@@ -366,20 +405,39 @@ func (r *HarborImageRegistry) projectExists(ctx context.Context, name string) (b
 	return false, err
 }
 
-func (r *HarborImageRegistry) getProject(ctx context.Context, name string) (ports.RegistryProject, error) {
-	path := fmt.Sprintf("%s/projects/%s", harborAPIBasePath, url.PathEscape(name))
-	var payload harborProject
-	if err := r.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+func (r *HarborImageRegistry) getProjectForANI(ctx context.Context, tenantID, aniName string) (ports.RegistryProject, error) {
+	harborName := harborProviderProjectName(tenantID, aniName)
+	project, err := r.getHarborProject(ctx, harborName)
+	if err != nil {
 		return ports.RegistryProject{}, err
 	}
+	return harborProjectToPort(tenantID, aniName, project, r.now), nil
+}
+
+func (r *HarborImageRegistry) getHarborProject(ctx context.Context, harborName string) (harborProject, error) {
+	path := fmt.Sprintf("%s/projects/%s", harborAPIBasePath, url.PathEscape(harborName))
+	var payload harborProject
+	if err := r.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+		return harborProject{}, err
+	}
+	return payload, nil
+}
+
+func (r *HarborImageRegistry) resolveHarborProject(_ context.Context, tenantID, aniProject string) (harborName, aniName string, err error) {
+	aniName = strings.TrimSpace(aniProject)
+	harborName, err = resolveHarborProjectName(tenantID, aniName)
+	return harborName, aniName, err
+}
+
+func harborProjectToPort(tenantID, aniName string, payload harborProject, now func() time.Time) ports.RegistryProject {
 	return ports.RegistryProject{
 		ID:         "harbor-" + strconv.Itoa(payload.ProjectID),
-		TenantID:   name,
-		Name:       payload.Name,
+		TenantID:   tenantID,
+		Name:       aniName,
 		Public:     strings.EqualFold(strings.TrimSpace(payload.Metadata.Public), "true"),
 		DevProfile: harborDevProfile(),
-		CreatedAt:  parseHarborTime(payload.CreationTime, r.now),
-	}, nil
+		CreatedAt:  parseHarborTime(payload.CreationTime, now),
+	}
 }
 
 func (r *HarborImageRegistry) createProjectOnHarbor(ctx context.Context, name string, public bool) error {
@@ -398,6 +456,11 @@ func (r *HarborImageRegistry) createProjectOnHarbor(ctx context.Context, name st
 // access. Harbor enforces uniqueness by robot name; a 409 maps to the duplicate state,
 // matching the idempotent contract used by the local profile.
 func (r *HarborImageRegistry) createRobot(ctx context.Context, project, robotName, repository string, actions []ports.RegistryPermissionAction) (ports.RegistryPermissionState, error) {
+	state, _, err := r.createRobotWithCredentials(ctx, project, robotName, repository, actions)
+	return state, err
+}
+
+func (r *HarborImageRegistry) createRobotWithCredentials(ctx context.Context, project, robotName, repository string, actions []ports.RegistryPermissionAction) (ports.RegistryPermissionState, *harborRobotCreated, error) {
 	access := make([]harborRobotAccess, 0, len(actions))
 	for _, action := range actions {
 		access = append(access, harborRobotAccess{Resource: "repository", Action: string(action)})
@@ -412,17 +475,18 @@ func (r *HarborImageRegistry) createRobot(ctx context.Context, project, robotNam
 			Access:    access,
 		}},
 	}
-	err := r.doJSON(ctx, http.MethodPost, harborAPIBasePath+"/robots", body, nil)
+	var created harborRobotCreated
+	err := r.doJSON(ctx, http.MethodPost, harborAPIBasePath+"/robots", body, &created)
 	if err == nil {
-		return ports.RegistryPermissionActive, nil
+		return ports.RegistryPermissionActive, &created, nil
 	}
 	if isHarborConflict(err) {
-		return ports.RegistryPermissionDuplicate, nil
+		return ports.RegistryPermissionDuplicate, nil, nil
 	}
-	return "", err
+	return "", nil, err
 }
 
-func (r *HarborImageRegistry) artifactToPort(project, repository string, artifact harborArtifact) ports.RegistryArtifact {
+func (r *HarborImageRegistry) artifactToPort(aniProject, repository string, artifact harborArtifact, _ string) ports.RegistryArtifact {
 	tags := make([]string, 0, len(artifact.Tags))
 	for _, tag := range artifact.Tags {
 		if name := strings.TrimSpace(tag.Name); name != "" {
@@ -435,12 +499,12 @@ func (r *HarborImageRegistry) artifactToPort(project, repository string, artifac
 	}
 	overview := selectScanOverview(artifact.ScanOverview)
 	pushedAt := parseHarborTime(artifact.PushTime, r.now)
-	image := project + "/" + repository
+	image := aniProject + "/" + repository
 	if len(tags) > 0 {
 		image += ":" + tags[0]
 	}
 	return ports.RegistryArtifact{
-		Project:    project,
+		Project:    aniProject,
 		Repository: repository,
 		Digest:     strings.TrimSpace(artifact.Digest),
 		Tags:       tags,
@@ -592,6 +656,12 @@ type harborRobotAccess struct {
 	Action   string `json:"action"`
 }
 
+type harborRobotCreated struct {
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	Secret string `json:"secret"`
+}
+
 func selectScanOverview(overviews map[string]harborScanOverview) harborScanOverview {
 	for _, overview := range overviews {
 		return overview
@@ -694,6 +764,15 @@ func parseHarborImage(image string) (project, repository, reference string, err 
 		reference = "latest"
 	}
 	return project, repository, reference, nil
+}
+
+func newHarborHTTPClient(tlsInsecure bool) *http.Client {
+	if !tlsInsecure {
+		return http.DefaultClient
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // lab Harbor with private CA / self-signed cert
+	return &http.Client{Transport: transport}
 }
 
 func parseHarborEndpoint(raw string, secure bool) (*url.URL, error) {

@@ -20,8 +20,8 @@ func TestLocalImageRegistryListsProjectRepositoryAndArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProjects() error = %v", err)
 	}
-	if len(projects.Items) != 1 || projects.Items[0].Name != "tenant-a" {
-		t.Fatalf("projects = %+v, want tenant-a project", projects.Items)
+	if len(projects.Items) != 1 || projects.Items[0].Name != registryDefaultProjectName {
+		t.Fatalf("projects = %+v, want default project", projects.Items)
 	}
 	if projects.DevProfile.Provider != "local-image-registry" || projects.DevProfile.RealProvider {
 		t.Fatalf("dev profile = %+v, want local non-real marker", projects.DevProfile)
@@ -29,7 +29,7 @@ func TestLocalImageRegistryListsProjectRepositoryAndArtifacts(t *testing.T) {
 
 	repositories, err := service.ListRepositories(context.Background(), ports.RegistryRepositoryListRequest{
 		TenantID: "tenant-a",
-		Project:  "tenant-a",
+		Project:  registryDefaultProjectName,
 	})
 	if err != nil {
 		t.Fatalf("ListRepositories() error = %v", err)
@@ -40,7 +40,7 @@ func TestLocalImageRegistryListsProjectRepositoryAndArtifacts(t *testing.T) {
 
 	artifacts, err := service.ListArtifacts(context.Background(), ports.RegistryArtifactListRequest{
 		TenantID:   "tenant-a",
-		Project:    "tenant-a",
+		Project:    registryDefaultProjectName,
 		Repository: "runtime",
 	})
 	if err != nil {
@@ -51,6 +51,29 @@ func TestLocalImageRegistryListsProjectRepositoryAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestLocalImageRegistrySupportsMultipleProjectsPerTenant(t *testing.T) {
+	service := NewLocalImageRegistry(WithRegistryClock(func() time.Time {
+		return time.Unix(2450, 0).UTC()
+	}))
+
+	for _, name := range []string{"backend", "frontend"} {
+		if _, err := service.CreateProject(context.Background(), ports.RegistryProjectRequest{
+			TenantID:       "tenant-a",
+			IdempotencyKey: "registry-project-" + name,
+			Name:           name,
+		}); err != nil {
+			t.Fatalf("CreateProject(%q) error = %v", name, err)
+		}
+	}
+	projects, err := service.ListProjects(context.Background(), ports.RegistryProjectListRequest{TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("ListProjects() error = %v", err)
+	}
+	if len(projects.Items) != 2 {
+		t.Fatalf("projects = %+v, want 2 tenant projects", projects.Items)
+	}
+}
+
 func TestLocalImageRegistryPermissionAndScanAreLocalProfile(t *testing.T) {
 	service := NewLocalImageRegistry(WithRegistryClock(func() time.Time {
 		return time.Unix(2500, 0).UTC()
@@ -58,7 +81,7 @@ func TestLocalImageRegistryPermissionAndScanAreLocalProfile(t *testing.T) {
 
 	first, err := service.SetRepositoryPermission(context.Background(), ports.RegistryPermissionRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        registryDefaultProjectName,
 		Repository:     "runtime",
 		IdempotencyKey: "registry-permission-a",
 		Subject:        "svc-model",
@@ -69,7 +92,7 @@ func TestLocalImageRegistryPermissionAndScanAreLocalProfile(t *testing.T) {
 	}
 	second, err := service.SetRepositoryPermission(context.Background(), ports.RegistryPermissionRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        registryDefaultProjectName,
 		Repository:     "runtime",
 		IdempotencyKey: "registry-permission-a",
 		Subject:        "svc-model",
@@ -84,7 +107,7 @@ func TestLocalImageRegistryPermissionAndScanAreLocalProfile(t *testing.T) {
 
 	scan, err := service.GetScanResult(context.Background(), ports.RegistryScanResultRequest{
 		TenantID: "tenant-a",
-		Image:    "tenant-a/runtime:latest",
+		Image:    registryDefaultProjectName + "/runtime:latest",
 	})
 	if err != nil {
 		t.Fatalf("GetScanResult() error = %v", err)
@@ -105,18 +128,18 @@ func TestLocalImageRegistryProjectPullSecretAndScanReport(t *testing.T) {
 	project, err := service.CreateProject(context.Background(), ports.RegistryProjectRequest{
 		TenantID:       "tenant-a",
 		IdempotencyKey: "registry-project-a",
-		Name:           "tenant-a",
+		Name:           "runtime-team",
 	})
 	if err != nil {
 		t.Fatalf("CreateProject() error = %v", err)
 	}
-	if project.Name != "tenant-a" || project.DevProfile.RealProvider {
-		t.Fatalf("project = %+v, want tenant-a local project", project)
+	if project.Name != "runtime-team" || project.DevProfile.RealProvider {
+		t.Fatalf("project = %+v, want runtime-team local project", project)
 	}
 
 	secret, err := service.CreatePullSecret(context.Background(), ports.RegistryPullSecretRequest{
 		TenantID:       "tenant-a",
-		Project:        "tenant-a",
+		Project:        "runtime-team",
 		IdempotencyKey: "registry-pull-secret-a",
 		Name:           "ani-registry-pull",
 		Namespace:      "ani-tenant-a",
@@ -130,7 +153,7 @@ func TestLocalImageRegistryProjectPullSecretAndScanReport(t *testing.T) {
 
 	report, err := service.GetProjectScanReport(context.Background(), ports.RegistryProjectScanReportRequest{
 		TenantID: "tenant-a",
-		Project:  "tenant-a",
+		Project:  "runtime-team",
 	})
 	if err != nil {
 		t.Fatalf("GetProjectScanReport() error = %v", err)
