@@ -131,27 +131,78 @@ class RegistryHarborLiveGateTest(unittest.TestCase):
 
         self.assertIn("production-shaped live mode requires a non-local production gateway URL", str(raised.exception))
 
+    def test_production_shaped_live_requires_bearer_token(self) -> None:
+        args = gate.LiveArgs(
+            gateway_url="https://gateway.example/api/v1",
+            ani_bearer_token="",
+            harbor_url="https://harbor.example",
+            harbor_username="admin",
+            harbor_password="secret",
+            tenant_id="tenant-a",
+            repository="",
+            scan_image="",
+            evidence_output="",
+            production_shaped=True,
+        )
+
+        with self.assertRaises(SystemExit) as raised:
+            gate.validate_production_shaped_live_args(args)
+
+        self.assertIn("production-shaped live mode requires --ani-bearer-token", str(raised.exception))
+
+    def test_artifact_track_live_writes_extended_proof_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "registry-harbor-b2.json"
+            args = gate.LiveArgs(
+                gateway_url="https://gateway.example/api/v1",
+                ani_bearer_token="token",
+                harbor_url="https://harbor.example",
+                harbor_username="admin",
+                harbor_password="secret",
+                tenant_id="tenant-a",
+                repository="runtime",
+                scan_image="tenant-a/runtime:latest",
+                evidence_output=str(evidence),
+                production_shaped=True,
+                artifact_track=True,
+            )
+
+            gate.validate_live(
+                args,
+                json_requester=registry_json_requester,
+                harbor_requester=registry_harbor_requester,
+            )
+
+            payload = json.loads(evidence.read_text(encoding="utf-8"))
+
+        self.assertTrue(payload["artifact_track_enabled"])
+        self.assertGreaterEqual(payload["optional_artifacts_count"], 1)
+        proof_items = payload["production_shape"]["proof_items"]
+        self.assertIn("production_registry_artifacts_observed", proof_items)
+        self.assertIn("production_registry_scan_result_observed", proof_items)
+
 
 def registry_json_requester(method: str, url: str, bearer_token: str, payload: dict | None = None) -> tuple[int, dict]:
     dev_profile = {"mode": "real", "provider": "harbor", "real_provider": True}
+    project = gate.DEFAULT_REGISTRY_PROJECT_NAME
     if method == "POST" and url.endswith("/registry/projects"):
-        return 201, {"id": "harbor-1", "name": "tenant-a", "dev_profile": dev_profile}
+        return 201, {"id": "harbor-1", "name": project, "dev_profile": dev_profile}
     if method == "GET" and url.endswith("/registry/projects"):
-        return 200, {"items": [{"name": "tenant-a"}], "total": 1}
-    if method == "GET" and "/registry/projects/tenant-a/repositories/runtime/artifacts" in url:
+        return 200, {"items": [{"name": project}], "total": 1}
+    if method == "GET" and f"/registry/projects/{project}/repositories/runtime/artifacts" in url:
         return 200, {"items": [{"digest": "sha256:abc"}], "total": 1}
-    if method == "GET" and "/registry/projects/tenant-a/repositories" in url:
+    if method == "GET" and f"/registry/projects/{project}/repositories" in url:
         return 200, {"items": [{"name": "runtime"}], "total": 1}
-    if method == "GET" and url.endswith("/registry/projects/tenant-a/scan-report"):
+    if method == "GET" and url.endswith(f"/registry/projects/{project}/scan-report"):
         return 200, {"status": "complete", "dev_profile": dev_profile}
-    if method == "POST" and url.endswith("/registry/projects/tenant-a/pull-secret"):
-        return 201, {"secret_ref": "tenant-a/ani-registry-pull", "registry": "harbor.example", "dev_profile": dev_profile}
+    if method == "POST" and url.endswith(f"/registry/projects/{project}/pull-secret"):
+        return 201, {"secret_ref": f"{project}/ani-registry-pull", "registry": "harbor.example", "dev_profile": dev_profile}
     if method == "GET" and "/registry/images/scan-result" in url:
         return 200, {"status": "complete", "dev_profile": dev_profile}
     raise AssertionError(f"unexpected request {method} {url}")
 
 
-def registry_harbor_requester(method: str, url: str, username: str, password: str) -> tuple[int, dict]:
+def registry_harbor_requester(method: str, url: str, username: str, password: str, tls_insecure: bool = False) -> tuple[int, dict]:
     if method == "GET" and url.endswith("/api/v2.0/health"):
         return 200, {"status": "healthy"}
     raise AssertionError(f"unexpected Harbor request {method} {url}")

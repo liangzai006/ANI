@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -40,6 +41,19 @@ PROOF_ITEMS = [
     "production_harbor_credentials",
     "production_registry_provider_runtime",
 ]
+ARTIFACT_TRACK_PROOF_ITEMS = [
+    *PROOF_ITEMS,
+    "production_registry_artifacts_observed",
+    "production_registry_scan_result_observed",
+]
+PULL_SECRET_K8S_TRACK_PROOF_ITEMS = [
+    *PROOF_ITEMS,
+    "production_registry_pull_secret_kubernetes_applied",
+]
+DEFAULT_ARTIFACT_REPOSITORY = "ani-live-gate-smoke"
+DEFAULT_ARTIFACT_TAG = "latest"
+DEFAULT_REGISTRY_PROJECT_NAME = "default"
+DEFAULT_PULL_SECRET_K8S_NAME = "ani-live-gate-pull"
 
 
 @dataclass(frozen=True)
@@ -54,6 +68,13 @@ class LiveArgs:
     scan_image: str
     evidence_output: str
     production_shaped: bool = False
+    artifact_track: bool = False
+    pull_secret_kubernetes_track: bool = False
+    pull_secret_kubernetes_namespace: str = ""
+    pull_secret_kubernetes_name: str = ""
+    cleanup: bool = False
+    run_id: str = ""
+    harbor_tls_insecure: bool = False
 
 
 def fail(message: str) -> None:
@@ -151,9 +172,41 @@ def is_local_transport(value: str) -> bool:
     )
 
 
+def validate_artifact_track_live_args(args: LiveArgs) -> None:
+    repository = args.repository.strip()
+    scan_image = args.scan_image.strip()
+    if not repository:
+        fail("artifact-track live mode requires --repository")
+    if not scan_image:
+        fail("artifact-track live mode requires --scan-image")
+
+
+def default_scan_image_for_tenant(tenant_id: str, repository: str, tag: str = DEFAULT_ARTIFACT_TAG) -> str:
+    _ = tenant_id
+    return f"{DEFAULT_REGISTRY_PROJECT_NAME.strip()}/{repository.strip()}:{tag}"
+
+
+def harbor_provider_project_name(tenant_id: str, ani_name: str) -> str:
+    tenant_id = tenant_id.strip()
+    ani_name = ani_name.strip()
+    if ani_name == tenant_id:
+        return tenant_id
+    compact = tenant_id.replace("-", "")
+    segment = []
+    for char in ani_name.lower():
+        if char.isalnum() or char in "._-":
+            segment.append(char)
+        else:
+            segment.append("-")
+    cleaned = "".join(segment).strip(".-") or "project"
+    return f"ani-{compact}-{cleaned}"
+
+
 def validate_production_shaped_live_args(args: LiveArgs) -> None:
     if is_local_transport(args.gateway_url):
         fail("production-shaped live mode requires a non-local production gateway URL")
+    if not args.ani_bearer_token.strip():
+        fail("production-shaped live mode requires --ani-bearer-token")
     if not args.harbor_url.strip():
         fail("production-shaped live mode requires --harbor-url")
     if is_local_transport(args.harbor_url):
@@ -199,6 +252,7 @@ def default_harbor_requester(
     url: str,
     username: str,
     password: str,
+    tls_insecure: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     request = urllib.request.Request(
@@ -206,8 +260,11 @@ def default_harbor_requester(
         headers={"Accept": "application/json", "Authorization": f"Basic {token}"},
         method=method,
     )
+    context = None
+    if tls_insecure:
+        context = ssl._create_unverified_context()
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30, context=context) as response:
             status = int(getattr(response, "status", response.getcode()))
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
@@ -215,13 +272,28 @@ def default_harbor_requester(
         body = exc.read().decode("utf-8", errors="replace")
     except OSError as exc:
         fail(f"could not call Harbor API: {exc}")
+    if not body.strip():
+        return status, {}
     try:
-        parsed = json.loads(body) if body.strip() else {}
+        parsed = json.loads(body)
     except json.JSONDecodeError:
         fail("Harbor API did not return JSON")
     if not isinstance(parsed, dict):
         fail("Harbor API must return a JSON object")
     return status, parsed
+
+
+def harbor_cleanup_project(
+    harbor_url: str,
+    username: str,
+    password: str,
+    project_name: str,
+    harbor_requester: Callable[[str, str, str, str], tuple[int, dict[str, Any]]] = default_harbor_requester,
+) -> int:
+    encoded = urllib.parse.quote(project_name, safe="")
+    url = f"{trim_url(harbor_url)}/api/v2.0/projects/{encoded}"
+    status, _ = harbor_requester("DELETE", url, username, password)
+    return status
 
 
 def require_status(status: int, expected: int, label: str) -> None:
@@ -267,6 +339,8 @@ def validate_live(
         fail("live mode requires --tenant-id")
     if args.production_shaped:
         validate_production_shaped_live_args(args)
+    if args.artifact_track:
+        validate_artifact_track_live_args(args)
 
     harbor_health_url = trim_url(args.harbor_url) + "/api/v2.0/health"
     harbor_health_status, harbor_health = harbor_requester(
@@ -274,16 +348,19 @@ def validate_live(
         harbor_health_url,
         args.harbor_username,
         args.harbor_password,
+        args.harbor_tls_insecure,
     )
     require_status(harbor_health_status, 200, "Harbor health")
     if harbor_health.get("status") not in {"healthy", "ok"}:
         fail("Harbor health response status must be healthy")
 
     base_url = trim_url(args.gateway_url)
+    run_suffix = args.run_id.strip() or "sprint13-registry-harbor"
+    registry_project = DEFAULT_REGISTRY_PROJECT_NAME
     project_request = {
-        "name": tenant_id,
+        "name": registry_project,
         "public": False,
-        "idempotency_key": "sprint13-registry-harbor-project",
+        "idempotency_key": f"{run_suffix}-project",
     }
     create_status, project = json_requester(
         "POST",
@@ -299,12 +376,12 @@ def validate_live(
     list_status, projects = json_requester("GET", f"{base_url}/registry/projects", args.ani_bearer_token, None)
     require_status(list_status, 200, "Core registry projects list")
     project_items = require_items_list(projects, "Core registry projects list")
-    if not any(item.get("name") == tenant_id for item in project_items if isinstance(item, dict)):
-        fail("Core registry projects list must include the tenant project")
+    if not any(item.get("name") == registry_project for item in project_items if isinstance(item, dict)):
+        fail("Core registry projects list must include the created registry project")
 
     repositories_status, repositories = json_requester(
         "GET",
-        f"{base_url}/registry/projects/{urllib.parse.quote(tenant_id, safe='')}/repositories",
+        f"{base_url}/registry/projects/{urllib.parse.quote(registry_project, safe='')}/repositories",
         args.ani_bearer_token,
         None,
     )
@@ -313,7 +390,7 @@ def validate_live(
 
     scan_report_status, scan_report = json_requester(
         "GET",
-        f"{base_url}/registry/projects/{urllib.parse.quote(tenant_id, safe='')}/scan-report",
+        f"{base_url}/registry/projects/{urllib.parse.quote(registry_project, safe='')}/scan-report",
         args.ani_bearer_token,
         None,
     )
@@ -323,12 +400,12 @@ def validate_live(
 
     pull_secret_status, pull_secret = json_requester(
         "POST",
-        f"{base_url}/registry/projects/{urllib.parse.quote(tenant_id, safe='')}/pull-secret",
+        f"{base_url}/registry/projects/{urllib.parse.quote(registry_project, safe='')}/pull-secret",
         args.ani_bearer_token,
         {
             "name": "ani-registry-pull",
             "namespace": f"ani-{tenant_id}",
-            "idempotency_key": "sprint13-registry-harbor-pull-secret",
+            "idempotency_key": f"{run_suffix}-pull-secret",
         },
     )
     require_status(pull_secret_status, 201, "Core registry pull secret create")
@@ -336,22 +413,54 @@ def validate_live(
     require_non_empty_string(pull_secret, "registry", "Core registry pull secret create response")
     require_dev_profile_real_provider(pull_secret, "Core registry pull secret create response")
 
+    pull_secret_k8s_status = 0
+    pull_secret_k8s_applied = False
+    pull_secret_k8s_namespace = ""
+    pull_secret_k8s_name = ""
+    if args.pull_secret_kubernetes_track:
+        pull_secret_k8s_namespace = args.pull_secret_kubernetes_namespace.strip() or f"ani-{tenant_id}"
+        pull_secret_k8s_name = args.pull_secret_kubernetes_name.strip() or f"{DEFAULT_PULL_SECRET_K8S_NAME}-{run_suffix}"
+        pull_secret_k8s_status, pull_secret_k8s = json_requester(
+            "POST",
+            f"{base_url}/registry/projects/{urllib.parse.quote(registry_project, safe='')}/pull-secret/kubernetes-apply",
+            args.ani_bearer_token,
+            {
+                "name": pull_secret_k8s_name,
+                "namespace": pull_secret_k8s_namespace,
+                "idempotency_key": f"{run_suffix}-pull-secret-k8s",
+            },
+        )
+        require_status(pull_secret_k8s_status, 201, "Core registry pull secret kubernetes apply")
+        require_non_empty_string(pull_secret_k8s, "kubernetes_secret_name", "Core registry pull secret kubernetes apply response")
+        require_non_empty_string(pull_secret_k8s, "kubernetes_namespace", "Core registry pull secret kubernetes apply response")
+        if not pull_secret_k8s.get("kubernetes_applied"):
+            fail("Core registry pull secret kubernetes apply must set kubernetes_applied=true")
+        require_dev_profile_real_provider(pull_secret_k8s, "Core registry pull secret kubernetes apply response")
+        pull_secret_k8s_applied = True
+
     artifacts_status = 0
     artifacts_count = 0
     repository = args.repository.strip()
-    if repository:
+    if repository or args.artifact_track:
+        if not repository:
+            fail("artifact-track live mode requires --repository")
         artifacts_status, artifacts = json_requester(
             "GET",
-            f"{base_url}/registry/projects/{urllib.parse.quote(tenant_id, safe='')}/repositories/{urllib.parse.quote(repository, safe='')}/artifacts",
+            f"{base_url}/registry/projects/{urllib.parse.quote(registry_project, safe='')}/repositories/{urllib.parse.quote(repository, safe='')}/artifacts",
             args.ani_bearer_token,
             None,
         )
         require_status(artifacts_status, 200, "Core registry artifacts list")
-        artifacts_count = len(require_items_list(artifacts, "Core registry artifacts list"))
+        artifact_items = require_items_list(artifacts, "Core registry artifacts list")
+        artifacts_count = len(artifact_items)
+        if args.artifact_track and artifacts_count < 1:
+            fail("artifact-track live mode requires at least one Harbor artifact in the repository")
 
     scan_result_status = 0
     scan_image = args.scan_image.strip()
-    if scan_image:
+    if scan_image or args.artifact_track:
+        if not scan_image:
+            fail("artifact-track live mode requires --scan-image")
         query = urllib.parse.urlencode({"image": scan_image})
         scan_result_status, scan_result = json_requester(
             "GET",
@@ -362,6 +471,20 @@ def validate_live(
         require_status(scan_result_status, 200, "Core registry image scan result")
         require_non_empty_string(scan_result, "status", "Core registry image scan result")
         require_dev_profile_real_provider(scan_result, "Core registry image scan result")
+
+    cleanup_status = 0
+    if args.cleanup:
+        cleanup_status = harbor_cleanup_project(
+            args.harbor_url,
+            args.harbor_username,
+            args.harbor_password,
+            tenant_id,
+            harbor_requester=lambda method, url, username, password: harbor_requester(
+                method, url, username, password, args.harbor_tls_insecure
+            ),
+        )
+        if cleanup_status not in {200, 202, 404}:
+            fail(f"Harbor project cleanup returned HTTP {cleanup_status}, want 200/202/404")
 
     evidence: dict[str, Any] = {
         "id": "registry-harbor-live-gate",
@@ -375,19 +498,33 @@ def validate_live(
         "repositories_list_status": repositories_status,
         "scan_report_status": scan_report_status,
         "pull_secret_status": pull_secret_status,
+        "pull_secret_kubernetes_track_enabled": args.pull_secret_kubernetes_track,
+        "pull_secret_kubernetes_apply_status": pull_secret_k8s_status,
+        "pull_secret_kubernetes_applied": pull_secret_k8s_applied,
+        "pull_secret_kubernetes_namespace": pull_secret_k8s_namespace,
+        "pull_secret_kubernetes_secret_name": pull_secret_k8s_name,
+        "artifact_track_enabled": args.artifact_track,
         "optional_artifacts_enabled": bool(repository),
         "optional_artifacts_status": artifacts_status,
         "optional_artifacts_count": artifacts_count,
         "optional_scan_result_enabled": bool(scan_image),
         "optional_scan_result_status": scan_result_status,
         "dev_profile_real_provider": True,
+        "cleanup_enabled": args.cleanup,
+        "cleanup_project_status": cleanup_status,
     }
     if args.production_shaped:
+        if args.pull_secret_kubernetes_track:
+            proof_items = list(PULL_SECRET_K8S_TRACK_PROOF_ITEMS)
+        elif args.artifact_track:
+            proof_items = list(ARTIFACT_TRACK_PROOF_ITEMS)
+        else:
+            proof_items = list(PROOF_ITEMS)
         evidence["production_shape"] = {
             "status": "passed",
             "transport_profile": "production_gateway_and_harbor_service",
             "missing_items": [],
-            "proof_items": list(PROOF_ITEMS),
+            "proof_items": proof_items,
         }
     if args.evidence_output.strip():
         output = Path(args.evidence_output)
@@ -400,6 +537,10 @@ def main() -> int:
     parser.add_argument("--gate", default=str(DEFAULT_GATE), help="registry Harbor live gate YAML")
     parser.add_argument("--live", action="store_true", help="execute the human-gated live checks")
     parser.add_argument("--production-shaped", action="store_true", help="require production-shaped transport and proof_items")
+    parser.add_argument("--artifact-track", action="store_true", help="require repository artifacts and scan-result checks (P6-B2)")
+    parser.add_argument("--pull-secret-kubernetes-track", action="store_true", help="require pull-secret/kubernetes-apply check (P6-B3)")
+    parser.add_argument("--pull-secret-kubernetes-namespace", default="", help="target namespace for kubernetes-apply (default ani-{tenant_id})")
+    parser.add_argument("--pull-secret-kubernetes-name", default="", help="kubernetes secret name (default ani-live-gate-pull-{run_id})")
     parser.add_argument("--gateway-url", default="", help="ANI Core API base URL ending at /api/v1")
     parser.add_argument("--ani-bearer-token", default="", help="ANI Core bearer token")
     parser.add_argument("--harbor-url", default="", help="approved Harbor endpoint used by REGISTRY_PROVIDER=harbor")
@@ -409,6 +550,9 @@ def main() -> int:
     parser.add_argument("--repository", default="", help="optional repository name for artifacts list check")
     parser.add_argument("--scan-image", default="", help="optional image reference for scan-result check")
     parser.add_argument("--evidence-output", default="", help="write non-sensitive evidence JSON")
+    parser.add_argument("--cleanup", action="store_true", help="delete the Harbor project created by the live check")
+    parser.add_argument("--run-id", default="", help="suffix for idempotency keys (default sprint13-registry-harbor)")
+    parser.add_argument("--harbor-tls-insecure", action="store_true", help="skip TLS verification for Harbor health/cleanup probes")
     args = parser.parse_args()
 
     validate_gate_path(args.gate)
@@ -428,6 +572,13 @@ def main() -> int:
                 scan_image=args.scan_image,
                 evidence_output=args.evidence_output,
                 production_shaped=args.production_shaped,
+                artifact_track=args.artifact_track,
+                pull_secret_kubernetes_track=args.pull_secret_kubernetes_track,
+                pull_secret_kubernetes_namespace=args.pull_secret_kubernetes_namespace,
+                pull_secret_kubernetes_name=args.pull_secret_kubernetes_name,
+                cleanup=args.cleanup,
+                run_id=args.run_id,
+                harbor_tls_insecure=args.harbor_tls_insecure,
             )
         )
         print("SPRINT13-REGISTRY-HARBOR-A live checks passed")
