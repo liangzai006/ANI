@@ -1,11 +1,11 @@
 # ANI Monorepo — 统一构建入口
 # 使用方式：make <target>
 
-.PHONY: help deps deps-down deps-status deps-clean \
+.PHONY: help deps deps-down deps-status deps-clean db-upgrade-gateway-metadata \
         tools-proto gen-api gen-console-api gen-proto gen-core-sdk gen-api-docs \
         build build-gateway build-auth-service build-model-service build-task-service build-reconcile-worker build-cli \
         test test-go test-python test-cover \
-        validate-infra validate-gpu-preflight validate-gpu-contracts validate-runtime-contracts validate-instance-contracts validate-instance-planner validate-instance-renderer validate-instance-admission validate-instance-audit validate-instance-provider-dry-run validate-instance-provider-apply validate-instance-status-reconcile validate-instance-orchestrator validate-instance-store validate-instance-provider-adapter validate-instance-service validate-instance-lifecycle-ops validate-m1-e2e validate-kubernetes-provider-execution validate-kubernetes-rest-client validate-kubernetes-bootstrap-wiring validate-kubernetes-lifecycle-execution validate-kubernetes-ops-execution validate-m1-real-provider-profile validate-real-k8s-profile validate-vcluster-live-gate validate-vcluster-upgrade-live-gate validate-k8s-node-pool-live-gate validate-kubeovn-network-live-gate validate-kubevirt-vm-live-gate validate-reconcile-ha-live-gate validate-kms-sm4-live-gate validate-secrets-live-gate validate-storage-live-gate validate-gpu-inventory-live-gate validate-object-store-live-gate validate-vector-store-live-gate validate-instance-observability-live-gate validate-registry-harbor-live-gate validate-sprint13-b-track-production-shape validate-gateway-ratelimit validate-gateway-idempotency validate-adapter-resilience-timeout validate-resilience-faultinjection-live-gate validate-resilience-degradation validate-ha-failover-live-gate validate-readyz-dataplane-live-gate validate-sprint14-resilience-live-gate validate-core-installer validate-core-offline validate-core-cli validate-sprint7-core-regression validate-core-release-hardening validate-core-installer-live validate-core-offline-pack validate-core-doc-consistency validate-sprint8-core-release validate-core-release-evidence validate-sprint9-core-rc validate-sprint9-core-doc-consistency validate-sprint9-rc validate-core-artifact-manifest validate-core-version-policy validate-sprint10-final-readiness validate-sprint10-core-doc-consistency validate-sprint10-release-prep validate-sprint11-storage-disk-plan validate-sprint11-core-real-deployment validate-sprint11-rook-ceph-formal-deployment validate-sprint11-rook-ceph-live-deployment-result validate-sprint11-rook-ceph-vm-storage-smoke validate-sprint11-rook-ceph-reboot-resilience validate-sprint11-safe-completion validate-sprint11-core-doc-consistency validate-sprint11-real-deployment validate-demo-instances validate-core-alpha validate-network-alpha validate-storage-alpha validate-vector-alpha validate-workload-identity validate-core-dev-profile validate-sdk-alpha validate-sdk-beta validate-sdk-mock-smoke validate-sprint3-closure validate-sprint4-closure validate-spec-split validate-core-beta validate-core-api-compatibility validate-mock-a validate-doc-api validate-doc-entrypoints validate-auth-contract validate-auth-dex-smoke validate-auth-dex-production-gate validate-architecture \
+        validate-infra validate-gpu-preflight validate-gpu-contracts validate-runtime-contracts validate-instance-contracts validate-instance-planner validate-instance-renderer validate-instance-admission validate-instance-audit validate-instance-provider-dry-run validate-instance-provider-apply validate-instance-status-reconcile validate-instance-orchestrator validate-instance-store validate-instance-provider-adapter validate-instance-service validate-instance-lifecycle-ops validate-m1-e2e validate-kubernetes-provider-execution validate-kubernetes-rest-client validate-kubernetes-bootstrap-wiring validate-kubernetes-lifecycle-execution validate-kubernetes-ops-execution validate-m1-real-provider-profile validate-real-k8s-profile validate-vcluster-live-gate validate-vcluster-upgrade-live-gate validate-k8s-node-pool-live-gate validate-kubeovn-network-live-gate validate-kubevirt-vm-live-gate validate-reconcile-ha-live-gate validate-kms-sm4-live-gate validate-secrets-live-gate validate-storage-live-gate validate-gpu-inventory-live-gate validate-object-store-live-gate validate-vector-store-live-gate validate-instance-observability-live-gate validate-registry-harbor-live-gate validate-sprint13-b-track-production-shape validate-gateway-ratelimit validate-gateway-idempotency validate-gateway-metadata validate-gateway-metadata-p0 validate-gateway-metadata-p1 validate-gateway-metadata-p2 validate-gateway-metadata-p3 validate-adapter-resilience-timeout validate-resilience-faultinjection-live-gate validate-resilience-degradation validate-ha-failover-live-gate validate-readyz-dataplane-live-gate validate-sprint14-resilience-live-gate validate-core-installer validate-core-offline validate-core-cli validate-sprint7-core-regression validate-core-release-hardening validate-core-installer-live validate-core-offline-pack validate-core-doc-consistency validate-sprint8-core-release validate-core-release-evidence validate-sprint9-core-rc validate-sprint9-core-doc-consistency validate-sprint9-rc validate-core-artifact-manifest validate-core-version-policy validate-sprint10-final-readiness validate-sprint10-core-doc-consistency validate-sprint10-release-prep validate-sprint11-storage-disk-plan validate-sprint11-core-real-deployment validate-sprint11-rook-ceph-formal-deployment validate-sprint11-rook-ceph-live-deployment-result validate-sprint11-rook-ceph-vm-storage-smoke validate-sprint11-rook-ceph-reboot-resilience validate-sprint11-safe-completion validate-sprint11-core-doc-consistency validate-sprint11-real-deployment validate-demo-instances validate-core-alpha validate-network-alpha validate-storage-alpha validate-vector-alpha validate-workload-identity validate-core-dev-profile validate-sdk-alpha validate-sdk-beta validate-sdk-mock-smoke validate-sprint3-closure validate-sprint4-closure validate-spec-split validate-core-beta validate-core-api-compatibility validate-mock-a validate-doc-api validate-doc-entrypoints validate-auth-contract validate-auth-dex-smoke validate-auth-dex-production-gate validate-architecture \
         lint lint-go lint-python lint-ts \
         dev-gateway dev-console dev-core-mock \
         image image-gateway image-auth-service \
@@ -20,6 +20,7 @@ help:
 	@echo "    make deps-down      停止本地依赖服务"
 	@echo "    make deps-status    查看依赖服务状态"
 	@echo "    make deps-clean     停止并清除所有数据（危险）"
+	@echo "    make db-upgrade-gateway-metadata  已有 PG 卷补齐 Gateway 元数据表"
 	@echo ""
 	@echo "  代码生成:"
 	@echo "    make tools-proto    安装本地 Protobuf 生成插件"
@@ -169,6 +170,18 @@ deps-status:
 deps-clean:
 	@echo "⚠️  这将删除所有本地开发数据，是否确认？[y/N]" && read ans && [ $${ans:-N} = y ]
 	$(COMPOSE) down -v
+
+db-upgrade-gateway-metadata:
+	@test -n "$$DATABASE_URL" || (echo "❌ 请设置 DATABASE_URL，例如 postgres://ani:ani_dev_password@127.0.0.1:5432/ani?sslmode=disable" && exit 1)
+	@echo "→ 应用 Gateway 元数据 schema（幂等）..."
+	@if command -v psql >/dev/null 2>&1; then \
+		psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f deploy/postgres/gateway-metadata-schema.sql; \
+	elif docker ps --format '{{.Names}}' 2>/dev/null | grep -qx ani-postgres; then \
+		docker exec -i ani-postgres psql -U ani -d ani -v ON_ERROR_STOP=1 < deploy/postgres/gateway-metadata-schema.sql; \
+	else \
+		echo "❌ 需要本机 psql 或运行中的 ani-postgres 容器" && exit 1; \
+	fi
+	@echo "✅ Gateway metadata schema applied"
 
 # ── 代码生成 ──────────────────────────────────────────────────────────────────
 tools-proto:
@@ -590,6 +603,96 @@ validate-gateway-idempotency:
 	@echo "→ 校验 Sprint 14 R-P0-2 Gateway idempotency replay gate..."
 	$(GO_CACHE_ENV) go test ./services/ani-gateway/internal/middleware -run Idempotent -v
 	@echo "✅ Gateway idempotency replay gate valid"
+
+validate-gateway-metadata-p6-b3:
+	@echo "→ 校验 Gateway metadata persistence P6-B3 gate (Harbor pull secret Kubernetes apply)..."
+	python3 scripts/validate_gateway_metadata_p6_b3.py
+	python3 scripts/validate_gateway_metadata_p6_b3_test.py
+	python3 scripts/run_registry_harbor_live_gate_test.py
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestRegistryPullSecretKubernetesApplyService|TestKubernetesSecretProviderAdapterRendersDockerConfigSecretType' -v
+	$(GO_CACHE_ENV) go test ./pkg/adapters/registry -run 'TestHarborImageRegistryPullSecretMapsRobotState' -v
+	@echo "✅ Gateway metadata persistence P6-B3 gate valid"
+
+validate-gateway-metadata-p6-b2:
+	@echo "→ 校验 Gateway metadata persistence P6-B2 gate (Harbor artifact-track)..."
+	python3 scripts/validate_gateway_metadata_p6_b2.py
+	python3 scripts/validate_gateway_metadata_p6_b2_test.py
+	python3 scripts/validate_registry_harbor_live_gate_test.py
+	@echo "✅ Gateway metadata persistence P6-B2 gate valid"
+
+validate-gateway-metadata-p6-b1:
+	@echo "→ 校验 Gateway metadata persistence P6-B1 gate (in-cluster Harbor contract)..."
+	python3 scripts/validate_gateway_metadata_p6_b1.py
+	python3 scripts/validate_gateway_metadata_p6_b1_test.py
+	python3 scripts/validate_registry_harbor_live_gate.py
+	python3 scripts/validate_registry_harbor_live_gate_test.py
+	@echo "✅ Gateway metadata persistence P6-B1 gate valid"
+
+validate-gateway-metadata-p6-a4:
+	@echo "→ 校验 Gateway metadata persistence P6-A4 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataEncryptionKeyStoreUpsertsKey|TestMetadataEncryptionKeyStoreListKeysUsesTenantScopedQuery|TestLocalEncryptionServiceGetKeyReadsFromMetadataStore|TestLocalEncryptionServiceListKeysReadsFromMetadataStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayEncryptionServiceUsesMetadataStoreInLocalProfile' -v
+	@echo "✅ Gateway metadata persistence P6-A4 gate valid"
+
+validate-gateway-metadata-p6-a3:
+	@echo "→ 校验 Gateway metadata persistence P6-A3 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestObjectStoreBrandingServiceUploadsLightLogo|TestObjectStoreBrandingServiceRejectsMissingObjectStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayBrandingServiceWrapsObjectStoreWhenConfigured' -v
+	@echo "✅ Gateway metadata persistence P6-A3 gate valid"
+
+validate-gateway-metadata-p6-a2:
+	@echo "→ 校验 Gateway metadata persistence P6-A2 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataSecretStoreUpsertsSecret|TestMetadataSecretStoreListSecretsUsesTenantScopedQuery|TestMetadataSecretStoreUpsertsSecretBinding|TestLocalSecretServiceGetSecretReadsFromMetadataStore|TestLocalSecretServiceListSecretsReadsFromMetadataStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewaySecretServiceUsesMetadataStoreInLocalProfile' -v
+	@echo "✅ Gateway metadata persistence P6-A2 gate valid"
+
+validate-gateway-metadata-p6-a1:
+	@echo "→ 校验 Gateway metadata persistence P6-A1 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataK8sClusterStoreUpsertsCluster|TestMetadataK8sClusterStoreListClustersUsesTenantScopedQuery|TestMetadataK8sClusterStoreUpsertsNodePool|TestLocalK8sClusterServiceGetClusterReadsFromMetadataStore|TestLocalK8sClusterServiceListNodePoolsReadsFromMetadataStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayK8sClusterServiceUsesMetadataStoreInLocalProfile' -v
+	@echo "✅ Gateway metadata persistence P6-A1 gate valid"
+
+validate-gateway-metadata-p5:
+	@echo "→ 校验 Gateway metadata persistence P5 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataRegistryStoreUpsertsProject|TestMetadataRegistryStoreListProjects|TestMetadataRegistryStoreUpsertsRepositoryPermission|TestMetadataRegistryStoreUpsertsPullSecret' -v
+	$(GO_CACHE_ENV) go test ./pkg/adapters/registry -run 'TestPersistingImageRegistryCreateProjectPersistsMetadata|TestPersistingImageRegistryListProjectsReadsMetadataStore|TestPersistingImageRegistrySetPermissionPersistsMetadata' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayImageRegistryUsesMetadataStoreForLocalProfile|TestGatewayImageRegistryWrapsHarborWithMetadataStore' -v
+	@echo "✅ Gateway metadata persistence P5 gate valid"
+
+validate-gateway-metadata-p3:
+	@echo "→ 校验 Gateway metadata persistence P3 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataStorageStoreUpsertsBucket|TestMetadataStorageStoreGetBucket|TestLocalStorageServiceListStorageBuckets|TestMetadataStorageStoreUpsertsVolumeSnapshot|TestLocalStorageServiceListVolumeSnapshots|TestMetadataStorageStoreUpsertsFilesystemMountTarget|TestLocalStorageServiceListMountTargets' -v
+	@echo "✅ Gateway metadata persistence P3 gate valid"
+
+validate-gateway-metadata-p2:
+	@echo "→ 校验 Gateway metadata persistence P2 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataNetworkStoreListVPCs|TestLocalNetworkServiceGetVPCReadsFromMetadataStore|TestMetadataStorageStoreGetVolume|TestLocalStorageServiceGetVolumeReadsFromMetadataStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayNetworkServiceUsesMetadataStore|TestGatewayStorageServiceUsesMetadataStore' -v
+	@echo "✅ Gateway metadata persistence P2 gate valid"
+
+validate-gateway-metadata-p1:
+	@echo "→ 校验 Gateway metadata persistence P1 gate..."
+	$(GO_CACHE_ENV) go test ./pkg/adapters/runtime -run 'TestMetadataBrandingService|TestMetadataAsyncTaskService|TestMetadataMeteringService|TestMetadataVectorStoreMetadataStore|TestLocalVectorStoreServicePersistsCreateToMetadataStore' -v
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestGatewayP1ServiceFactories|TestGatewayVectorStoreServiceUsesMetadataStoreWithoutMilvusProvider' -v
+	@echo "✅ Gateway metadata persistence P1 gate valid"
+
+validate-gateway-metadata-p0:
+	@echo "→ 校验 Gateway metadata persistence P0 gate..."
+	$(GO_CACHE_ENV) go test ./services/ani-gateway -run 'TestConnectGatewayMetadataStore|TestGatewayNetworkServiceUsesMetadataStore|TestGatewayStorageServiceUsesMetadataStore' -v
+	@echo "✅ Gateway metadata persistence P0 gate valid"
+
+validate-gateway-metadata:
+	@echo "→ 校验 Gateway metadata persistence aggregate gate (P0–P5)..."
+	$(MAKE) validate-gateway-metadata-p0
+	$(MAKE) validate-gateway-metadata-p1
+	$(MAKE) validate-gateway-metadata-p2
+	$(MAKE) validate-gateway-metadata-p3
+	$(MAKE) validate-gateway-metadata-p5
+	$(MAKE) validate-gateway-metadata-p6-a1
+	$(MAKE) validate-gateway-metadata-p6-a2
+	$(MAKE) validate-gateway-metadata-p6-a3
+	$(MAKE) validate-gateway-metadata-p6-a4
+	@echo "✅ Gateway metadata persistence aggregate gate valid"
 
 validate-adapter-resilience-timeout:
 	@echo "→ 校验 Sprint 14 R-P0-3 adapter per-call timeout gate..."
