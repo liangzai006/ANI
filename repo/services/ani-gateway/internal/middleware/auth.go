@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/google/uuid"
+	"github.com/kubercloud/ani/pkg/types"
 )
 
 // Auth validates JWT Bearer tokens or API Keys.
@@ -33,10 +35,7 @@ func AuthWithClient(authClient AuthClient) app.HandlerFunc {
 			if userID == "" {
 				userID = "00000000-0000-0000-0000-000000000001"
 			}
-			c.Set("tenant_id", tenantID)
-			c.Set("user_id", userID)
-			c.Set("roles", []string{"tenant-admin"})
-			c.Next(ctx)
+			proceedWithTenant(ctx, c, tenantID, userID, []string{"tenant-admin"})
 			return
 		}
 
@@ -53,8 +52,7 @@ func AuthWithClient(authClient AuthClient) app.HandlerFunc {
 				respondError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or expired token")
 				return
 			}
-			setTenantContext(c, tenantCtx.GetTenantId(), tenantCtx.GetUserId(), tenantCtx.GetRoles())
-			c.Next(ctx)
+			proceedWithTenant(ctx, c, tenantCtx.GetTenantId(), tenantCtx.GetUserId(), tenantCtx.GetRoles())
 			return
 		}
 
@@ -70,8 +68,7 @@ func AuthWithClient(authClient AuthClient) app.HandlerFunc {
 				respondError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid api key")
 				return
 			}
-			setTenantContext(c, tenantCtx.GetTenantId(), tenantCtx.GetUserId(), tenantCtx.GetRoles())
-			c.Next(ctx)
+			proceedWithTenant(ctx, c, tenantCtx.GetTenantId(), tenantCtx.GetUserId(), tenantCtx.GetRoles())
 			return
 		}
 
@@ -83,6 +80,33 @@ func setTenantContext(c *app.RequestContext, tenantID, userID string, roles []st
 	c.Set("tenant_id", tenantID)
 	c.Set("user_id", userID)
 	c.Set("roles", roles)
+}
+
+func proceedWithTenant(ctx context.Context, c *app.RequestContext, tenantID, userID string, roles []string) {
+	setTenantContext(c, tenantID, userID, roles)
+	if tc, err := tenantContextFromIDs(tenantID, userID, roles); err == nil {
+		ctx = types.WithTenant(ctx, tc)
+	}
+	c.Next(ctx)
+}
+
+func tenantContextFromIDs(tenantID, userID string, roles []string) (*types.TenantContext, error) {
+	parsedTenantID, err := uuid.Parse(strings.TrimSpace(tenantID))
+	if err != nil || parsedTenantID == uuid.Nil {
+		return nil, err
+	}
+	var parsedUserID uuid.UUID
+	if strings.TrimSpace(userID) != "" {
+		parsedUserID, err = uuid.Parse(strings.TrimSpace(userID))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &types.TenantContext{
+		TenantID: parsedTenantID,
+		UserID:   parsedUserID,
+		Roles:    append([]string(nil), roles...),
+	}, nil
 }
 
 func isPublicPath(path string) bool {

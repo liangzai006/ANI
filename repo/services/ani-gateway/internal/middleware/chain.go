@@ -1,5 +1,5 @@
 // Package middleware registers the ANI Gateway middleware chain.
-// Execution order: RequestID → TLS → Auth → RBAC → RateLimit → Idempotency → Audit → Route
+// Execution order: RequestID → AccessLog → Auth → RBAC → RateLimit → Idempotency → Audit → Route
 package middleware
 
 import "github.com/cloudwego/hertz/pkg/app/server"
@@ -12,6 +12,7 @@ func Register(h *server.Hertz, store GatewayStore) {
 	authClient := NewAuthClientFromEnv()
 	h.Use(
 		RequestID(),
+		AccessLog(),
 		AuthWithClient(authClient),
 		RBACWithClient(authClient),
 		RateLimit(store),

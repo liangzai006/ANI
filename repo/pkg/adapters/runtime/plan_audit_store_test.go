@@ -31,7 +31,11 @@ type fakeMetadataTx struct {
 	execs        []string
 	queryRowSQL  string
 	queryRowArgs []any
-	row          fakeMetadataRow
+	querySQL      string
+	queryRows     []ports.Row
+	queryRowRows  []ports.Row
+	queryRowIndex int
+	row           ports.Row
 }
 
 func (tx *fakeMetadataTx) Exec(_ context.Context, sql string, args ...any) (ports.CommandTag, error) {
@@ -41,13 +45,19 @@ func (tx *fakeMetadataTx) Exec(_ context.Context, sql string, args ...any) (port
 	return ports.CommandTag{RowsAffected: 1}, nil
 }
 
-func (tx *fakeMetadataTx) Query(context.Context, string, ...any) (ports.Rows, error) {
-	return nil, ports.ErrUnsupported
+func (tx *fakeMetadataTx) Query(_ context.Context, sql string, _ ...any) (ports.Rows, error) {
+	tx.querySQL = sql
+	return &fakeMetadataRows{rows: tx.queryRows}, nil
 }
 
 func (tx *fakeMetadataTx) QueryRow(_ context.Context, sql string, args ...any) ports.Row {
 	tx.queryRowSQL = sql
 	tx.queryRowArgs = args
+	if len(tx.queryRowRows) > 0 && tx.queryRowIndex < len(tx.queryRowRows) {
+		row := tx.queryRowRows[tx.queryRowIndex]
+		tx.queryRowIndex++
+		return row
+	}
 	return tx.row
 }
 
@@ -66,6 +76,8 @@ func (r fakeMetadataRow) Scan(dest ...any) error {
 			*ptr = r.values[i].(string)
 		case *bool:
 			*ptr = r.values[i].(bool)
+		case *int64:
+			*ptr = r.values[i].(int64)
 		case *time.Time:
 			*ptr = r.values[i].(time.Time)
 		case *[]byte:
@@ -75,6 +87,30 @@ func (r fakeMetadataRow) Scan(dest ...any) error {
 		}
 	}
 	return nil
+}
+
+type fakeMetadataRows struct {
+	rows  []ports.Row
+	index int
+}
+
+func (r *fakeMetadataRows) Close() {}
+
+func (r *fakeMetadataRows) Err() error { return nil }
+
+func (r *fakeMetadataRows) Next() bool {
+	if r.index >= len(r.rows) {
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *fakeMetadataRows) Scan(dest ...any) error {
+	if r.index == 0 || r.index > len(r.rows) {
+		return ports.ErrNotFound
+	}
+	return r.rows[r.index-1].Scan(dest...)
 }
 
 func TestMetadataPlanAuditStoreRecordsPlan(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestGatewayVectorStoreServiceFromConfigDefaultsToRouterLocalService(t *testing.T) {
-	service, err := newGatewayVectorStoreService(gatewayVectorStoreRuntimeConfig{})
+	service, err := newGatewayVectorStoreService(gatewayVectorStoreRuntimeConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayVectorStoreService() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestGatewayVectorStoreServiceCanInjectMilvusBackend(t *testing.T) {
 		VectorStoreDatabase:         "ani",
 		VectorStoreCollectionPrefix: "ani_s13_",
 		VectorStoreHTTPClient:       client,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayVectorStoreService() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestGatewayVectorStoreConfigFromEnvIncludesMilvusProvider(t *testing.T) {
 }
 
 func TestGatewayVectorStoreServiceRejectsUnsupportedProvider(t *testing.T) {
-	if _, err := newGatewayVectorStoreService(gatewayVectorStoreRuntimeConfig{VectorStoreProvider: "memory"}); err == nil {
+	if _, err := newGatewayVectorStoreService(gatewayVectorStoreRuntimeConfig{VectorStoreProvider: "memory"}, nil); err == nil {
 		t.Fatal("newGatewayVectorStoreService() error = nil, want unsupported provider error")
 	}
 }

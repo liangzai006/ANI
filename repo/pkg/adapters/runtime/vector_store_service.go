@@ -16,6 +16,7 @@ type LocalVectorStoreService struct {
 	mu                sync.RWMutex
 	now               func() time.Time
 	backend           ports.VectorStore
+	metadataStore     ports.VectorStoreMetadataStore
 	stores            map[string]ports.VectorStoreRecord
 	idempotency       map[string]string
 	insertIdempotency map[string]ports.VectorStoreDocumentInsertResult
@@ -34,6 +35,12 @@ func WithVectorStoreServiceClock(now func() time.Time) VectorStoreServiceOption 
 func WithVectorStoreBackend(backend ports.VectorStore) VectorStoreServiceOption {
 	return func(service *LocalVectorStoreService) {
 		service.backend = backend
+	}
+}
+
+func WithVectorStoreMetadataStore(store ports.VectorStoreMetadataStore) VectorStoreServiceOption {
+	return func(service *LocalVectorStoreService) {
+		service.metadataStore = store
 	}
 }
 
@@ -103,10 +110,18 @@ func (s *LocalVectorStoreService) CreateVectorStore(ctx context.Context, request
 	defer s.mu.Unlock()
 	s.stores[record.StoreID] = record
 	s.idempotency[idemKey] = record.StoreID
+	if s.metadataStore != nil {
+		if err := s.metadataStore.UpsertVectorStore(ctx, record, idempotencyClientKey(idemKey)); err != nil {
+			return ports.VectorStoreRecord{}, err
+		}
+	}
 	return record, nil
 }
 
-func (s *LocalVectorStoreService) ListVectorStores(_ context.Context, request ports.VectorStoreResourceListRequest) ([]ports.VectorStoreRecord, error) {
+func (s *LocalVectorStoreService) ListVectorStores(ctx context.Context, request ports.VectorStoreResourceListRequest) ([]ports.VectorStoreRecord, error) {
+	if s.metadataStore != nil {
+		return s.metadataStore.ListVectorStores(ctx, request.TenantID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := make([]ports.VectorStoreRecord, 0, len(s.stores))
@@ -119,7 +134,10 @@ func (s *LocalVectorStoreService) ListVectorStores(_ context.Context, request po
 	return items, nil
 }
 
-func (s *LocalVectorStoreService) GetVectorStore(_ context.Context, request ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+func (s *LocalVectorStoreService) GetVectorStore(ctx context.Context, request ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+	if s.metadataStore != nil {
+		return s.metadataStore.GetVectorStore(ctx, request.TenantID, request.ResourceID)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	record, ok := s.stores[request.ResourceID]
@@ -129,7 +147,23 @@ func (s *LocalVectorStoreService) GetVectorStore(_ context.Context, request port
 	return record, nil
 }
 
-func (s *LocalVectorStoreService) DeleteVectorStore(_ context.Context, request ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+func (s *LocalVectorStoreService) DeleteVectorStore(ctx context.Context, request ports.VectorStoreResourceGetRequest) (ports.VectorStoreRecord, error) {
+	if s.metadataStore != nil {
+		record, err := s.metadataStore.GetVectorStore(ctx, request.TenantID, request.ResourceID)
+		if err != nil {
+			return ports.VectorStoreRecord{}, err
+		}
+		record.State = ports.VectorStoreDeleted
+		record.Reason = "deleted by local vector store profile"
+		record.UpdatedAt = s.now().UTC()
+		if err := s.metadataStore.UpsertVectorStore(ctx, record, ""); err != nil {
+			return ports.VectorStoreRecord{}, err
+		}
+		s.mu.Lock()
+		s.stores[record.StoreID] = record
+		s.mu.Unlock()
+		return record, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.stores[request.ResourceID]

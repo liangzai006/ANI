@@ -51,6 +51,12 @@ type KubernetesRESTClient struct {
 }
 
 func NewKubernetesRESTClient(config KubernetesRESTClientConfig) (*KubernetesRESTClient, error) {
+	resolved, _, err := ResolveKubernetesRESTClientConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	config = resolved
+
 	host, inCluster, err := kubernetesRESTHost(config)
 	if err != nil {
 		return nil, err

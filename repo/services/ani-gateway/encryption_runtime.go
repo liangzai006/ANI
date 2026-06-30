@@ -27,10 +27,14 @@ func gatewayEncryptionRuntimeConfigFromEnv() gatewayEncryptionRuntimeConfig {
 	}
 }
 
-func newGatewayEncryptionService(cfg gatewayEncryptionRuntimeConfig) (ports.EncryptionService, error) {
+func newGatewayEncryptionService(cfg gatewayEncryptionRuntimeConfig, metadata ports.MetadataStore) (ports.EncryptionService, error) {
+	options := gatewayEncryptionServiceOptions(metadata)
 	switch strings.TrimSpace(cfg.ProviderMode) {
 	case "", "local":
-		return nil, nil
+		if len(options) == 0 {
+			return nil, nil
+		}
+		return runtimeadapter.NewLocalEncryptionService(options...), nil
 	case "kms_sm4_http":
 		provider, err := runtimeadapter.NewKMSSM4HTTPEncryptionProvider(runtimeadapter.KMSEncryptionProviderConfig{
 			BaseURL:     cfg.KMSBaseURL,
@@ -41,10 +45,18 @@ func newGatewayEncryptionService(cfg gatewayEncryptionRuntimeConfig) (ports.Encr
 		if err != nil {
 			return nil, err
 		}
-		return runtimeadapter.NewLocalEncryptionService(
-			runtimeadapter.WithEncryptionProvider(provider),
-		), nil
+		options = append(options, runtimeadapter.WithEncryptionProvider(provider))
+		return runtimeadapter.NewLocalEncryptionService(options...), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported ENCRYPTION_PROVIDER_MODE %q", ports.ErrUnsupported, cfg.ProviderMode)
+	}
+}
+
+func gatewayEncryptionServiceOptions(metadata ports.MetadataStore) []runtimeadapter.EncryptionServiceOption {
+	if metadata == nil {
+		return nil
+	}
+	return []runtimeadapter.EncryptionServiceOption{
+		runtimeadapter.WithEncryptionResourceStore(runtimeadapter.NewMetadataEncryptionKeyStore(metadata)),
 	}
 }

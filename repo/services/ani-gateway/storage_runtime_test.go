@@ -11,7 +11,7 @@ import (
 )
 
 func TestGatewayStorageServiceFromConfigDefaultsToRouterLocalService(t *testing.T) {
-	service, err := newGatewayStorageService(gatewayStorageRuntimeConfig{})
+	service, err := newGatewayStorageService(gatewayStorageRuntimeConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayStorageService() error = %v", err)
 	}
@@ -21,15 +21,17 @@ func TestGatewayStorageServiceFromConfigDefaultsToRouterLocalService(t *testing.
 }
 
 func TestGatewayStorageServiceFromConfigUsesKubernetesProvider(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+
 	transport := &gatewayStorageRoundTripper{}
 	service, err := newGatewayStorageService(gatewayStorageRuntimeConfig{
 		ProviderMode:         "kubernetes_rest",
 		ProviderApply:        true,
 		ProviderUserID:       "ani-core-storage-provider",
 		ProviderProof:        "rbac-scope:storage.write",
-		KubernetesAPIHost:    "https://kubernetes.example.test",
 		KubernetesHTTPClient: &http.Client{Transport: transport},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayStorageService() error = %v", err)
 	}
@@ -64,10 +66,12 @@ func TestGatewayStorageServiceFromConfigUsesKubernetesProvider(t *testing.T) {
 }
 
 func TestGatewayStorageServiceRejectsKubernetesProviderWithoutProof(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+
 	if _, err := newGatewayStorageService(gatewayStorageRuntimeConfig{
-		ProviderMode:      "kubernetes_rest",
-		KubernetesAPIHost: "https://kubernetes.example.test",
-	}); err == nil {
+		ProviderMode: "kubernetes_rest",
+	}, nil); err == nil {
 		t.Fatalf("newGatewayStorageService() error = nil, want missing proof error")
 	}
 }
@@ -88,7 +92,7 @@ func TestGatewayStorageServiceCanInjectMinIOObjectStore(t *testing.T) {
 		ObjectStoreSecretAccessKey: "secret",
 		ObjectStoreBucketPrefix:    "ani-s13-",
 		ObjectStoreHTTPClient:      &http.Client{Transport: objectStoreTransport},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayStorageService() error = %v", err)
 	}
@@ -117,19 +121,12 @@ func TestGatewayStorageServiceCanInjectMinIOObjectStore(t *testing.T) {
 	}
 }
 
-func TestGatewayStorageConfigFromEnvIncludesInClusterKubernetesService(t *testing.T) {
+func TestGatewayStorageConfigFromEnvLoadsProviderMode(t *testing.T) {
 	t.Setenv("STORAGE_PROVIDER", "kubernetes_rest")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
-	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
 	cfg := gatewayStorageRuntimeConfigFromEnv()
-	if cfg.KubernetesServiceHost != "10.96.0.1" || cfg.KubernetesServicePort != "443" {
-		t.Fatalf("service host/port = %q/%q, want in-cluster Kubernetes service", cfg.KubernetesServiceHost, cfg.KubernetesServicePort)
-	}
-	if cfg.KubernetesServiceAccountTokenFile == "" || cfg.KubernetesServiceAccountCAFile == "" {
-		t.Fatalf("service account files not loaded from env: %#v", cfg)
+	if cfg.ProviderMode != "kubernetes_rest" {
+		t.Fatalf("provider mode = %q, want kubernetes_rest", cfg.ProviderMode)
 	}
 }
 

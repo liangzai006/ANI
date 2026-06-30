@@ -13,11 +13,13 @@ func TestGatewayInstanceObservabilityDefaultsToRouterLocalService(t *testing.T) 
 }
 
 func TestGatewayInstanceObservabilityCanInjectPrometheusProvider(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example")
+
 	observability, useName, err := newGatewayInstanceObservability(gatewayInstanceObservabilityRuntimeConfig{
-		Provider:          "prometheus_kubernetes",
-		PrometheusURL:     "http://prometheus.example:9090",
-		KubernetesAPIHost: "https://kubernetes.example",
-		ExecBaseURL:       "wss://gateway.example/api/v1",
+		Provider:      "prometheus_kubernetes",
+		PrometheusURL: "http://prometheus.example:9090",
+		ExecBaseURL:   "wss://gateway.example/api/v1",
 	})
 	if err != nil {
 		t.Fatalf("newGatewayInstanceObservability() error = %v", err)
@@ -37,9 +39,6 @@ func TestGatewayInstanceObservabilityConfigFromEnv(t *testing.T) {
 	cfg := gatewayInstanceObservabilityRuntimeConfigFromEnv()
 	if cfg.Provider != "prometheus_kubernetes" || cfg.PrometheusURL == "" || cfg.ExecBaseURL == "" {
 		t.Fatalf("instance observability env config not loaded: %#v", cfg)
-	}
-	if cfg.KubernetesServiceAccountTokenFile == "" || cfg.KubernetesServiceAccountCAFile == "" {
-		t.Fatalf("kubernetes service account files not loaded from env")
 	}
 }
 

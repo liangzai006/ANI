@@ -103,6 +103,7 @@ func TestLocalNetworkServicePersistsCreateAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVPC() error = %v", err)
 	}
+	tx.row = vpcFakeRow{record: vpc}
 	if _, err := service.DeleteVPC(context.Background(), ports.NetworkResourceGetRequest{
 		TenantID:   networkStoreTenantID,
 		ResourceID: vpc.VPCID,
@@ -176,4 +177,20 @@ func TestMetadataNetworkStoreUpdatesResourceState(t *testing.T) {
 	if got, want := tx.args[2], string(ports.NetworkResourceFailed); got != want {
 		t.Fatalf("state arg = %v, want %s", got, want)
 	}
+}
+
+type vpcFakeRow struct {
+	record ports.NetworkVPCRecord
+}
+
+func (r vpcFakeRow) Scan(dest ...any) error {
+	*dest[0].(*string) = r.record.TenantID
+	*dest[1].(*string) = r.record.VPCID
+	*dest[2].(*string) = r.record.Name
+	*dest[3].(*string) = r.record.CIDR
+	*dest[4].(*string) = string(r.record.State)
+	*dest[5].(*string) = r.record.Reason
+	*dest[6].(*time.Time) = r.record.CreatedAt
+	*dest[7].(*time.Time) = r.record.UpdatedAt
+	return nil
 }

@@ -215,6 +215,7 @@ func TestKubernetesRESTClientRejectsInClusterConfigWithoutServiceAccountToken(t 
 }
 
 func TestKubernetesRESTClientDoesNotReadAmbientInClusterEnvironment(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
 

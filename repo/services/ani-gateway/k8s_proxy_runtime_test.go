@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/kubercloud/ani/pkg/ports"
 )
 
@@ -22,19 +23,12 @@ func TestGatewayK8sClusterServiceFromConfigDefaultsToRouterLocalService(t *testi
 	}
 }
 
-func TestGatewayK8sClusterRuntimeConfigFromEnvIncludesInClusterKubernetesService(t *testing.T) {
-	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
-	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+func TestGatewayK8sClusterRuntimeConfigFromEnvLoadsProxyMode(t *testing.T) {
+	t.Setenv("K8S_CLUSTER_PROXY_MODE", "forwarding_static")
 
 	cfg := gatewayK8sClusterRuntimeConfigFromEnv()
-
-	if cfg.KubernetesServiceHost != "10.96.0.1" || cfg.KubernetesServicePort != "443" {
-		t.Fatalf("service host/port = %q/%q, want in-cluster Kubernetes service", cfg.KubernetesServiceHost, cfg.KubernetesServicePort)
-	}
-	if cfg.KubernetesServiceAccountTokenFile == "" || cfg.KubernetesServiceAccountCAFile == "" {
-		t.Fatalf("service account token/CA files = %q/%q, want configured files", cfg.KubernetesServiceAccountTokenFile, cfg.KubernetesServiceAccountCAFile)
+	if cfg.ProxyMode != "forwarding_static" {
+		t.Fatalf("proxy mode = %q, want forwarding_static", cfg.ProxyMode)
 	}
 }
 
@@ -250,6 +244,10 @@ func TestGatewayK8sClusterServiceFromConfigUsesVClusterHelmProvider(t *testing.T
 }
 
 func TestGatewayK8sClusterServiceFromConfigUsesClusterAPINodePoolProvider(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+	t.Setenv("KUBERNETES_PROVIDER_FIELD_MANAGER", "ani-test")
+
 	runner := &gatewayVClusterHelmRunner{}
 	var nodePoolPath string
 	var nodePoolBody map[string]any
@@ -266,8 +264,6 @@ func TestGatewayK8sClusterServiceFromConfigUsesClusterAPINodePoolProvider(t *tes
 	service, err := newGatewayK8sClusterService(gatewayK8sClusterRuntimeConfig{
 		ProviderMode:                          "vcluster_helm",
 		NodePoolProviderMode:                  "clusterapi_kubernetes_rest",
-		KubernetesAPIHost:                     "https://kubernetes.example.test",
-		KubernetesProviderManager:             "ani-test",
 		NodePoolMachineVersion:                "v1.36.1",
 		NodePoolBootstrapRefAPIVersion:        "bootstrap.cluster.x-k8s.io/v1beta1",
 		NodePoolBootstrapRefKind:              "KubeadmConfigTemplate",
@@ -417,16 +413,32 @@ func (tx gatewayK8sProxyMetadataTx) Exec(context.Context, string, ...any) (ports
 }
 
 func (tx gatewayK8sProxyMetadataTx) Query(context.Context, string, ...any) (ports.Rows, error) {
-	return nil, nil
+	return gatewayK8sClusterEmptyRows{}, nil
 }
 
-func (tx gatewayK8sProxyMetadataTx) QueryRow(context.Context, string, ...any) ports.Row {
+func (tx gatewayK8sProxyMetadataTx) QueryRow(_ context.Context, sql string, _ ...any) ports.Row {
+	if strings.Contains(sql, "k8s_clusters") || strings.Contains(sql, "k8s_cluster_node_pools") {
+		return gatewayK8sClusterNotFoundRow{}
+	}
 	return gatewayK8sProxyMetadataRow{target: tx.store.target}
 }
 
 type gatewayK8sProxyMetadataRow struct {
 	target ports.K8sClusterProxyTarget
 }
+
+type gatewayK8sClusterNotFoundRow struct{}
+
+func (gatewayK8sClusterNotFoundRow) Scan(...any) error {
+	return pgx.ErrNoRows
+}
+
+type gatewayK8sClusterEmptyRows struct{}
+
+func (gatewayK8sClusterEmptyRows) Close() {}
+func (gatewayK8sClusterEmptyRows) Err() error { return nil }
+func (gatewayK8sClusterEmptyRows) Next() bool { return false }
+func (gatewayK8sClusterEmptyRows) Scan(...any) error { return nil }
 
 func (r gatewayK8sProxyMetadataRow) Scan(dest ...any) error {
 	if len(dest) != 7 {

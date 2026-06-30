@@ -59,11 +59,22 @@ type tokenUsageReportResponse struct {
 }
 
 func newMeteringAPI() *meteringAPI {
-	return &meteringAPI{service: runtimeadapter.NewLocalMeteringService()}
+	return newMeteringAPIWithService(nil)
+}
+
+func newMeteringAPIWithService(service ports.MeteringService) *meteringAPI {
+	if service == nil {
+		service = runtimeadapter.NewLocalMeteringService()
+	}
+	return &meteringAPI{service: service}
 }
 
 func registerMetering(v1 *route.RouterGroup) {
-	api := newMeteringAPI()
+	registerMeteringWithService(v1, nil)
+}
+
+func registerMeteringWithService(v1 *route.RouterGroup, service ports.MeteringService) {
+	api := newMeteringAPIWithService(service)
 	v1.GET("/metering/usage", api.queryUsage)
 	v1.POST("/metering/token-usage", api.reportTokenUsage)
 }

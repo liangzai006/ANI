@@ -12,7 +12,8 @@ import (
 )
 
 type registryAPI struct {
-	service ports.ImageRegistry
+	service                   ports.ImageRegistry
+	pullSecretKubernetesApply ports.RegistryPullSecretKubernetesApply
 }
 
 type registryProjectListResponse struct {
@@ -103,6 +104,15 @@ type registryPullSecretResponse struct {
 	CreatedAt  string                 `json:"created_at"`
 }
 
+type registryPullSecretKubernetesApplyResponse struct {
+	registryPullSecretResponse
+	KubernetesSecretName string   `json:"kubernetes_secret_name"`
+	KubernetesNamespace  string   `json:"kubernetes_namespace"`
+	KubernetesApplied    bool     `json:"kubernetes_applied"`
+	ProviderRefs         []string `json:"provider_refs,omitempty"`
+	AppliedAt            string   `json:"applied_at"`
+}
+
 type registryScanResultResponse struct {
 	Image      string                 `json:"image"`
 	Status     string                 `json:"status"`
@@ -131,28 +141,29 @@ type registryProjectScanReportResponse struct {
 }
 
 func newRegistryAPI() *registryAPI {
-	return newRegistryAPIWithService(nil)
+	return newRegistryAPIWithService(nil, nil)
 }
 
-func newRegistryAPIWithService(service ports.ImageRegistry) *registryAPI {
+func newRegistryAPIWithService(service ports.ImageRegistry, pullSecretKubernetesApply ports.RegistryPullSecretKubernetesApply) *registryAPI {
 	if service == nil {
 		service = registryadapter.NewLocalImageRegistry()
 	}
-	return &registryAPI{service: service}
+	return &registryAPI{service: service, pullSecretKubernetesApply: pullSecretKubernetesApply}
 }
 
 func registerHarbor(v1 *route.RouterGroup) {
-	registerHarborWithService(v1, nil)
+	registerHarborWithService(v1, nil, nil)
 }
 
-func registerHarborWithService(v1 *route.RouterGroup, service ports.ImageRegistry) {
-	api := newRegistryAPIWithService(service)
+func registerHarborWithService(v1 *route.RouterGroup, service ports.ImageRegistry, pullSecretKubernetesApply ports.RegistryPullSecretKubernetesApply) {
+	api := newRegistryAPIWithService(service, pullSecretKubernetesApply)
 	v1.GET("/registry/projects", api.listProjects)
 	v1.POST("/registry/projects", api.createProject)
 	v1.GET("/registry/projects/:project/repositories", api.listRepositories)
 	v1.GET("/registry/projects/:project/repositories/:repository/artifacts", api.listArtifacts)
 	v1.POST("/registry/projects/:project/repositories/:repository/permissions", api.setPermission)
 	v1.POST("/registry/projects/:project/pull-secret", api.createPullSecret)
+	v1.POST("/registry/projects/:project/pull-secret/kubernetes-apply", api.applyPullSecretToKubernetes)
 	v1.GET("/registry/projects/:project/scan-report", api.getProjectScanReport)
 	v1.GET("/registry/images/scan-result", api.getScanResult)
 }
@@ -261,6 +272,30 @@ func (api *registryAPI) createPullSecret(ctx context.Context, c *app.RequestCont
 		return
 	}
 	c.JSON(http.StatusCreated, registryPullSecretFromRecord(secret))
+}
+
+func (api *registryAPI) applyPullSecretToKubernetes(ctx context.Context, c *app.RequestContext) {
+	if api.pullSecretKubernetesApply == nil {
+		writeRegistryError(c, ports.ErrNotConfigured)
+		return
+	}
+	var req createRegistryPullSecretRequest
+	if err := c.BindJSON(&req); err != nil {
+		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", "invalid registry pull secret kubernetes apply request")
+		return
+	}
+	result, err := api.pullSecretKubernetesApply.ApplyPullSecretToKubernetes(ctx, ports.RegistryPullSecretKubernetesApplyRequest{
+		TenantID:       demoTenantID(c),
+		Project:        c.Param("project"),
+		IdempotencyKey: req.IdempotencyKey,
+		Name:           req.Name,
+		Namespace:      req.Namespace,
+	})
+	if err != nil {
+		writeRegistryError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, registryPullSecretKubernetesApplyFromResult(result))
 }
 
 func (api *registryAPI) getProjectScanReport(ctx context.Context, c *app.RequestContext) {
@@ -373,6 +408,17 @@ func registryPullSecretFromRecord(record ports.RegistryPullSecret) registryPullS
 	}
 }
 
+func registryPullSecretKubernetesApplyFromResult(result ports.RegistryPullSecretKubernetesApplyResult) registryPullSecretKubernetesApplyResponse {
+	return registryPullSecretKubernetesApplyResponse{
+		registryPullSecretResponse: registryPullSecretFromRecord(result.RegistryPullSecret),
+		KubernetesSecretName:       result.KubernetesSecretName,
+		KubernetesNamespace:        result.KubernetesNamespace,
+		KubernetesApplied:          result.KubernetesApplied,
+		ProviderRefs:               append([]string(nil), result.ProviderRefs...),
+		AppliedAt:                  networkTime(result.AppliedAt),
+	}
+}
+
 func registryScanResultFromRecord(record ports.RegistryScanResult) registryScanResultResponse {
 	return registryScanResultResponse{
 		Image:      record.Image,
@@ -408,6 +454,8 @@ func writeRegistryError(c *app.RequestContext, err error) {
 	switch {
 	case errors.Is(err, ports.ErrInvalid):
 		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	case errors.Is(err, ports.ErrConflict):
+		writeDemoError(c, http.StatusConflict, "CONFLICT", err.Error())
 	case errors.Is(err, ports.ErrNotConfigured):
 		writeDemoError(c, http.StatusNotImplemented, "NOT_IMPLEMENTED", err.Error())
 	default:

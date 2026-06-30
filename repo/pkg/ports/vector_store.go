@@ -119,3 +119,9 @@ type VectorStoreService interface {
 	SearchVectorStore(ctx context.Context, request VectorStoreResourceSearchRequest) ([]VectorSearchResult, error)
 	InsertDocuments(ctx context.Context, request VectorStoreDocumentInsertRequest) (VectorStoreDocumentInsertResult, error)
 }
+
+type VectorStoreMetadataStore interface {
+	UpsertVectorStore(ctx context.Context, record VectorStoreRecord, idempotencyKey string) error
+	ListVectorStores(ctx context.Context, tenantID string) ([]VectorStoreRecord, error)
+	GetVectorStore(ctx context.Context, tenantID string, storeID string) (VectorStoreRecord, error)
+}

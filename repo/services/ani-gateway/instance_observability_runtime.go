@@ -11,31 +11,17 @@ import (
 )
 
 type gatewayInstanceObservabilityRuntimeConfig struct {
-	Provider                          string
-	PrometheusURL                     string
-	ExecBaseURL                       string
-	KubernetesAPIHost                 string
-	KubernetesServiceHost             string
-	KubernetesServicePort             string
-	KubernetesBearerToken             string
-	KubernetesServiceAccountTokenFile string
-	KubernetesServiceAccountCAFile    string
-	KubernetesFieldManager            string
-	HTTPClient                        *http.Client
+	Provider      string
+	PrometheusURL string
+	ExecBaseURL   string
+	HTTPClient    *http.Client
 }
 
 func gatewayInstanceObservabilityRuntimeConfigFromEnv() gatewayInstanceObservabilityRuntimeConfig {
 	return gatewayInstanceObservabilityRuntimeConfig{
-		Provider:                          os.Getenv("INSTANCE_OBSERVABILITY_PROVIDER"),
-		PrometheusURL:                     os.Getenv("INSTANCE_OBSERVABILITY_PROMETHEUS_URL"),
-		ExecBaseURL:                       os.Getenv("INSTANCE_OBSERVABILITY_EXEC_BASE_URL"),
-		KubernetesAPIHost:                 os.Getenv("KUBERNETES_API_HOST"),
-		KubernetesServiceHost:             os.Getenv("KUBERNETES_SERVICE_HOST"),
-		KubernetesServicePort:             os.Getenv("KUBERNETES_SERVICE_PORT"),
-		KubernetesBearerToken:             os.Getenv("KUBERNETES_BEARER_TOKEN"),
-		KubernetesServiceAccountTokenFile: os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
-		KubernetesServiceAccountCAFile:    os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
-		KubernetesFieldManager:            os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
+		Provider:      os.Getenv("INSTANCE_OBSERVABILITY_PROVIDER"),
+		PrometheusURL: os.Getenv("INSTANCE_OBSERVABILITY_PROMETHEUS_URL"),
+		ExecBaseURL:   os.Getenv("INSTANCE_OBSERVABILITY_EXEC_BASE_URL"),
 	}
 }
 
@@ -44,15 +30,16 @@ func newGatewayInstanceObservability(cfg gatewayInstanceObservabilityRuntimeConf
 	case "", "local", "not_configured":
 		return nil, false, nil
 	case "prometheus_kubernetes":
+		k8s := gatewayKubernetesRESTClientConfig(cfg.HTTPClient, 0)
 		observability, err := runtimeadapter.NewPrometheusInstanceObservability(runtimeadapter.PrometheusInstanceObservabilityConfig{
 			PrometheusURL:                     cfg.PrometheusURL,
-			KubernetesAPIHost:                 cfg.KubernetesAPIHost,
-			KubernetesServiceHost:             cfg.KubernetesServiceHost,
-			KubernetesServicePort:             cfg.KubernetesServicePort,
-			KubernetesBearerToken:             cfg.KubernetesBearerToken,
-			KubernetesServiceAccountTokenFile: cfg.KubernetesServiceAccountTokenFile,
-			KubernetesServiceAccountCAFile:    cfg.KubernetesServiceAccountCAFile,
-			KubernetesFieldManager:            cfg.KubernetesFieldManager,
+			KubernetesAPIHost:                 k8s.Host,
+			KubernetesServiceHost:             k8s.ServiceHost,
+			KubernetesServicePort:             k8s.ServicePort,
+			KubernetesBearerToken:             k8s.BearerToken,
+			KubernetesServiceAccountTokenFile: k8s.BearerTokenFile,
+			KubernetesServiceAccountCAFile:    k8s.CAFile,
+			KubernetesFieldManager:            k8s.FieldManager,
 			ExecBaseURL:                       cfg.ExecBaseURL,
 			HTTPClient:                        cfg.HTTPClient,
 		})

@@ -12,55 +12,43 @@ import (
 )
 
 type gatewaySecretRuntimeConfig struct {
-	ProviderMode                      string
-	KubernetesAPIHost                 string
-	KubernetesServiceHost             string
-	KubernetesServicePort             string
-	KubernetesBearerToken             string
-	KubernetesServiceAccountTokenFile string
-	KubernetesServiceAccountCAFile    string
-	KubernetesProviderManager         string
-	HTTPClient                        *http.Client
-	KubernetesRequestTimeout          time.Duration
+	ProviderMode             string
+	KubernetesHTTPClient     *http.Client
+	KubernetesRequestTimeout time.Duration
 }
 
 func gatewaySecretRuntimeConfigFromEnv() gatewaySecretRuntimeConfig {
 	return gatewaySecretRuntimeConfig{
-		ProviderMode:                      os.Getenv("SECRET_PROVIDER_MODE"),
-		KubernetesAPIHost:                 os.Getenv("KUBERNETES_API_HOST"),
-		KubernetesServiceHost:             os.Getenv("KUBERNETES_SERVICE_HOST"),
-		KubernetesServicePort:             os.Getenv("KUBERNETES_SERVICE_PORT"),
-		KubernetesBearerToken:             os.Getenv("KUBERNETES_BEARER_TOKEN"),
-		KubernetesServiceAccountTokenFile: os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
-		KubernetesServiceAccountCAFile:    os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
-		KubernetesProviderManager:         os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
-		KubernetesRequestTimeout:          gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
+		ProviderMode:             os.Getenv("SECRET_PROVIDER_MODE"),
+		KubernetesRequestTimeout: gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 	}
 }
 
-func newGatewaySecretService(cfg gatewaySecretRuntimeConfig) (ports.SecretService, error) {
+func newGatewaySecretService(cfg gatewaySecretRuntimeConfig, metadata ports.MetadataStore) (ports.SecretService, error) {
+	options := gatewaySecretServiceOptions(metadata)
 	switch strings.TrimSpace(cfg.ProviderMode) {
 	case "", "local":
-		return nil, nil
+		if len(options) == 0 {
+			return nil, nil
+		}
+		return runtimeadapter.NewLocalSecretService(options...), nil
 	case "kubernetes_rest":
-		client, err := runtimeadapter.NewKubernetesRESTClient(runtimeadapter.KubernetesRESTClientConfig{
-			Host:            cfg.KubernetesAPIHost,
-			ServiceHost:     cfg.KubernetesServiceHost,
-			ServicePort:     cfg.KubernetesServicePort,
-			BearerToken:     cfg.KubernetesBearerToken,
-			BearerTokenFile: cfg.KubernetesServiceAccountTokenFile,
-			CAFile:          cfg.KubernetesServiceAccountCAFile,
-			FieldManager:    cfg.KubernetesProviderManager,
-			HTTPClient:      cfg.HTTPClient,
-			RequestTimeout:  cfg.KubernetesRequestTimeout,
-		})
+		client, err := newGatewayKubernetesRESTClient(cfg.KubernetesHTTPClient, cfg.KubernetesRequestTimeout)
 		if err != nil {
 			return nil, err
 		}
-		return runtimeadapter.NewLocalSecretService(
-			runtimeadapter.WithSecretProviderApply(runtimeadapter.NewKubernetesSecretProviderAdapter(client)),
-		), nil
+		options = append(options, runtimeadapter.WithSecretProviderApply(runtimeadapter.NewKubernetesSecretProviderAdapter(client)))
+		return runtimeadapter.NewLocalSecretService(options...), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported SECRET_PROVIDER_MODE %q", ports.ErrUnsupported, cfg.ProviderMode)
+	}
+}
+
+func gatewaySecretServiceOptions(metadata ports.MetadataStore) []runtimeadapter.SecretServiceOption {
+	if metadata == nil {
+		return nil
+	}
+	return []runtimeadapter.SecretServiceOption{
+		runtimeadapter.WithSecretResourceStore(runtimeadapter.NewMetadataSecretStore(metadata)),
 	}
 }

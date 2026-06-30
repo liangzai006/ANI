@@ -55,10 +55,11 @@ type Config struct {
 	VectorStoreCollectionPrefix string
 
 	RegistryProvider string
-	RegistryEndpoint string
-	RegistryUsername string
-	RegistryPassword string
-	RegistrySecure   bool
+	RegistryEndpoint   string
+	RegistryUsername   string
+	RegistryPassword   string
+	RegistrySecure     bool
+	RegistryTLSInsecure bool
 
 	WorkloadProvider                   string
 	WorkloadProviderApplyEnabled       bool
@@ -308,6 +309,9 @@ func (c Config) withEnvironmentOverrides() Config {
 	}
 	if value := os.Getenv("REGISTRY_SECURE"); value != "" {
 		c.RegistrySecure = parseBool(value)
+	}
+	if value := os.Getenv("REGISTRY_TLS_INSECURE"); value != "" {
+		c.RegistryTLSInsecure = parseBool(value)
 	}
 	if value := os.Getenv("WORKLOAD_RECONCILE_CONTROLLER_ENABLED"); value != "" {
 		c.WorkloadReconcileControllerEnabled = parseBool(value)

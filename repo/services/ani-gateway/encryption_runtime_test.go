@@ -34,7 +34,7 @@ func TestGatewayEncryptionServiceFromConfigUsesKMSHTTPProvider(t *testing.T) {
 		KMSBaseURL:     "https://kms.example.test",
 		KMSBearerToken: "kms-token",
 		HTTPClient:     &http.Client{Transport: transport},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayEncryptionService() error = %v", err)
 	}
@@ -81,7 +81,7 @@ func TestGatewayEncryptionServiceFromConfigUsesKMSHTTPProvider(t *testing.T) {
 }
 
 func TestGatewayEncryptionServiceFromConfigRejectsInvalidProvider(t *testing.T) {
-	if _, err := newGatewayEncryptionService(gatewayEncryptionRuntimeConfig{ProviderMode: "unknown"}); err == nil {
+	if _, err := newGatewayEncryptionService(gatewayEncryptionRuntimeConfig{ProviderMode: "unknown"}, nil); err == nil {
 		t.Fatalf("newGatewayEncryptionService() error = nil, want unsupported provider error")
 	}
 }

@@ -19,13 +19,6 @@ type gatewayK8sClusterRuntimeConfig struct {
 	ProxyMode                               string
 	ProviderMode                            string
 	NodePoolProviderMode                    string
-	KubernetesAPIHost                       string
-	KubernetesServiceHost                   string
-	KubernetesServicePort                   string
-	KubernetesBearerToken                   string
-	KubernetesServiceAccountTokenFile       string
-	KubernetesServiceAccountCAFile          string
-	KubernetesProviderManager               string
 	KubernetesRequestTimeout                time.Duration
 	TargetServer                            string
 	TargetBearerToken                       string
@@ -59,13 +52,6 @@ func gatewayK8sClusterRuntimeConfigFromEnv() gatewayK8sClusterRuntimeConfig {
 		ProxyMode:                               os.Getenv("K8S_CLUSTER_PROXY_MODE"),
 		ProviderMode:                            os.Getenv("K8S_CLUSTER_PROVIDER_MODE"),
 		NodePoolProviderMode:                    os.Getenv("K8S_CLUSTER_NODE_POOL_PROVIDER_MODE"),
-		KubernetesAPIHost:                       os.Getenv("KUBERNETES_API_HOST"),
-		KubernetesServiceHost:                   os.Getenv("KUBERNETES_SERVICE_HOST"),
-		KubernetesServicePort:                   os.Getenv("KUBERNETES_SERVICE_PORT"),
-		KubernetesBearerToken:                   os.Getenv("KUBERNETES_BEARER_TOKEN"),
-		KubernetesServiceAccountTokenFile:       os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
-		KubernetesServiceAccountCAFile:          os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
-		KubernetesProviderManager:               os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
 		KubernetesRequestTimeout:                gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
 		TargetServer:                            os.Getenv("K8S_CLUSTER_PROXY_TARGET_SERVER"),
 		TargetBearerToken:                       os.Getenv("K8S_CLUSTER_PROXY_BEARER_TOKEN"),
@@ -129,6 +115,9 @@ func newGatewayK8sClusterService(cfg gatewayK8sClusterRuntimeConfig) (ports.K8sC
 		if strings.TrimSpace(cfg.ProviderMode) != "" && strings.TrimSpace(cfg.ProviderMode) != "local" {
 			return newGatewayK8sClusterBaseService(cfg, metadataTargetStore)
 		}
+		if cfg.MetadataStore != nil {
+			return newGatewayK8sClusterBaseService(cfg, metadataTargetStore)
+		}
 		return nil, nil
 	case "forwarding_static":
 		if strings.TrimSpace(cfg.TargetServer) == "" {
@@ -177,6 +166,9 @@ func newGatewayK8sClusterBaseService(cfg gatewayK8sClusterRuntimeConfig, targetS
 	if targetStore != nil {
 		options = append(options, runtimeadapter.WithK8sClusterProxyTargetStore(targetStore))
 	}
+	if cfg.MetadataStore != nil {
+		options = append(options, runtimeadapter.WithK8sClusterResourceStore(runtimeadapter.NewMetadataK8sClusterStore(cfg.MetadataStore)))
+	}
 	nodePoolProvider, err := newGatewayK8sClusterNodePoolProvider(cfg)
 	if err != nil {
 		return nil, err
@@ -211,17 +203,7 @@ func newGatewayK8sClusterNodePoolProvider(cfg gatewayK8sClusterRuntimeConfig) (p
 	case "", "local":
 		return nil, nil
 	case "clusterapi_kubernetes_rest":
-		client, err := runtimeadapter.NewKubernetesRESTClient(runtimeadapter.KubernetesRESTClientConfig{
-			Host:            cfg.KubernetesAPIHost,
-			ServiceHost:     cfg.KubernetesServiceHost,
-			ServicePort:     cfg.KubernetesServicePort,
-			BearerToken:     cfg.KubernetesBearerToken,
-			BearerTokenFile: cfg.KubernetesServiceAccountTokenFile,
-			CAFile:          cfg.KubernetesServiceAccountCAFile,
-			FieldManager:    cfg.KubernetesProviderManager,
-			HTTPClient:      cfg.HTTPClient,
-			RequestTimeout:  cfg.KubernetesRequestTimeout,
-		})
+		client, err := newGatewayKubernetesRESTClient(cfg.HTTPClient, cfg.KubernetesRequestTimeout)
 		if err != nil {
 			return nil, err
 		}

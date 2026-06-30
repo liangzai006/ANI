@@ -98,6 +98,7 @@ func TestLocalStorageServicePersistsCreateAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateVolume() error = %v", err)
 	}
+	tx.row = volumeFakeRow{record: volume}
 	if _, err := service.DeleteVolume(context.Background(), ports.StorageResourceGetRequest{
 		TenantID:   storageStoreTenantID,
 		ResourceID: volume.VolumeID,
@@ -135,4 +136,21 @@ func TestMetadataStorageStoreUpdatesResourceState(t *testing.T) {
 	if got, want := tx.args[2], string(ports.StorageResourceFailed); got != want {
 		t.Fatalf("state arg = %v, want %s", got, want)
 	}
+}
+
+type volumeFakeRow struct {
+	record ports.StorageVolumeRecord
+}
+
+func (r volumeFakeRow) Scan(dest ...any) error {
+	*dest[0].(*string) = r.record.TenantID
+	*dest[1].(*string) = r.record.VolumeID
+	*dest[2].(*string) = r.record.Name
+	*dest[3].(*int64) = r.record.SizeGiB
+	*dest[4].(*string) = r.record.StorageClass
+	*dest[5].(*string) = string(r.record.State)
+	*dest[6].(*string) = r.record.Reason
+	*dest[7].(*time.Time) = r.record.CreatedAt
+	*dest[8].(*time.Time) = r.record.UpdatedAt
+	return nil
 }

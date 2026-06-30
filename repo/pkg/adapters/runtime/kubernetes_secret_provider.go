@@ -72,17 +72,18 @@ func validateSecretProviderApplyRequest(request ports.SecretProviderApplyRequest
 }
 
 func renderKubernetesSecretManifest(request ports.SecretProviderApplyRequest) (ports.WorkloadManifest, error) {
-	secretType := request.Type
-	if secretType == "" || strings.EqualFold(secretType, "opaque") {
-		secretType = "Opaque"
-	}
+	secretType := normalizeKubernetesSecretType(request.Type)
 	name := request.SecretID
+	namespace := strings.TrimSpace(request.Namespace)
+	if namespace == "" {
+		namespace = tenantNamespace(request.TenantID)
+	}
 	doc := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
 		"metadata": map[string]any{
 			"name":      name,
-			"namespace": tenantNamespace(request.TenantID),
+			"namespace": namespace,
 			"labels": map[string]string{
 				"app.kubernetes.io/managed-by": "ani-core",
 				"ani.kubercloud.io/secret-id":  request.SecretID,
@@ -101,6 +102,19 @@ func renderKubernetesSecretManifest(request ports.SecretProviderApplyRequest) (p
 		Name:     name,
 		Content:  string(content),
 	}, nil
+}
+
+func normalizeKubernetesSecretType(secretType string) string {
+	switch strings.ToLower(strings.TrimSpace(secretType)) {
+	case "dockerconfigjson", "kubernetes.io/dockerconfigjson":
+		return "kubernetes.io/dockerconfigjson"
+	case "tls", "kubernetes.io/tls":
+		return "kubernetes.io/tls"
+	case "", "opaque":
+		return "Opaque"
+	default:
+		return secretType
+	}
 }
 
 var _ ports.SecretProviderApply = (*KubernetesSecretProviderAdapter)(nil)

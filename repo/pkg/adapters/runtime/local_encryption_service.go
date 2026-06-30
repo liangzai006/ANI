@@ -26,6 +26,7 @@ type localEncryptionService struct {
 	revokeIdem   map[string]ports.EncryptionKeyRecord
 	sealIdem     map[string]ports.EncryptionSealRecord
 	provider     ports.EncryptionProvider
+	store        ports.EncryptionKeyResourceStore
 }
 
 type EncryptionServiceOption func(*localEncryptionService)
@@ -33,6 +34,12 @@ type EncryptionServiceOption func(*localEncryptionService)
 func WithEncryptionProvider(provider ports.EncryptionProvider) EncryptionServiceOption {
 	return func(service *localEncryptionService) {
 		service.provider = provider
+	}
+}
+
+func WithEncryptionResourceStore(store ports.EncryptionKeyResourceStore) EncryptionServiceOption {
+	return func(service *localEncryptionService) {
+		service.store = store
 	}
 }
 
@@ -51,11 +58,18 @@ func NewLocalEncryptionService(options ...EncryptionServiceOption) ports.Encrypt
 }
 
 func (s *localEncryptionService) CreateKey(ctx context.Context, req ports.EncryptionKeyCreateRequest) (ports.EncryptionKeyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TenantID == "" || req.Name == "" || req.IdempotencyKey == "" {
 		return ports.EncryptionKeyRecord{}, fmt.Errorf("%w: tenant_id/name/idempotency_key required", ports.ErrInvalid)
 	}
+	if s.store != nil {
+		if existing, err := s.store.GetEncryptionKeyByIdempotency(ctx, req.TenantID, req.IdempotencyKey); err == nil {
+			return existing, nil
+		} else if err != ports.ErrNotFound {
+			return ports.EncryptionKeyRecord{}, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	key := req.TenantID + ":" + req.IdempotencyKey
 	if id, ok := s.idem[key]; ok {
 		return s.byID[id], nil
@@ -83,18 +97,20 @@ func (s *localEncryptionService) CreateKey(ctx context.Context, req ports.Encryp
 	}
 	s.byID[rec.KeyID] = rec
 	s.idem[key] = rec.KeyID
-	return rec, nil
-}
-func (s *localEncryptionService) GetKey(_ context.Context, req ports.EncryptionKeyGetRequest) (ports.EncryptionKeyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.byID[req.KeyID]
-	if !ok || rec.TenantID != req.TenantID {
-		return ports.EncryptionKeyRecord{}, ports.ErrNotFound
+	if err := s.upsertEncryptionKey(ctx, rec, req.IdempotencyKey); err != nil {
+		delete(s.byID, rec.KeyID)
+		delete(s.idem, key)
+		return ports.EncryptionKeyRecord{}, err
 	}
 	return rec, nil
 }
-func (s *localEncryptionService) ListKeys(_ context.Context, req ports.EncryptionKeyListRequest) ([]ports.EncryptionKeyRecord, error) {
+func (s *localEncryptionService) GetKey(ctx context.Context, req ports.EncryptionKeyGetRequest) (ports.EncryptionKeyRecord, error) {
+	return s.getKeyRecord(ctx, req.TenantID, req.KeyID)
+}
+func (s *localEncryptionService) ListKeys(ctx context.Context, req ports.EncryptionKeyListRequest) ([]ports.EncryptionKeyRecord, error) {
+	if s.store != nil {
+		return s.store.ListEncryptionKeys(ctx, req.TenantID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []ports.EncryptionKeyRecord{}
@@ -107,6 +123,35 @@ func (s *localEncryptionService) ListKeys(_ context.Context, req ports.Encryptio
 	return out, nil
 }
 func (s *localEncryptionService) DeleteKey(ctx context.Context, req ports.EncryptionKeyGetRequest) (ports.EncryptionKeyRecord, error) {
+	if s.store != nil {
+		rec, err := s.getKeyRecord(ctx, req.TenantID, req.KeyID)
+		if err != nil {
+			return ports.EncryptionKeyRecord{}, err
+		}
+		if s.provider != nil {
+			result, err := s.provider.DeleteKeyMaterial(ctx, ports.EncryptionProviderDeleteKeyRequest{
+				TenantID:  rec.TenantID,
+				KeyID:     rec.KeyID,
+				Algorithm: rec.Algorithm,
+			})
+			if err != nil {
+				return ports.EncryptionKeyRecord{}, err
+			}
+			if !result.Applied {
+				return ports.EncryptionKeyRecord{}, fmt.Errorf("%w: encryption provider did not delete key material", ports.ErrNotConfigured)
+			}
+			rec = encryptionKeyWithProviderEvidence(rec, result)
+		}
+		rec.State = "deleted"
+		rec.UpdatedAt = time.Now().Unix()
+		if err := s.upsertEncryptionKey(ctx, rec, ""); err != nil {
+			return ports.EncryptionKeyRecord{}, err
+		}
+		s.mu.Lock()
+		s.byID[req.KeyID] = rec
+		s.mu.Unlock()
+		return rec, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.byID[req.KeyID]
@@ -143,9 +188,15 @@ func (s *localEncryptionService) RotateKey(ctx context.Context, req ports.Encryp
 	if rec, ok := s.rotationIdem[idemKey]; ok {
 		return rec, nil
 	}
-	current, err := s.requireActiveKey(req.TenantID, req.KeyID)
+	s.mu.Unlock()
+	current, err := s.requireActiveKey(ctx, req.TenantID, req.KeyID)
 	if err != nil {
+		s.mu.Lock()
 		return ports.EncryptionKeyRotationRecord{}, err
+	}
+	s.mu.Lock()
+	if rec, ok := s.rotationIdem[idemKey]; ok {
+		return rec, nil
 	}
 	now := time.Now().Unix()
 	previous := current
@@ -189,22 +240,35 @@ func (s *localEncryptionService) RotateKey(ctx context.Context, req ports.Encryp
 		RotatedAt:   now,
 	}
 	s.rotationIdem[idemKey] = rec
+	if err := s.upsertEncryptionKey(ctx, previous, ""); err != nil {
+		delete(s.rotationIdem, idemKey)
+		delete(s.byID, rotated.KeyID)
+		s.byID[current.KeyID] = current
+		return ports.EncryptionKeyRotationRecord{}, err
+	}
+	if err := s.upsertEncryptionKey(ctx, rotated, ""); err != nil {
+		delete(s.rotationIdem, idemKey)
+		delete(s.byID, rotated.KeyID)
+		s.byID[current.KeyID] = current
+		return ports.EncryptionKeyRotationRecord{}, err
+	}
 	return rec, nil
 }
 
 func (s *localEncryptionService) RevokeKey(ctx context.Context, req ports.EncryptionKeyRevokeRequest) (ports.EncryptionKeyRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TenantID == "" || req.KeyID == "" || req.IdempotencyKey == "" {
 		return ports.EncryptionKeyRecord{}, fmt.Errorf("%w: tenant_id/key_id/idempotency_key required", ports.ErrInvalid)
 	}
 	idemKey := req.TenantID + ":" + req.IdempotencyKey
+	s.mu.Lock()
 	if rec, ok := s.revokeIdem[idemKey]; ok {
+		s.mu.Unlock()
 		return rec, nil
 	}
-	rec, ok := s.byID[req.KeyID]
-	if !ok || rec.TenantID != req.TenantID {
-		return ports.EncryptionKeyRecord{}, ports.ErrNotFound
+	s.mu.Unlock()
+	rec, err := s.getKeyRecord(ctx, req.TenantID, req.KeyID)
+	if err != nil {
+		return ports.EncryptionKeyRecord{}, err
 	}
 	if rec.State == "deleted" {
 		return ports.EncryptionKeyRecord{}, fmt.Errorf("%w: deleted encryption key cannot be revoked", ports.ErrConflict)
@@ -226,22 +290,28 @@ func (s *localEncryptionService) RevokeKey(ctx context.Context, req ports.Encryp
 	}
 	rec.State = "revoked"
 	rec.UpdatedAt = time.Now().Unix()
+	if err := s.upsertEncryptionKey(ctx, rec, ""); err != nil {
+		return ports.EncryptionKeyRecord{}, err
+	}
+	s.mu.Lock()
 	s.byID[req.KeyID] = rec
 	s.revokeIdem[idemKey] = rec
+	s.mu.Unlock()
 	return rec, nil
 }
 
 func (s *localEncryptionService) Seal(ctx context.Context, req ports.EncryptionSealRequest) (ports.EncryptionSealRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TenantID == "" || req.IdempotencyKey == "" || req.KeyID == "" || req.ObjectURI == "" {
 		return ports.EncryptionSealRecord{}, fmt.Errorf("%w: tenant_id/idempotency_key/key_id/object_uri required", ports.ErrInvalid)
 	}
 	idemKey := req.TenantID + ":" + req.IdempotencyKey
+	s.mu.Lock()
 	if rec, ok := s.sealIdem[idemKey]; ok {
+		s.mu.Unlock()
 		return rec, nil
 	}
-	key, err := s.requireActiveKey(req.TenantID, req.KeyID)
+	s.mu.Unlock()
+	key, err := s.requireActiveKey(ctx, req.TenantID, req.KeyID)
 	if err != nil {
 		return ports.EncryptionSealRecord{}, err
 	}
@@ -276,7 +346,9 @@ func (s *localEncryptionService) Seal(ctx context.Context, req ports.EncryptionS
 			ExpiresAt:       expiresAt.Unix(),
 			CreatedAt:       now,
 		}
+		s.mu.Lock()
 		s.sealIdem[idemKey] = rec
+		s.mu.Unlock()
 		return rec, nil
 	}
 	digest := sha256.Sum256([]byte(req.TenantID + ":" + req.KeyID + ":" + req.ObjectURI + ":" + req.IdempotencyKey))
@@ -290,17 +362,17 @@ func (s *localEncryptionService) Seal(ctx context.Context, req ports.EncryptionS
 		ExpiresAt:       now + 3600,
 		CreatedAt:       now,
 	}
+	s.mu.Lock()
 	s.sealIdem[idemKey] = rec
+	s.mu.Unlock()
 	return rec, nil
 }
 
 func (s *localEncryptionService) CreateUnsealToken(ctx context.Context, req ports.EncryptionUnsealTokenRequest) (ports.EncryptionUnsealTokenRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TenantID == "" || req.KeyID == "" || req.SealedObjectURI == "" {
 		return ports.EncryptionUnsealTokenRecord{}, fmt.Errorf("%w: tenant_id/key_id/sealed_object_uri required", ports.ErrInvalid)
 	}
-	key, err := s.requireActiveKey(req.TenantID, req.KeyID)
+	key, err := s.requireActiveKey(ctx, req.TenantID, req.KeyID)
 	if err != nil {
 		return ports.EncryptionUnsealTokenRecord{}, err
 	}
@@ -351,9 +423,7 @@ func (s *localEncryptionService) SealObjectContent(ctx context.Context, req port
 	if req.TenantID == "" || req.IdempotencyKey == "" || req.KeyID == "" || req.ObjectURI == "" {
 		return ports.EncryptionObjectContentSealRecord{}, fmt.Errorf("%w: tenant_id/idempotency_key/key_id/object_uri required", ports.ErrInvalid)
 	}
-	s.mu.Lock()
-	key, err := s.requireActiveKey(req.TenantID, req.KeyID)
-	s.mu.Unlock()
+	key, err := s.requireActiveKey(ctx, req.TenantID, req.KeyID)
 	if err != nil {
 		return ports.EncryptionObjectContentSealRecord{}, err
 	}
@@ -395,9 +465,7 @@ func (s *localEncryptionService) OpenObjectContent(ctx context.Context, req port
 	if req.ChunkSize <= 0 || req.ChunkCount <= 0 {
 		return ports.EncryptionObjectContentOpenRecord{}, fmt.Errorf("%w: chunk_size and chunk_count must be greater than zero", ports.ErrInvalid)
 	}
-	s.mu.Lock()
-	key, err := s.requireActiveKey(req.TenantID, req.KeyID)
-	s.mu.Unlock()
+	key, err := s.requireActiveKey(ctx, req.TenantID, req.KeyID)
 	if err != nil {
 		return ports.EncryptionObjectContentOpenRecord{}, err
 	}
@@ -415,15 +483,41 @@ func (s *localEncryptionService) OpenObjectContent(ctx context.Context, req port
 	return openObjectContentWithRecord(ctx, gcm, req, nonce, sealed, plaintext)
 }
 
-func (s *localEncryptionService) requireActiveKey(tenantID string, keyID string) (ports.EncryptionKeyRecord, error) {
-	key, ok := s.byID[keyID]
-	if !ok || key.TenantID != tenantID {
-		return ports.EncryptionKeyRecord{}, ports.ErrNotFound
+func (s *localEncryptionService) requireActiveKey(ctx context.Context, tenantID string, keyID string) (ports.EncryptionKeyRecord, error) {
+	key, err := s.getKeyRecord(ctx, tenantID, keyID)
+	if err != nil {
+		return ports.EncryptionKeyRecord{}, err
 	}
 	if key.State != "active" {
 		return ports.EncryptionKeyRecord{}, fmt.Errorf("%w: encryption key is not active", ports.ErrConflict)
 	}
 	return key, nil
+}
+
+func (s *localEncryptionService) getKeyRecord(ctx context.Context, tenantID, keyID string) (ports.EncryptionKeyRecord, error) {
+	s.mu.Lock()
+	if rec, ok := s.byID[keyID]; ok && rec.TenantID == tenantID {
+		s.mu.Unlock()
+		return rec, nil
+	}
+	s.mu.Unlock()
+	if s.store != nil {
+		return s.store.GetEncryptionKey(ctx, tenantID, keyID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.byID[keyID]
+	if !ok || rec.TenantID != tenantID {
+		return ports.EncryptionKeyRecord{}, ports.ErrNotFound
+	}
+	return rec, nil
+}
+
+func (s *localEncryptionService) upsertEncryptionKey(ctx context.Context, record ports.EncryptionKeyRecord, idempotencyKey string) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.UpsertEncryptionKey(ctx, record, idempotencyKey)
 }
 
 func encryptionKeyWithProviderEvidence(rec ports.EncryptionKeyRecord, result ports.EncryptionProviderKeyResult) ports.EncryptionKeyRecord {

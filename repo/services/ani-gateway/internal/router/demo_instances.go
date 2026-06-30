@@ -361,19 +361,35 @@ type demoTimelineStep struct {
 }
 
 func newDemoInstanceAPI() *demoInstanceAPI {
-	return newDemoInstanceAPIWithObservability(nil, false)
+	return newDemoInstanceAPIWithOptions(nil, nil, false)
 }
 
 func newDemoInstanceAPIWithObservability(observability ports.InstanceObservability, useInstanceName bool) *demoInstanceAPI {
-	store := newDemoInstanceStore()
-	operations := runtimeadapter.NewLocalOperationStore()
-	identity := runtimeadapter.NewLocalWorkloadIdentityService()
+	return newDemoInstanceAPIWithOptions(nil, observability, useInstanceName)
+}
+
+func newDemoInstanceAPIWithOptions(metadata ports.MetadataStore, observability ports.InstanceObservability, useInstanceName bool) *demoInstanceAPI {
+	var store ports.WorkloadInstanceStore
+	var operations ports.WorkloadOperationStore
+	var identity ports.WorkloadIdentityService
+	var audit ports.WorkloadPlanAuditStore
+	if metadata != nil {
+		store = runtimeadapter.NewMetadataInstanceStore(metadata)
+		operations = runtimeadapter.NewMetadataOperationStore(metadata)
+		identity = runtimeadapter.NewMetadataWorkloadIdentityService(metadata)
+		audit = runtimeadapter.NewMetadataPlanAuditStore(metadata)
+	} else {
+		store = newDemoInstanceStore()
+		operations = runtimeadapter.NewLocalOperationStore()
+		identity = runtimeadapter.NewLocalWorkloadIdentityService()
+		audit = &demoPlanAuditStore{}
+	}
 	planner := runtimeadapter.NewPlanningRuntime(runtimeadapter.WithGPUInventory(demoGPUInventory{}))
 	orchestrator := runtimeadapter.NewLocalInstanceOrchestrator(
 		planner,
 		runtimeadapter.NewKubernetesDryRunRenderer(planner),
 		runtimeadapter.NewLocalAdmissionGuard(),
-		&demoPlanAuditStore{},
+		audit,
 		runtimeadapter.NewLocalProviderDryRun(),
 		runtimeadapter.NewLocalProviderApply(runtimeadapter.WithProviderApplyEnabled(true)),
 		runtimeadapter.NewLocalProviderStatusReader(),
@@ -401,11 +417,11 @@ func newDemoInstanceAPIWithObservability(observability ports.InstanceObservabili
 }
 
 func registerDemoInstances(v1 *route.RouterGroup) {
-	registerDemoInstancesWithObservability(v1, nil, false)
+	registerDemoInstancesWithObservability(v1, nil, nil, false)
 }
 
-func registerDemoInstancesWithObservability(v1 *route.RouterGroup, observability ports.InstanceObservability, useInstanceName bool) {
-	api := newDemoInstanceAPIWithObservability(observability, useInstanceName)
+func registerDemoInstancesWithObservability(v1 *route.RouterGroup, metadata ports.MetadataStore, observability ports.InstanceObservability, useInstanceName bool) {
+	api := newDemoInstanceAPIWithOptions(metadata, observability, useInstanceName)
 	v1.GET("/instances", api.list)
 	v1.POST("/instances", api.create)
 	v1.GET("/instances/:instance_id", api.get)

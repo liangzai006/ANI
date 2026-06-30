@@ -21,23 +21,42 @@ func main() {
 	slog.SetDefault(logger)
 
 	h := server.Default(
-		server.WithHostPorts(":8080"),
+		server.WithHostPorts(gatewayHTTPAddrFromEnv()),
 		server.WithExitWaitTime(5),
 	)
 
 	runtimeCtx := context.Background()
-	k8sClusterService, closeK8sClusterRuntime, err := newGatewayK8sClusterRuntime(runtimeCtx, gatewayK8sClusterRuntimeConfigFromEnv())
+	metadataStore, closeMetadataStore, err := connectGatewayMetadataStore(runtimeCtx)
+	if err != nil {
+		logger.Error("failed to configure gateway metadata store", "err", err)
+		os.Exit(1)
+	}
+	defer closeMetadataStore()
+	if metadataStore != nil {
+		logger.Info("gateway metadata store configured", "database_configured", true)
+	}
+
+	objectStore, err := newGatewayObjectStoreFromEnv()
+	if err != nil {
+		logger.Error("failed to configure gateway object store", "err", err)
+		os.Exit(1)
+	}
+
+	k8sClusterRuntimeConfig := gatewayK8sClusterRuntimeConfigFromEnv()
+	k8sClusterRuntimeConfig.MetadataStore = metadataStore
+	k8sClusterService, closeK8sClusterRuntime, err := newGatewayK8sClusterRuntime(runtimeCtx, k8sClusterRuntimeConfig)
 	if err != nil {
 		logger.Error("failed to configure k8s cluster proxy runtime", "err", err)
 		os.Exit(1)
 	}
 	defer closeK8sClusterRuntime()
-	encryptionService, err := newGatewayEncryptionService(gatewayEncryptionRuntimeConfigFromEnv())
+	encryptionService, err := newGatewayEncryptionService(gatewayEncryptionRuntimeConfigFromEnv(), metadataStore)
 	if err != nil {
 		logger.Error("failed to configure encryption provider runtime", "err", err)
 		os.Exit(1)
 	}
-	secretService, err := newGatewaySecretService(gatewaySecretRuntimeConfigFromEnv())
+	secretRuntimeConfig := gatewaySecretRuntimeConfigFromEnv()
+	secretService, err := newGatewaySecretService(secretRuntimeConfig, metadataStore)
 	if err != nil {
 		logger.Error("failed to configure secret provider runtime", "err", err)
 		os.Exit(1)
@@ -47,23 +66,28 @@ func main() {
 		logger.Error("failed to configure gpu inventory provider runtime", "err", err)
 		os.Exit(1)
 	}
-	networkService, err := newGatewayNetworkService(gatewayNetworkRuntimeConfigFromEnv())
+	networkService, err := newGatewayNetworkService(gatewayNetworkRuntimeConfigFromEnv(), metadataStore)
 	if err != nil {
 		logger.Error("failed to configure network provider runtime", "err", err)
 		os.Exit(1)
 	}
-	storageService, err := newGatewayStorageService(gatewayStorageRuntimeConfigFromEnv())
+	storageService, err := newGatewayStorageService(gatewayStorageRuntimeConfigFromEnv(), metadataStore)
 	if err != nil {
 		logger.Error("failed to configure storage provider runtime", "err", err)
 		os.Exit(1)
 	}
-	imageRegistry, err := newGatewayImageRegistry(gatewayRegistryRuntimeConfigFromEnv())
+	imageRegistry, err := newGatewayImageRegistry(gatewayRegistryRuntimeConfigFromEnv(), metadataStore)
 	if err != nil {
 		logger.Error("failed to configure image registry provider runtime", "err", err)
 		os.Exit(1)
 	}
+	registryPullSecretKubernetesApply, err := newGatewayRegistryPullSecretKubernetesApply(imageRegistry, secretRuntimeConfig)
+	if err != nil {
+		logger.Error("failed to configure registry pull secret kubernetes apply runtime", "err", err)
+		os.Exit(1)
+	}
 	vectorStoreRuntimeConfig := gatewayVectorStoreRuntimeConfigFromEnv()
-	vectorStoreService, err := newGatewayVectorStoreService(vectorStoreRuntimeConfig)
+	vectorStoreService, err := newGatewayVectorStoreService(vectorStoreRuntimeConfig, metadataStore)
 	if err != nil {
 		logger.Error("failed to configure vector store provider runtime", "err", err)
 		os.Exit(1)
@@ -96,11 +120,16 @@ func main() {
 	middleware.StartAuditWorker()
 	middleware.Register(h, gatewayStore)
 	router.RegisterWithOptions(h, router.RegisterOptions{
+		MetadataStore:                         metadataStore,
+		BrandingService:                       newGatewayBrandingService(metadataStore, objectStore),
+		AsyncTaskService:                      newGatewayAsyncTaskService(metadataStore),
+		MeteringService:                       newGatewayMeteringService(metadataStore),
 		K8sClusterService:                     k8sClusterService,
 		EncryptionService:                     encryptionService,
 		SecretService:                         secretService,
 		GPUInventory:                          gpuInventory,
 		ImageRegistry:                         imageRegistry,
+		RegistryPullSecretKubernetesApply:     registryPullSecretKubernetesApply,
 		NetworkService:                        networkService,
 		StorageService:                        storageService,
 		VectorStoreService:                    vectorStoreService,

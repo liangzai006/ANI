@@ -425,18 +425,21 @@ func TestNewCapabilitiesRejectsLeaderElectionWithoutIdentity(t *testing.T) {
 }
 
 func TestNewCapabilitiesRejectsKubernetesRESTWithoutHost(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
 	if _, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{WorkloadProvider: "kubernetes_rest"}); err == nil {
 		t.Fatalf("NewCapabilitiesWithConfig() error = nil, want missing Kubernetes host error")
 	}
 }
 
 func TestNewCapabilitiesRejectsKubernetesRESTOpsWithoutHost(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
 	if _, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{WorkloadOpsProvider: "kubernetes_rest"}); err == nil {
 		t.Fatalf("NewCapabilitiesWithConfig() error = nil, want missing Kubernetes host error")
 	}
 }
 
 func TestNewCapabilitiesRejectsKubernetesRESTLifecycleWithoutHost(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
 	if _, err := NewCapabilitiesWithConfig(nil, nil, nil, Config{WorkloadLifecycleProvider: "kubernetes_rest"}); err == nil {
 		t.Fatalf("NewCapabilitiesWithConfig() error = nil, want missing Kubernetes host error")
 	}

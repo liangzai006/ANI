@@ -17,6 +17,7 @@ type localSecretService struct {
 	idem          map[string]string
 	bindings      map[string]ports.SecretBindingRecord
 	providerApply ports.SecretProviderApply
+	store         ports.SecretResourceStore
 }
 
 type secretEntry struct {
@@ -29,6 +30,12 @@ type SecretServiceOption func(*localSecretService)
 func WithSecretProviderApply(provider ports.SecretProviderApply) SecretServiceOption {
 	return func(service *localSecretService) {
 		service.providerApply = provider
+	}
+}
+
+func WithSecretResourceStore(store ports.SecretResourceStore) SecretServiceOption {
+	return func(service *localSecretService) {
+		service.store = store
 	}
 }
 
@@ -45,11 +52,18 @@ func NewLocalSecretService(options ...SecretServiceOption) ports.SecretService {
 }
 
 func (s *localSecretService) CreateSecret(ctx context.Context, req ports.SecretCreateRequest) (ports.SecretRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TenantID == "" || req.IdempotencyKey == "" || req.Name == "" || len(req.Data) == 0 {
 		return ports.SecretRecord{}, fmt.Errorf("%w: tenant_id/idempotency_key/name/data required", ports.ErrInvalid)
 	}
+	if s.store != nil {
+		if existing, err := s.store.GetSecretByIdempotency(ctx, req.TenantID, req.IdempotencyKey); err == nil {
+			return existing, nil
+		} else if err != ports.ErrNotFound {
+			return ports.SecretRecord{}, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	idemKey := req.TenantID + ":" + req.IdempotencyKey
 	if id, ok := s.idem[idemKey]; ok {
 		return s.byID[id].record, nil
@@ -95,25 +109,27 @@ func (s *localSecretService) CreateSecret(ctx context.Context, req ports.SecretC
 		rec.ProviderRefs = append([]string(nil), result.ResourceRefs...)
 		s.byID[rec.SecretID] = secretEntry{record: rec, data: cloneSecretData(req.Data)}
 	}
+	if err := s.upsertSecret(ctx, rec, req.IdempotencyKey); err != nil {
+		delete(s.byID, rec.SecretID)
+		delete(s.idem, idemKey)
+		return ports.SecretRecord{}, err
+	}
 	return rec, nil
 }
 
-func (s *localSecretService) GetSecret(_ context.Context, req ports.SecretGetRequest) (ports.SecretRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entry, ok := s.byID[req.SecretID]
-	if !ok || entry.record.TenantID != req.TenantID {
-		return ports.SecretRecord{}, ports.ErrNotFound
-	}
-	return entry.record, nil
+func (s *localSecretService) GetSecret(ctx context.Context, req ports.SecretGetRequest) (ports.SecretRecord, error) {
+	return s.getSecretRecord(ctx, req.TenantID, req.SecretID)
 }
 
-func (s *localSecretService) ListSecrets(_ context.Context, req ports.SecretListRequest) ([]ports.SecretRecord, error) {
+func (s *localSecretService) ListSecrets(ctx context.Context, req ports.SecretListRequest) ([]ports.SecretRecord, error) {
+	if s.store != nil {
+		return s.store.ListSecrets(ctx, req.TenantID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []ports.SecretRecord{}
 	for _, entry := range s.byID {
-		if entry.record.TenantID == req.TenantID {
+		if entry.record.TenantID == req.TenantID && entry.record.State != "deleted" {
 			out = append(out, entry.record)
 		}
 	}
@@ -121,7 +137,25 @@ func (s *localSecretService) ListSecrets(_ context.Context, req ports.SecretList
 	return out, nil
 }
 
-func (s *localSecretService) DeleteSecret(_ context.Context, req ports.SecretGetRequest) (ports.SecretRecord, error) {
+func (s *localSecretService) DeleteSecret(ctx context.Context, req ports.SecretGetRequest) (ports.SecretRecord, error) {
+	if s.store != nil {
+		rec, err := s.getSecretRecord(ctx, req.TenantID, req.SecretID)
+		if err != nil {
+			return ports.SecretRecord{}, err
+		}
+		rec.State = "deleted"
+		rec.UpdatedAt = time.Now().Unix()
+		if err := s.upsertSecret(ctx, rec, ""); err != nil {
+			return ports.SecretRecord{}, err
+		}
+		s.mu.Lock()
+		if entry, ok := s.byID[req.SecretID]; ok {
+			entry.record = rec
+			s.byID[req.SecretID] = entry
+		}
+		s.mu.Unlock()
+		return rec, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.byID[req.SecretID]
@@ -134,21 +168,19 @@ func (s *localSecretService) DeleteSecret(_ context.Context, req ports.SecretGet
 	return entry.record, nil
 }
 
-func (s *localSecretService) BindSecret(_ context.Context, req ports.SecretBindRequest) (ports.SecretBindingRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	entry, ok := s.byID[req.SecretID]
-	if !ok || entry.record.TenantID != req.TenantID {
-		return ports.SecretBindingRecord{}, ports.ErrNotFound
+func (s *localSecretService) BindSecret(ctx context.Context, req ports.SecretBindRequest) (ports.SecretBindingRecord, error) {
+	rec, err := s.getSecretRecord(ctx, req.TenantID, req.SecretID)
+	if err != nil {
+		return ports.SecretBindingRecord{}, err
 	}
-	if entry.record.State != "active" {
+	if rec.State != "active" {
 		return ports.SecretBindingRecord{}, fmt.Errorf("%w: secret is not active", ports.ErrConflict)
 	}
 	if req.TargetType == "" || req.TargetID == "" {
 		return ports.SecretBindingRecord{}, fmt.Errorf("%w: target_type/target_id required", ports.ErrInvalid)
 	}
 	now := time.Now().Unix()
-	rec := ports.SecretBindingRecord{
+	binding := ports.SecretBindingRecord{
 		BindingID:  "sbind-" + uuid.NewString(),
 		SecretID:   req.SecretID,
 		TenantID:   req.TenantID,
@@ -159,8 +191,49 @@ func (s *localSecretService) BindSecret(_ context.Context, req ports.SecretBindR
 		State:      "bound",
 		CreatedAt:  now,
 	}
-	s.bindings[rec.BindingID] = rec
-	return rec, nil
+	s.mu.Lock()
+	s.bindings[binding.BindingID] = binding
+	s.mu.Unlock()
+	if err := s.upsertSecretBinding(ctx, binding); err != nil {
+		s.mu.Lock()
+		delete(s.bindings, binding.BindingID)
+		s.mu.Unlock()
+		return ports.SecretBindingRecord{}, err
+	}
+	return binding, nil
+}
+
+func (s *localSecretService) getSecretRecord(ctx context.Context, tenantID, secretID string) (ports.SecretRecord, error) {
+	s.mu.Lock()
+	if entry, ok := s.byID[secretID]; ok && entry.record.TenantID == tenantID {
+		s.mu.Unlock()
+		return entry.record, nil
+	}
+	s.mu.Unlock()
+	if s.store != nil {
+		return s.store.GetSecret(ctx, tenantID, secretID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.byID[secretID]
+	if !ok || entry.record.TenantID != tenantID {
+		return ports.SecretRecord{}, ports.ErrNotFound
+	}
+	return entry.record, nil
+}
+
+func (s *localSecretService) upsertSecret(ctx context.Context, record ports.SecretRecord, idempotencyKey string) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.UpsertSecret(ctx, record, idempotencyKey)
+}
+
+func (s *localSecretService) upsertSecretBinding(ctx context.Context, record ports.SecretBindingRecord) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.UpsertSecretBinding(ctx, record)
 }
 
 func sortedSecretKeys(data map[string]string) []string {

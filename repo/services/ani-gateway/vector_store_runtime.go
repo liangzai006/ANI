@@ -35,10 +35,17 @@ func gatewayVectorStoreRuntimeConfigFromEnv() gatewayVectorStoreRuntimeConfig {
 	}
 }
 
-func newGatewayVectorStoreService(cfg gatewayVectorStoreRuntimeConfig) (ports.VectorStoreService, error) {
+func newGatewayVectorStoreService(cfg gatewayVectorStoreRuntimeConfig, metadataStore ports.MetadataStore) (ports.VectorStoreService, error) {
+	metadataOptions := []runtimeadapter.VectorStoreServiceOption{}
+	if metadataStore := newGatewayVectorStoreMetadataStore(metadataStore); metadataStore != nil {
+		metadataOptions = append(metadataOptions, runtimeadapter.WithVectorStoreMetadataStore(metadataStore))
+	}
 	switch provider := strings.TrimSpace(cfg.VectorStoreProvider); provider {
 	case "", "local", "not_configured":
-		return nil, nil
+		if len(metadataOptions) == 0 {
+			return nil, nil
+		}
+		return runtimeadapter.NewLocalVectorStoreService(metadataOptions...), nil
 	case "milvus":
 		store, err := vectorstore.NewMilvusVectorStore(vectorstore.MilvusVectorStoreConfig{
 			Endpoint:         cfg.VectorStoreEndpoint,
@@ -52,7 +59,8 @@ func newGatewayVectorStoreService(cfg gatewayVectorStoreRuntimeConfig) (ports.Ve
 		if err != nil {
 			return nil, err
 		}
-		return runtimeadapter.NewLocalVectorStoreService(runtimeadapter.WithVectorStoreBackend(store)), nil
+		metadataOptions = append(metadataOptions, runtimeadapter.WithVectorStoreBackend(store))
+		return runtimeadapter.NewLocalVectorStoreService(metadataOptions...), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported VECTOR_STORE_PROVIDER %q", ports.ErrUnsupported, provider)
 	}

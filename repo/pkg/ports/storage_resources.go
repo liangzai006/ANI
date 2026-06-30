@@ -228,6 +228,26 @@ type StorageResourceStore interface {
 	UpsertFilesystem(ctx context.Context, record StorageFilesystemRecord) error
 	UpsertObject(ctx context.Context, record StorageObjectRecord) error
 	UpdateResourceState(ctx context.Context, request StorageResourceStateUpdateRequest) error
+
+	ListVolumes(ctx context.Context, tenantID string) ([]StorageVolumeRecord, error)
+	GetVolume(ctx context.Context, tenantID string, volumeID string) (StorageVolumeRecord, error)
+	ListFilesystems(ctx context.Context, tenantID string) ([]StorageFilesystemRecord, error)
+	GetFilesystem(ctx context.Context, tenantID string, filesystemID string) (StorageFilesystemRecord, error)
+	ListObjects(ctx context.Context, tenantID string) ([]StorageObjectRecord, error)
+	GetObject(ctx context.Context, tenantID string, objectID string) (StorageObjectRecord, error)
+
+	UpsertBucket(ctx context.Context, record StorageBucketRecord, idempotencyKey string) error
+	ListBuckets(ctx context.Context, tenantID string) ([]StorageBucketRecord, error)
+	GetBucket(ctx context.Context, tenantID string, bucketID string) (StorageBucketRecord, error)
+	GetBucketByName(ctx context.Context, tenantID string, name string) (StorageBucketRecord, error)
+	GetBucketByIdempotency(ctx context.Context, tenantID string, idempotencyKey string) (StorageBucketRecord, error)
+
+	UpsertVolumeSnapshot(ctx context.Context, record VolumeSnapshotRecord, idempotencyKey string) error
+	ListVolumeSnapshots(ctx context.Context, tenantID string, volumeID string) ([]VolumeSnapshotRecord, error)
+	GetVolumeSnapshotByIdempotency(ctx context.Context, tenantID string, idempotencyKey string) (VolumeSnapshotRecord, error)
+
+	UpsertFilesystemMountTarget(ctx context.Context, record FilesystemMountTargetRecord) error
+	GetFilesystemMountTarget(ctx context.Context, tenantID string, filesystemID string) (FilesystemMountTargetRecord, error)
 }
 
 type StorageProviderRenderer interface {

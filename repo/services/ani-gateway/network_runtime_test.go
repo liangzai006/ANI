@@ -11,7 +11,7 @@ import (
 )
 
 func TestGatewayNetworkServiceFromConfigDefaultsToRouterLocalService(t *testing.T) {
-	service, err := newGatewayNetworkService(gatewayNetworkRuntimeConfig{})
+	service, err := newGatewayNetworkService(gatewayNetworkRuntimeConfig{}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayNetworkService() error = %v", err)
 	}
@@ -21,15 +21,17 @@ func TestGatewayNetworkServiceFromConfigDefaultsToRouterLocalService(t *testing.
 }
 
 func TestGatewayNetworkServiceFromConfigUsesKubeOVNProvider(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+
 	transport := &gatewayNetworkRoundTripper{}
 	service, err := newGatewayNetworkService(gatewayNetworkRuntimeConfig{
 		ProviderMode:         "kubeovn_rest",
 		ProviderApply:        true,
 		ProviderUserID:       "ani-core-network-provider",
 		ProviderProof:        "rbac-scope:networks.write",
-		KubernetesAPIHost:    "https://kubernetes.example.test",
 		KubernetesHTTPClient: &http.Client{Transport: transport},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("newGatewayNetworkService() error = %v", err)
 	}
@@ -64,27 +66,22 @@ func TestGatewayNetworkServiceFromConfigUsesKubeOVNProvider(t *testing.T) {
 }
 
 func TestGatewayNetworkServiceRejectsKubeOVNProviderWithoutProof(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+
 	if _, err := newGatewayNetworkService(gatewayNetworkRuntimeConfig{
-		ProviderMode:      "kubeovn_rest",
-		KubernetesAPIHost: "https://kubernetes.example.test",
-	}); err == nil {
+		ProviderMode: "kubeovn_rest",
+	}, nil); err == nil {
 		t.Fatalf("newGatewayNetworkService() error = nil, want missing proof error")
 	}
 }
 
-func TestGatewayNetworkConfigFromEnvIncludesInClusterKubernetesService(t *testing.T) {
+func TestGatewayNetworkConfigFromEnvLoadsProviderMode(t *testing.T) {
 	t.Setenv("NETWORK_PROVIDER", "kubeovn_rest")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
-	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
 	cfg := gatewayNetworkRuntimeConfigFromEnv()
-	if cfg.KubernetesServiceHost != "10.96.0.1" || cfg.KubernetesServicePort != "443" {
-		t.Fatalf("service host/port = %q/%q, want in-cluster Kubernetes service", cfg.KubernetesServiceHost, cfg.KubernetesServicePort)
-	}
-	if cfg.KubernetesServiceAccountTokenFile == "" || cfg.KubernetesServiceAccountCAFile == "" {
-		t.Fatalf("service account files not loaded from env: %#v", cfg)
+	if cfg.ProviderMode != "kubeovn_rest" {
+		t.Fatalf("provider mode = %q, want kubeovn_rest", cfg.ProviderMode)
 	}
 }
 

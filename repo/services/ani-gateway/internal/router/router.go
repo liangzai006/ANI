@@ -10,11 +10,16 @@ import (
 )
 
 type RegisterOptions struct {
+	MetadataStore                         ports.MetadataStore
+	BrandingService                       ports.BrandingService
+	AsyncTaskService                      ports.AsyncTaskService
+	MeteringService                       ports.MeteringService
 	K8sClusterService                     ports.K8sClusterService
 	EncryptionService                     ports.EncryptionService
 	SecretService                         ports.SecretService
 	GPUInventory                          ports.GPUInventory
 	ImageRegistry                         ports.ImageRegistry
+	RegistryPullSecretKubernetesApply     ports.RegistryPullSecretKubernetesApply
 	NetworkService                        ports.NetworkService
 	StorageService                        ports.StorageService
 	VectorStoreService                    ports.VectorStoreService
@@ -32,13 +37,13 @@ func RegisterWithOptions(h *server.Hertz, options RegisterOptions) {
 	registerHealth(h.Group(""))
 
 	v1 := h.Group("/api/v1")
-	registerBranding(v1)
-	registerTasks(v1)
+	registerBrandingWithService(v1, options.BrandingService)
+	registerTasksWithService(v1, options.AsyncTaskService)
 	registerAuth(v1)
 	registerObservability(v1)
-	registerMetering(v1)
-	registerHarborWithService(v1, options.ImageRegistry)
-	registerDemoInstancesWithObservability(v1, options.InstanceObservability, options.InstanceObservabilityUsesInstanceName)
+	registerMeteringWithService(v1, options.MeteringService)
+	registerHarborWithService(v1, options.ImageRegistry, options.RegistryPullSecretKubernetesApply)
+	registerDemoInstancesWithObservability(v1, options.MetadataStore, options.InstanceObservability, options.InstanceObservabilityUsesInstanceName)
 	registerGPUInventoryResourcesWithInventory(v1, options.GPUInventory)
 	registerNetworkResourcesWithService(v1, options.NetworkService)
 	registerStorageResourcesWithService(v1, options.StorageService)

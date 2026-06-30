@@ -21,9 +21,11 @@ func TestGatewayGPUInventoryFromConfigDefaultsToRouterLocalInventory(t *testing.
 }
 
 func TestGatewayGPUInventoryFromConfigUsesKubernetesProvider(t *testing.T) {
+	t.Setenv("KUBERNETES_CONFIG_AUTO_LOAD", "false")
+	t.Setenv("KUBERNETES_API_HOST", "https://kubernetes.example.test")
+
 	inventory, err := newGatewayGPUInventory(gatewayGPUInventoryRuntimeConfig{
 		ProviderMode:         "kubernetes_rest",
-		KubernetesAPIHost:    "https://kubernetes.example.test",
 		KubernetesHTTPClient: &http.Client{Transport: gatewayGPUInventoryRoundTripper{}},
 	})
 	if err != nil {
@@ -49,19 +51,12 @@ func TestGatewayGPUInventoryRejectsUnsupportedProvider(t *testing.T) {
 	}
 }
 
-func TestGatewayGPUInventoryConfigFromEnvIncludesInClusterKubernetesService(t *testing.T) {
+func TestGatewayGPUInventoryConfigFromEnvLoadsProviderMode(t *testing.T) {
 	t.Setenv("GPU_INVENTORY_PROVIDER", "kubernetes_rest")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
-	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	t.Setenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
 	cfg := gatewayGPUInventoryRuntimeConfigFromEnv()
-	if cfg.KubernetesServiceHost != "10.96.0.1" || cfg.KubernetesServicePort != "443" {
-		t.Fatalf("service host/port = %q/%q, want in-cluster Kubernetes service", cfg.KubernetesServiceHost, cfg.KubernetesServicePort)
-	}
-	if cfg.KubernetesServiceAccountTokenFile == "" || cfg.KubernetesServiceAccountCAFile == "" {
-		t.Fatalf("service account files not loaded from env: %#v", cfg)
+	if cfg.ProviderMode != "kubernetes_rest" {
+		t.Fatalf("provider mode = %q, want kubernetes_rest", cfg.ProviderMode)
 	}
 }
 

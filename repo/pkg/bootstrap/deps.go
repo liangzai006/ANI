@@ -335,10 +335,11 @@ func imageRegistryAdapter(cfg Config) (ports.ImageRegistry, error) {
 		return registry.NotConfigured{}, nil
 	case "harbor":
 		return registry.NewHarborImageRegistry(registry.HarborImageRegistryConfig{
-			Endpoint: cfg.RegistryEndpoint,
-			Username: cfg.RegistryUsername,
-			Password: cfg.RegistryPassword,
-			Secure:   cfg.RegistrySecure,
+			Endpoint:    cfg.RegistryEndpoint,
+			Username:    cfg.RegistryUsername,
+			Password:    cfg.RegistryPassword,
+			Secure:      cfg.RegistrySecure,
+			TLSInsecure: cfg.RegistryTLSInsecure,
 		})
 	default:
 		return nil, fmt.Errorf("%w: unsupported image registry provider %q", ports.ErrUnsupported, cfg.RegistryProvider)
@@ -458,7 +459,7 @@ func workloadOpsExecutor(cfg Config, kubeClient *runtimeadapter.KubernetesRESTCl
 }
 
 func kubernetesRESTClientConfig(cfg Config) runtimeadapter.KubernetesRESTClientConfig {
-	return runtimeadapter.KubernetesRESTClientConfig{
+	clientCfg := runtimeadapter.KubernetesRESTClientConfig{
 		Host:            cfg.KubernetesAPIHost,
 		ServiceHost:     cfg.KubernetesServiceHost,
 		ServicePort:     cfg.KubernetesServicePort,
@@ -467,6 +468,10 @@ func kubernetesRESTClientConfig(cfg Config) runtimeadapter.KubernetesRESTClientC
 		CAFile:          cfg.KubernetesServiceAccountCAFile,
 		FieldManager:    cfg.KubernetesProviderFieldManager,
 	}
+	if clientCfg.RequestTimeout == 0 {
+		clientCfg.RequestTimeout = runtimeadapter.LoadKubernetesRESTEnvFromOS().RequestTimeout
+	}
+	return clientCfg
 }
 
 // Close releases all connections. Call with defer after MustConnect.

@@ -13,63 +13,49 @@ import (
 )
 
 type gatewayStorageRuntimeConfig struct {
-	ProviderMode                      string
-	ProviderApply                     bool
-	ProviderUserID                    string
-	ProviderProof                     string
-	KubernetesAPIHost                 string
-	KubernetesServiceHost             string
-	KubernetesServicePort             string
-	KubernetesBearerToken             string
-	KubernetesServiceAccountTokenFile string
-	KubernetesServiceAccountCAFile    string
-	KubernetesProviderManager         string
-	KubernetesHTTPClient              *http.Client
-	KubernetesRequestTimeout          time.Duration
-	ObjectStoreProvider               string
-	ObjectStoreEndpoint               string
-	ObjectStoreEndpoints              []string
-	ObjectStorePublicEndpoint         string
-	ObjectStoreAccessKeyID            string
-	ObjectStoreSecretAccessKey        string
-	ObjectStoreSessionToken           string
-	ObjectStoreRegion                 string
-	ObjectStoreSecure                 bool
-	ObjectStoreBucketPrefix           string
-	ObjectStoreHTTPClient             *http.Client
-	ObjectStoreRequestTimeout         time.Duration
+	ProviderMode               string
+	ProviderApply              bool
+	ProviderUserID             string
+	ProviderProof              string
+	KubernetesHTTPClient       *http.Client
+	KubernetesRequestTimeout   time.Duration
+	ObjectStoreProvider        string
+	ObjectStoreEndpoint        string
+	ObjectStoreEndpoints       []string
+	ObjectStorePublicEndpoint  string
+	ObjectStoreAccessKeyID     string
+	ObjectStoreSecretAccessKey string
+	ObjectStoreSessionToken    string
+	ObjectStoreRegion          string
+	ObjectStoreSecure          bool
+	ObjectStoreBucketPrefix    string
+	ObjectStoreHTTPClient      *http.Client
+	ObjectStoreRequestTimeout  time.Duration
 }
 
 func gatewayStorageRuntimeConfigFromEnv() gatewayStorageRuntimeConfig {
 	return gatewayStorageRuntimeConfig{
-		ProviderMode:                      os.Getenv("STORAGE_PROVIDER"),
-		ProviderApply:                     strings.EqualFold(strings.TrimSpace(os.Getenv("STORAGE_PROVIDER_APPLY_ENABLED")), "true"),
-		ProviderUserID:                    os.Getenv("STORAGE_PROVIDER_USER_ID"),
-		ProviderProof:                     os.Getenv("STORAGE_PROVIDER_PERMISSION_PROOF"),
-		KubernetesAPIHost:                 os.Getenv("KUBERNETES_API_HOST"),
-		KubernetesServiceHost:             os.Getenv("KUBERNETES_SERVICE_HOST"),
-		KubernetesServicePort:             os.Getenv("KUBERNETES_SERVICE_PORT"),
-		KubernetesBearerToken:             os.Getenv("KUBERNETES_BEARER_TOKEN"),
-		KubernetesServiceAccountTokenFile: os.Getenv("KUBERNETES_SERVICE_ACCOUNT_TOKEN_FILE"),
-		KubernetesServiceAccountCAFile:    os.Getenv("KUBERNETES_SERVICE_ACCOUNT_CA_FILE"),
-		KubernetesProviderManager:         os.Getenv("KUBERNETES_PROVIDER_FIELD_MANAGER"),
-		KubernetesRequestTimeout:          gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
-		ObjectStoreProvider:               os.Getenv("OBJECT_STORE_PROVIDER"),
-		ObjectStoreEndpoint:               os.Getenv("OBJECT_STORE_ENDPOINT"),
-		ObjectStoreEndpoints:              splitGatewayCSVEnv(os.Getenv("OBJECT_STORE_ENDPOINTS")),
-		ObjectStorePublicEndpoint:         os.Getenv("OBJECT_STORE_PUBLIC_ENDPOINT"),
-		ObjectStoreAccessKeyID:            os.Getenv("OBJECT_STORE_ACCESS_KEY_ID"),
-		ObjectStoreSecretAccessKey:        os.Getenv("OBJECT_STORE_SECRET_ACCESS_KEY"),
-		ObjectStoreSessionToken:           os.Getenv("OBJECT_STORE_SESSION_TOKEN"),
-		ObjectStoreRegion:                 os.Getenv("OBJECT_STORE_REGION"),
-		ObjectStoreSecure:                 strings.EqualFold(strings.TrimSpace(os.Getenv("OBJECT_STORE_SECURE")), "true"),
-		ObjectStoreBucketPrefix:           os.Getenv("OBJECT_STORE_BUCKET_PREFIX"),
-		ObjectStoreRequestTimeout:         gatewayDurationFromEnv("OBJECT_STORE_REQUEST_TIMEOUT"),
+		ProviderMode:               os.Getenv("STORAGE_PROVIDER"),
+		ProviderApply:              strings.EqualFold(strings.TrimSpace(os.Getenv("STORAGE_PROVIDER_APPLY_ENABLED")), "true"),
+		ProviderUserID:             os.Getenv("STORAGE_PROVIDER_USER_ID"),
+		ProviderProof:              os.Getenv("STORAGE_PROVIDER_PERMISSION_PROOF"),
+		KubernetesRequestTimeout:   gatewayDurationFromEnv("KUBERNETES_REQUEST_TIMEOUT"),
+		ObjectStoreProvider:        os.Getenv("OBJECT_STORE_PROVIDER"),
+		ObjectStoreEndpoint:        os.Getenv("OBJECT_STORE_ENDPOINT"),
+		ObjectStoreEndpoints:       splitGatewayCSVEnv(os.Getenv("OBJECT_STORE_ENDPOINTS")),
+		ObjectStorePublicEndpoint:  os.Getenv("OBJECT_STORE_PUBLIC_ENDPOINT"),
+		ObjectStoreAccessKeyID:     os.Getenv("OBJECT_STORE_ACCESS_KEY_ID"),
+		ObjectStoreSecretAccessKey: os.Getenv("OBJECT_STORE_SECRET_ACCESS_KEY"),
+		ObjectStoreSessionToken:    os.Getenv("OBJECT_STORE_SESSION_TOKEN"),
+		ObjectStoreRegion:          os.Getenv("OBJECT_STORE_REGION"),
+		ObjectStoreSecure:          strings.EqualFold(strings.TrimSpace(os.Getenv("OBJECT_STORE_SECURE")), "true"),
+		ObjectStoreBucketPrefix:    os.Getenv("OBJECT_STORE_BUCKET_PREFIX"),
+		ObjectStoreRequestTimeout:  gatewayDurationFromEnv("OBJECT_STORE_REQUEST_TIMEOUT"),
 	}
 }
 
-func newGatewayStorageService(cfg gatewayStorageRuntimeConfig) (ports.StorageService, error) {
-	options := []runtimeadapter.StorageServiceOption{}
+func newGatewayStorageService(cfg gatewayStorageRuntimeConfig, metadata ports.MetadataStore) (ports.StorageService, error) {
+	options := gatewayStorageServiceOptions(metadata)
 	if strings.TrimSpace(cfg.ObjectStoreProvider) == "minio" {
 		store, err := objectstore.NewMinIOObjectStore(objectstore.MinIOObjectStoreConfig{
 			Endpoint:        cfg.ObjectStoreEndpoint,
@@ -92,25 +78,15 @@ func newGatewayStorageService(cfg gatewayStorageRuntimeConfig) (ports.StorageSer
 
 	switch mode := strings.TrimSpace(cfg.ProviderMode); mode {
 	case "", "local", "not_configured":
-		if len(options) > 0 {
-			return runtimeadapter.NewLocalStorageService(options...), nil
+		if len(options) == 0 {
+			return nil, nil
 		}
-		return nil, nil
+		return runtimeadapter.NewLocalStorageService(options...), nil
 	case "kubernetes_rest":
 		if strings.TrimSpace(cfg.ProviderUserID) == "" || strings.TrimSpace(cfg.ProviderProof) == "" {
 			return nil, fmt.Errorf("%w: storage provider requires STORAGE_PROVIDER_USER_ID and STORAGE_PROVIDER_PERMISSION_PROOF", ports.ErrInvalid)
 		}
-		client, err := runtimeadapter.NewKubernetesRESTClient(runtimeadapter.KubernetesRESTClientConfig{
-			Host:            cfg.KubernetesAPIHost,
-			ServiceHost:     cfg.KubernetesServiceHost,
-			ServicePort:     cfg.KubernetesServicePort,
-			BearerToken:     cfg.KubernetesBearerToken,
-			BearerTokenFile: cfg.KubernetesServiceAccountTokenFile,
-			CAFile:          cfg.KubernetesServiceAccountCAFile,
-			FieldManager:    cfg.KubernetesProviderManager,
-			HTTPClient:      cfg.KubernetesHTTPClient,
-			RequestTimeout:  cfg.KubernetesRequestTimeout,
-		})
+		client, err := newGatewayKubernetesRESTClient(cfg.KubernetesHTTPClient, cfg.KubernetesRequestTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -133,5 +109,14 @@ func newGatewayStorageService(cfg gatewayStorageRuntimeConfig) (ports.StorageSer
 		return runtimeadapter.NewLocalStorageService(options...), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported STORAGE_PROVIDER %q", ports.ErrUnsupported, mode)
+	}
+}
+
+func gatewayStorageServiceOptions(metadata ports.MetadataStore) []runtimeadapter.StorageServiceOption {
+	if metadata == nil {
+		return nil
+	}
+	return []runtimeadapter.StorageServiceOption{
+		runtimeadapter.WithStorageResourceStore(runtimeadapter.NewMetadataStorageStore(metadata)),
 	}
 }

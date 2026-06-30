@@ -58,11 +58,12 @@ type SecretBindingRecord struct {
 }
 
 type SecretProviderApplyRequest struct {
-	TenantID string
-	SecretID string
-	Name     string
-	Type     string
-	Data     map[string]string
+	TenantID  string
+	SecretID  string
+	Name      string
+	Namespace string
+	Type      string
+	Data      map[string]string
 }
 
 type SecretProviderApplyResult struct {
