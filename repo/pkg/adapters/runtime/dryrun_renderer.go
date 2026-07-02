@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strconv"
 	"strings"
 
@@ -28,11 +29,23 @@ func (r *KubernetesDryRunRenderer) Render(ctx context.Context, spec ports.Worklo
 
 	switch planned.Kind {
 	case ports.WorkloadKindVM:
-		return []ports.WorkloadManifest{renderVM(planned)}, nil
+		manifests := []ports.WorkloadManifest{renderVM(planned)}
+		if secret, ok := renderWorkloadIdentitySecret(planned); ok {
+			manifests = append([]ports.WorkloadManifest{secret}, manifests...)
+		}
+		return manifests, nil
 	case ports.WorkloadKindBatchJob:
-		return []ports.WorkloadManifest{renderJob(planned)}, nil
+		manifests := []ports.WorkloadManifest{renderJob(planned)}
+		if secret, ok := renderWorkloadIdentitySecret(planned); ok {
+			manifests = append([]ports.WorkloadManifest{secret}, manifests...)
+		}
+		return manifests, nil
 	default:
-		return []ports.WorkloadManifest{renderDeployment(planned)}, nil
+		manifests := []ports.WorkloadManifest{renderDeployment(planned)}
+		if secret, ok := renderWorkloadIdentitySecret(planned); ok {
+			manifests = append([]ports.WorkloadManifest{secret}, manifests...)
+		}
+		return manifests, nil
 	}
 }
 
@@ -51,15 +64,13 @@ func renderVM(spec ports.WorkloadSpec) ports.WorkloadManifest {
 				"spec": map[string]any{
 					"domain": map[string]any{
 						"machine": map[string]any{"type": firstNonEmpty(spec.VM.MachineType, "q35")},
-						"devices": map[string]any{
-							"disks": vmDisks(spec),
-						},
+						"devices": vmDevices(spec),
 						"resources": map[string]any{
 							"requests": resourceRequests(spec),
 						},
 					},
 					"volumes":  vmVolumes(spec),
-					"networks": networkRefs(spec),
+					"networks": vmNetworkRefs(spec),
 				},
 			},
 		},
@@ -207,13 +218,52 @@ func workloadIdentitySecretName(spec ports.WorkloadSpec) string {
 		return ""
 	}
 	seed := firstNonEmpty(spec.Identity.KeyID, spec.Identity.InstanceID, spec.Name)
+	seed = strings.ToLower(seed)
 	seed = strings.ReplaceAll(seed, "_", "-")
-	seed = strings.ReplaceAll(seed, ":", "-")
-	seed = strings.Trim(seed, "-")
+	var sanitized strings.Builder
+	for _, r := range seed {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			sanitized.WriteRune(r)
+		}
+	}
+	seed = strings.Trim(sanitized.String(), "-")
+	if seed == "" {
+		seed = "workload"
+	}
 	if len(seed) > 24 {
-		seed = seed[:24]
+		seed = strings.TrimRight(seed[:24], "-")
+	}
+	if seed == "" {
+		seed = "workload"
 	}
 	return "ani-wi-" + seed
+}
+
+func renderWorkloadIdentitySecret(spec ports.WorkloadSpec) (ports.WorkloadManifest, bool) {
+	if spec.Identity == nil || strings.TrimSpace(spec.Identity.KeyValue) == "" {
+		return ports.WorkloadManifest{}, false
+	}
+	secretName := workloadIdentitySecretName(spec)
+	if secretName == "" {
+		return ports.WorkloadManifest{}, false
+	}
+	meta := metadata(spec, "workload-identity")
+	meta["name"] = secretName
+	content := manifest(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata":   meta,
+		"type":       "Opaque",
+		"stringData": map[string]string{
+			"token": spec.Identity.KeyValue,
+		},
+	})
+	return ports.WorkloadManifest{
+		Name:     secretName,
+		Kind:     "Secret",
+		Provider: "kubernetes",
+		Content:  content,
+	}, true
 }
 
 func containerResources(spec ports.WorkloadSpec) map[string]any {
@@ -368,6 +418,35 @@ func secretVolumeName(binding ports.WorkloadSecretBinding, index int) string {
 	return name
 }
 
+func vmDevices(spec ports.WorkloadSpec) map[string]any {
+	devices := map[string]any{
+		"disks": vmDisks(spec),
+	}
+	if ifaces := vmInterfaces(spec); len(ifaces) > 0 {
+		devices["interfaces"] = ifaces
+	}
+	return devices
+}
+
+func vmInterfaces(spec ports.WorkloadSpec) []any {
+	if vmPodNetworkEnabled() {
+		return []any{
+			map[string]any{
+				"name":       "default",
+				"masquerade": map[string]any{},
+			},
+		}
+	}
+	ifaces := make([]any, 0, len(spec.Network.Attachments))
+	for _, attachment := range spec.Network.Attachments {
+		ifaces = append(ifaces, map[string]any{
+			"name":   string(attachment.Plane),
+			"bridge": map[string]any{},
+		})
+	}
+	return ifaces
+}
+
 func vmVolumes(spec ports.WorkloadSpec) []any {
 	volumes := []any{
 		map[string]any{
@@ -378,6 +457,9 @@ func vmVolumes(spec ports.WorkloadSpec) []any {
 		},
 	}
 	for _, attachment := range spec.Storage {
+		if attachment.Kind == ports.StorageAttachmentRootDisk {
+			continue
+		}
 		volumes = append(volumes, map[string]any{
 			"name": attachment.Name,
 			"persistentVolumeClaim": map[string]any{
@@ -397,6 +479,9 @@ func vmDisks(spec ports.WorkloadSpec) []any {
 		},
 	}
 	for _, attachment := range spec.Storage {
+		if attachment.Kind == ports.StorageAttachmentRootDisk {
+			continue
+		}
 		disks = append(disks, map[string]any{
 			"name": attachment.Name,
 			"disk": map[string]any{"bus": "virtio"},
@@ -424,6 +509,27 @@ func vmSecretMountAnnotation(bindings []ports.WorkloadSecretBinding) string {
 		mounts = append(mounts, binding.SecretID+":"+binding.MountPath)
 	}
 	return strings.Join(mounts, ",")
+}
+
+func vmNetworkRefs(spec ports.WorkloadSpec) []any {
+	if vmPodNetworkEnabled() {
+		return []any{
+			map[string]any{
+				"name": "default",
+				"pod":  map[string]any{},
+			},
+		}
+	}
+	return networkRefs(spec)
+}
+
+func vmPodNetworkEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WORKLOAD_VM_POD_NETWORK"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func networkRefs(spec ports.WorkloadSpec) []any {

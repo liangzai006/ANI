@@ -80,14 +80,52 @@ func TestKubernetesDryRunRendererInjectsWorkloadIdentityEnvFromSecret(t *testing
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	content := manifests[0].Content
+	if len(manifests) != 2 || manifests[0].Kind != "Secret" || manifests[1].Kind != "Deployment" {
+		t.Fatalf("manifests = %#v, want Secret then Deployment", manifests)
+	}
+	secretContent := manifests[0].Content
+	deploymentContent := manifests[1].Content
+	if !strings.Contains(secretContent, "must-not-render") {
+		t.Fatalf("secret manifest missing workload token:\n%s", secretContent)
+	}
 	for _, want := range []string{"ANI_WORKLOAD_TOKEN", "secretKeyRef", "ani-wi-key-1234567890", "ANI_WORKLOAD_ID", "instance-a"} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("rendered identity manifest missing %q:\n%s", want, content)
+		if !strings.Contains(deploymentContent, want) {
+			t.Fatalf("rendered deployment manifest missing %q:\n%s", want, deploymentContent)
 		}
 	}
-	if strings.Contains(content, "must-not-render") {
-		t.Fatalf("rendered manifest leaked workload identity key value:\n%s", content)
+	if strings.Contains(deploymentContent, "must-not-render") {
+		t.Fatalf("deployment manifest leaked workload identity key value:\n%s", deploymentContent)
+	}
+}
+
+func TestKubernetesDryRunRendererRendersWorkloadIdentitySecretBeforeDeployment(t *testing.T) {
+	renderer := NewKubernetesDryRunRenderer(NewPlanningRuntime())
+	manifests, err := renderer.Render(context.Background(), ports.WorkloadSpec{
+		TenantID: "tenant-a",
+		Name:     "app-01",
+		Kind:     ports.WorkloadKindContainer,
+		Image:    "harbor/app:1",
+		Identity: &ports.WorkloadIdentityBinding{
+			InstanceID: "instance-a",
+			KeyID:      "ad9defcb-7e18-48c6-a7c4-5bc991de0bfc",
+			KeyValue:   "workload-token-value",
+			Active:     true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if len(manifests) != 2 {
+		t.Fatalf("manifest count = %d, want secret + deployment", len(manifests))
+	}
+	if manifests[0].Kind != "Secret" || manifests[1].Kind != "Deployment" {
+		t.Fatalf("manifest order = %#v, want Secret then Deployment", manifests)
+	}
+	if !strings.Contains(manifests[0].Content, "ani-wi-ad9defcb-7e18-48c6-a7c4") {
+		t.Fatalf("secret manifest missing sanitized secret name:\n%s", manifests[0].Content)
+	}
+	if !strings.Contains(manifests[0].Content, "workload-token-value") {
+		t.Fatalf("secret manifest missing workload token:\n%s", manifests[0].Content)
 	}
 }
 

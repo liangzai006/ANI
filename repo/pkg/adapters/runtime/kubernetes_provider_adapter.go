@@ -147,6 +147,18 @@ func validateProviderManifestBatch(manifests []ports.WorkloadManifest) error {
 	if len(manifests) == 0 {
 		return fmt.Errorf("%w: at least one manifest is required", ports.ErrInvalid)
 	}
+	if allowWorkloadIdentitySecretBatch(manifests) {
+		for _, manifest := range manifests {
+			doc, err := parseManifestDocument(manifest.Content)
+			if err != nil {
+				return err
+			}
+			if err := validateProviderDryRunDocument(manifest.Provider, doc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	provider := manifests[0].Provider
 	for _, manifest := range manifests {
 		if manifest.Provider != provider {

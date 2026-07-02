@@ -46,8 +46,11 @@ func (e *LocalProviderDryRun) DryRun(_ context.Context, manifests []ports.Worklo
 	}
 
 	provider := manifests[0].Provider
+	if allowWorkloadIdentitySecretBatch(manifests) {
+		provider = manifests[1].Provider
+	}
 	for _, manifest := range manifests {
-		if manifest.Provider != provider {
+		if manifest.Provider != provider && !allowWorkloadIdentitySecretBatch(manifests) {
 			return ports.WorkloadProviderDryRunResult{
 				Accepted:      false,
 				Provider:      provider,
@@ -123,6 +126,10 @@ func validateProviderDryRunDocument(provider string, doc map[string]any) error {
 			if apiVersion != "snapshot.storage.k8s.io/v1" {
 				return fmt.Errorf("kubernetes VolumeSnapshot requires snapshot.storage.k8s.io/v1")
 			}
+		case "Secret":
+			if apiVersion != "v1" {
+				return fmt.Errorf("kubernetes Secret requires v1")
+			}
 		default:
 			return fmt.Errorf("kubernetes provider does not allow kind %q", kind)
 		}
@@ -139,6 +146,18 @@ func validateProviderDryRunDocument(provider string, doc map[string]any) error {
 		return fmt.Errorf("provider %q is not configured for dry-run", provider)
 	}
 	return nil
+}
+
+func allowWorkloadIdentitySecretBatch(manifests []ports.WorkloadManifest) bool {
+	if len(manifests) != 2 || manifests[0].Kind != "Secret" || manifests[0].Provider != "kubernetes" {
+		return false
+	}
+	switch manifests[1].Provider {
+	case "kubernetes", "kubevirt":
+		return true
+	default:
+		return false
+	}
 }
 
 var _ ports.WorkloadProviderDryRun = (*LocalProviderDryRun)(nil)
