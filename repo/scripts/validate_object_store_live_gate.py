@@ -274,6 +274,19 @@ def validate_live(
     actual_upload_status, _ = url_requester("PUT", upload_url, payload_bytes)
     require_status(actual_upload_status, 200, "pre-signed object upload")
 
+    complete_status, completed = json_requester("POST", f"{base_url}/objects/{object_id}/complete", args.ani_bearer_token, None)
+    require_status(complete_status, 200, "Core object upload complete")
+    if completed.get("size_bytes") != len(payload_bytes):
+        fail(f"Core object upload complete size_bytes = {completed.get('size_bytes')}, want {len(payload_bytes)}")
+    if completed.get("state") != "available":
+        fail(f"Core object upload complete state = {completed.get('state')!r}, want available")
+
+    list_status, object_list = json_requester("GET", f"{base_url}/objects", args.ani_bearer_token, None)
+    require_status(list_status, 200, "Core objects list")
+    items = object_list.get("items")
+    if not isinstance(items, list) or not any(item.get("id") == object_id for item in items):
+        fail("Core objects list must include uploaded object metadata")
+
     download_status, download = json_requester("GET", f"{base_url}/objects/{object_id}/download", args.ani_bearer_token, None)
     require_status(download_status, 200, "Core object download presign")
     validate_presign_payload(download, "download_url", "Core object download presign response")

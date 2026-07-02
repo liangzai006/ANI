@@ -164,6 +164,11 @@ type StorageObjectDownloadRequest struct {
 	ExpiresSeconds int
 }
 
+type StorageObjectCompleteRequest struct {
+	TenantID string
+	ObjectID string
+}
+
 type VolumeSnapshotCreateRequest struct {
 	TenantID       string
 	IdempotencyKey string
@@ -216,6 +221,7 @@ type StorageService interface {
 	CreateStorageBucket(ctx context.Context, request StorageBucketCreateRequest) (StorageBucketRecord, error)
 	ListStorageBuckets(ctx context.Context, request StorageResourceListRequest) ([]StorageBucketRecord, error)
 	CreateStorageObjectUpload(ctx context.Context, request StorageObjectUploadRequest) (StorageObjectUploadRecord, error)
+	CompleteStorageObjectUpload(ctx context.Context, request StorageObjectCompleteRequest) (StorageObjectRecord, error)
 	GetStorageObjectDownload(ctx context.Context, request StorageObjectDownloadRequest) (StorageObjectDownloadRecord, error)
 
 	CreateVolumeSnapshot(ctx context.Context, request VolumeSnapshotCreateRequest) (VolumeSnapshotRecord, error)

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,6 +273,36 @@ func TestLocalStorageServiceBucketsAndSignedObjectURLsUseObjectStorePort(t *test
 	if objectStore.uploadRef.BucketClass != ports.BucketClass("models-a") || objectStore.uploadRef.ObjectKey != "llm/model.bin" {
 		t.Fatalf("upload ref = %#v, want bucket models-a key llm/model.bin", objectStore.uploadRef)
 	}
+	pending, err := service.GetObject(context.Background(), ports.StorageResourceGetRequest{
+		TenantID:   "tenant-a",
+		ResourceID: upload.ObjectID,
+	})
+	if err != nil {
+		t.Fatalf("GetObject() after upload error = %v", err)
+	}
+	if pending.State != ports.StorageResourcePending || pending.SizeBytes != 0 {
+		t.Fatalf("pending object = %#v, want pending with zero size", pending)
+	}
+
+	objectStore.statMeta = ports.ObjectMetadata{
+		Ref:         objectStore.uploadRef,
+		ContentType: "application/octet-stream",
+		SizeBytes:   4096,
+		UpdatedAt:   objectStore.expiresAt,
+	}
+	completed, err := service.CompleteStorageObjectUpload(context.Background(), ports.StorageObjectCompleteRequest{
+		TenantID: "tenant-a",
+		ObjectID: upload.ObjectID,
+	})
+	if err != nil {
+		t.Fatalf("CompleteStorageObjectUpload() error = %v", err)
+	}
+	if completed.State != ports.StorageResourceAvailable || completed.SizeBytes != 4096 {
+		t.Fatalf("completed object = %#v, want available with reconciled size", completed)
+	}
+	if objectStore.statRef.TenantID != "tenant-a" || objectStore.statRef.ObjectKey != "llm/model.bin" {
+		t.Fatalf("stat ref = %#v, want tenant-a llm/model.bin", objectStore.statRef)
+	}
 
 	download, err := service.GetStorageObjectDownload(context.Background(), ports.StorageObjectDownloadRequest{
 		TenantID:       "tenant-a",
@@ -306,11 +337,59 @@ func TestLocalStorageServiceBucketsAndSignedObjectURLsUseObjectStorePort(t *test
 	}
 }
 
+func TestLocalStorageServiceObjectUploadPersistsToMetadataStore(t *testing.T) {
+	tx := &fakeMetadataTx{
+		row: bucketFakeRow{
+			record: ports.StorageBucketRecord{
+				TenantID:   "tenant-a",
+				BucketID:   "bucket-a",
+				Name:       "models-a",
+				AccessMode: "private",
+				CreatedAt:  time.Date(2026, 6, 30, 9, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	service := NewLocalStorageService(
+		WithStorageResourceStore(NewMetadataStorageStore(fakeMetadataStore{tx: tx})),
+		WithStorageObjectStore(&fakeObjectStore{
+			uploadURL: "https://objects.local/upload/demo.txt",
+			expiresAt: time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC),
+		}),
+	)
+
+	upload, err := service.CreateStorageObjectUpload(context.Background(), ports.StorageObjectUploadRequest{
+		TenantID:       "tenant-a",
+		IdempotencyKey: "upload-a",
+		BucketID:       "bucket-a",
+		Key:            "demo.txt",
+		ContentType:    "text/plain",
+	})
+	if err != nil {
+		t.Fatalf("CreateStorageObjectUpload() error = %v", err)
+	}
+	if upload.ObjectID == "" {
+		t.Fatal("upload.ObjectID is empty")
+	}
+	found := false
+	for _, sql := range tx.execs {
+		if strings.Contains(sql, "INSERT INTO storage_objects") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("execs = %#v, want storage_objects insert", tx.execs)
+	}
+}
+
 type fakeObjectStore struct {
 	ensureBucket ports.BucketClass
 	uploadRef    ports.ObjectRef
 	downloadRef  ports.ObjectRef
 	deleteRef    ports.ObjectRef
+	statRef      ports.ObjectRef
+	statMeta     ports.ObjectMetadata
+	statErr      error
 	uploadURL    string
 	downloadURL  string
 	expiresAt    time.Time
@@ -338,7 +417,14 @@ func (s *fakeObjectStore) DeleteObject(_ context.Context, ref ports.ObjectRef) e
 	return nil
 }
 
-func (s *fakeObjectStore) StatObject(context.Context, ports.ObjectRef) (ports.ObjectMetadata, error) {
+func (s *fakeObjectStore) StatObject(_ context.Context, ref ports.ObjectRef) (ports.ObjectMetadata, error) {
+	s.statRef = ref
+	if s.statErr != nil {
+		return ports.ObjectMetadata{}, s.statErr
+	}
+	if s.statMeta.Ref.TenantID != "" || s.statMeta.SizeBytes > 0 || s.statMeta.ContentType != "" {
+		return s.statMeta, nil
+	}
 	return ports.ObjectMetadata{}, ports.ErrUnsupported
 }
 

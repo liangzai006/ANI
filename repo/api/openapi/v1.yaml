@@ -2919,7 +2919,7 @@ paths:
     post:
       operationId: uploadStorageObject
       summary: 申请对象上传预签名 URL
-      description: 返回预签名上传 URL，客户端直接 PUT 文件到该 URL；不经过 Gateway 传输文件内容。
+      description: 返回预签名上传 URL，客户端直接 PUT 文件到该 URL；不经过 Gateway 传输文件内容。Gateway 会同步写入对象元数据（state=pending）；客户端 PUT 成功后须调用 POST /objects/{object_id}/complete 对齐 S3 实际 size/content-type。
       tags: [ObjectStore]
       x-ani-rbac-scope: "scope:objects:create"
       requestBody:
@@ -2970,6 +2970,26 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/NotFound' }
+
+  /objects/{object_id}/complete:
+    post:
+      operationId: completeStorageObjectUpload
+      summary: 确认对象上传完成并对齐对象存储元数据
+      description: 客户端 PUT 预签名 URL 成功后调用；Gateway 通过 StatObject 读取 S3/MinIO 实际 size/content-type 并回写 storage_objects 元数据（state=available）。
+      tags: [ObjectStore]
+      x-ani-rbac-scope: "scope:objects:create"
+      parameters:
+        - { name: object_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 已对齐的对象元数据
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StorageObject' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "422": { $ref: '#/components/responses/PreconditionFailed' }
 
   /objects/{object_id}/download:
     get:

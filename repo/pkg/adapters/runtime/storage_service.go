@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -579,8 +580,8 @@ func (s *LocalStorageService) CreateStorageObjectUpload(ctx context.Context, req
 		Bucket:      bucket.Name,
 		Key:         strings.TrimSpace(request.Key),
 		ContentType: firstNetworkNonEmpty(request.ContentType, "application/octet-stream"),
-		State:       ports.StorageResourceAvailable,
-		Reason:      "created by local storage upload profile",
+		State:       ports.StorageResourcePending,
+		Reason:      "awaiting client upload to pre-signed URL",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -592,7 +593,54 @@ func (s *LocalStorageService) CreateStorageObjectUpload(ctx context.Context, req
 	defer s.mu.Unlock()
 	s.objects[object.ObjectID] = object
 	s.uploadIdem[idemKey] = object.ObjectID
+	if err := s.upsertObject(ctx, object); err != nil {
+		return ports.StorageObjectUploadRecord{}, err
+	}
 	return result, nil
+}
+
+func (s *LocalStorageService) CompleteStorageObjectUpload(ctx context.Context, request ports.StorageObjectCompleteRequest) (ports.StorageObjectRecord, error) {
+	if strings.TrimSpace(request.TenantID) == "" {
+		return ports.StorageObjectRecord{}, fmt.Errorf("%w: tenant_id is required", ports.ErrInvalid)
+	}
+	if strings.TrimSpace(request.ObjectID) == "" {
+		return ports.StorageObjectRecord{}, fmt.Errorf("%w: object id is required", ports.ErrInvalid)
+	}
+	record, err := s.GetObject(ctx, ports.StorageResourceGetRequest{
+		TenantID:   request.TenantID,
+		ResourceID: strings.TrimSpace(request.ObjectID),
+	})
+	if err != nil {
+		return ports.StorageObjectRecord{}, err
+	}
+	if record.State == ports.StorageResourceDeleted {
+		return ports.StorageObjectRecord{}, ports.ErrNotFound
+	}
+	if s.objectStore == nil {
+		return ports.StorageObjectRecord{}, fmt.Errorf("%w: object store is required to complete upload", ports.ErrNotConfigured)
+	}
+	meta, err := s.objectStore.StatObject(ctx, storageObjectRef(record))
+	if err != nil {
+		if errors.Is(err, ports.ErrNotFound) {
+			return ports.StorageObjectRecord{}, fmt.Errorf("%w: object bytes not found in object store", ports.ErrNotFound)
+		}
+		return ports.StorageObjectRecord{}, err
+	}
+	record.SizeBytes = meta.SizeBytes
+	if contentType := strings.TrimSpace(meta.ContentType); contentType != "" {
+		record.ContentType = contentType
+	}
+	record.State = ports.StorageResourceAvailable
+	record.Reason = "upload completed; object store metadata reconciled"
+	record.UpdatedAt = s.now().UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[record.ObjectID] = record
+	if err := s.upsertObject(ctx, record); err != nil {
+		return ports.StorageObjectRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *LocalStorageService) GetStorageObjectDownload(ctx context.Context, request ports.StorageObjectDownloadRequest) (ports.StorageObjectDownloadRecord, error) {

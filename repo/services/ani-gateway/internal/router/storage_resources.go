@@ -198,6 +198,7 @@ func registerStorageResourcesWithService(v1 *route.RouterGroup, service ports.St
 	v1.GET("/objects", api.listObjects)
 	v1.POST("/objects", api.createObject)
 	v1.POST("/objects/upload", api.uploadStorageObject)
+	v1.POST("/objects/:object_id/complete", api.completeStorageObjectUpload)
 	v1.GET("/objects/:object_id", api.getObject)
 	v1.DELETE("/objects/:object_id", api.deleteObject)
 	v1.GET("/objects/:object_id/download", api.downloadStorageObject)
@@ -410,6 +411,18 @@ func (api *storageAPI) uploadStorageObject(ctx context.Context, c *app.RequestCo
 	c.JSON(http.StatusOK, storageObjectUploadFromRecord(record))
 }
 
+func (api *storageAPI) completeStorageObjectUpload(ctx context.Context, c *app.RequestContext) {
+	record, err := api.service.CompleteStorageObjectUpload(ctx, ports.StorageObjectCompleteRequest{
+		TenantID: demoTenantID(c),
+		ObjectID: c.Param("object_id"),
+	})
+	if err != nil {
+		writeStorageCompleteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, storageObjectFromRecord(record))
+}
+
 func (api *storageAPI) downloadStorageObject(ctx context.Context, c *app.RequestContext) {
 	record, err := api.service.GetStorageObjectDownload(ctx, ports.StorageObjectDownloadRequest{
 		TenantID:       demoTenantID(c),
@@ -614,5 +627,16 @@ func writeStorageError(c *app.RequestContext, err error) {
 		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 	default:
 		writeDemoError(c, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	}
+}
+
+func writeStorageCompleteError(c *app.RequestContext, err error) {
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		writeDemoError(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+	case errors.Is(err, ports.ErrNotConfigured):
+		writeDemoError(c, http.StatusUnprocessableEntity, "PRECONDITION_FAILED", err.Error())
+	default:
+		writeStorageError(c, err)
 	}
 }
