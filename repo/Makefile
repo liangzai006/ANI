@@ -1052,9 +1052,9 @@ dev-core-mock:
 	python scripts/serve_core_mock.py --host 127.0.0.1 --port 4010
 
 # ── 镜像构建 ──────────────────────────────────────────────────────────────────
-REGISTRY ?= harbor.ani.internal/ani
+REGISTRY ?= docker.changqingyun.cn/ani
 
-image: image-gateway image-auth-service
+image: image-gateway image-auth-service image-model-service image-task-service image-reconcile-worker
 
 image-gateway:
 	docker build -t $(REGISTRY)/ani-gateway:$(VERSION) \
@@ -1064,6 +1064,21 @@ image-gateway:
 image-auth-service:
 	docker build -t $(REGISTRY)/ani-auth-service:$(VERSION) \
 		-f services/auth-service/Dockerfile \
+		.
+
+image-model-service:
+	docker build -t $(REGISTRY)/model-service:$(VERSION) \
+		-f services/model-service/Dockerfile \
+		.
+
+image-task-service:
+	docker build -t $(REGISTRY)/task-service:$(VERSION) \
+		-f services/task-service/Dockerfile \
+		.
+
+image-reconcile-worker:
+	docker build -t $(REGISTRY)/reconcile-worker:$(VERSION) \
+		-f services/reconcile-worker/Dockerfile \
 		.
 
 # ── 清理 ──────────────────────────────────────────────────────────────────────
