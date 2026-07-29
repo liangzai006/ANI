@@ -977,10 +977,22 @@
       "scope": "scope:secrets:bind"
     },
     {
+      "operationId": "listTasks",
+      "method": "GET",
+      "path": "/tasks",
+      "scope": "scope:tasks:list"
+    },
+    {
       "operationId": "getTasksTaskId",
       "method": "GET",
       "path": "/tasks/{task_id}",
       "scope": ""
+    },
+    {
+      "operationId": "cancelTask",
+      "method": "POST",
+      "path": "/tasks/{task_id}/cancel",
+      "scope": "scope:tasks:cancel"
     },
     {
       "operationId": "listVectorStores",
@@ -1130,12 +1142,14 @@
   "schemas": [
     "APIKeyInfo",
     "AsyncTask",
+    "AsyncTaskListResponse",
     "BeginOIDCLoginRequest",
     "BeginOIDCLoginResponse",
     "BucketObjectDeleteResponse",
     "BucketObjectPresignedURLRequest",
     "BucketObjectUploadRequest",
     "BucketPrefixCreateRequest",
+    "CancelAsyncTaskRequest",
     "CloneSandboxCheckpointRequest",
     "CompleteOIDCLoginRequest",
     "CoreDevProfileInfo",
@@ -1203,6 +1217,7 @@
     "GPUSpecSummary",
     "HealthCheck",
     "InstanceAccessSummary",
+    "InstanceAsyncTask",
     "InstanceComputeSummary",
     "InstanceConsoleSession",
     "InstanceDiskSpec",
@@ -1430,6 +1445,7 @@
     "createRegistryProjectPullSecret",
     "setRegistryRepositoryPermission",
     "createSecret",
+    "cancelTask",
     "createVectorStore",
     "insertVectorStoreDocuments",
     "setVectorStoreKnowledgeBaseLink",
@@ -1475,6 +1491,7 @@
     "listRegistryArtifacts",
     "listSandboxTemplates",
     "listSecrets",
+    "listTasks",
     "listVectorStores",
     "listStorageVolumes",
     "listVolumeSnapshots"
